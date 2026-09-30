@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Secrets - never commit. Holds the encryption keys for health data.
+.env
+.env.*
+!.env.example
+
+# Encrypted uploads (child photos, adoption documents)
+backend/uploads/
+
+# Build output
+frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log

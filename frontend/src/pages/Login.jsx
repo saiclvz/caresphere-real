@@ -1,0 +1,112 @@
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { Button, ErrorNote, Field } from '../components/ui';
+import PasswordInput from '../components/PasswordInput';
+import AuthShell from './AuthShell';
+import { BackupCodes, BackupCodeUsed, MfaSetup, MfaVerify } from './MfaSteps';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/** Returns { field: message } for every invalid field. Empty object = valid. */
+function validate(form) {
+  const e = {};
+  const email = form.email.trim();
+  if (!email) e.email = 'Email is required.';
+  else if (!EMAIL_RE.test(email)) e.email = 'Enter a valid email address.';
+  if (!form.password.trim()) e.password = 'Password is required.';
+  return e;
+}
+
+export default function Login() {
+  const { login, completeSession } = useAuth();
+  const [form, setForm] = useState({ email: '', password: '' });
+  // Admin two-step verification: { token, setup } after the password step,
+  // then { codes | left, res } until the admin continues into the app.
+  const [mfa, setMfa] = useState(null);
+  const [finish, setFinish] = useState(null);
+  const [errors, setErrors] = useState({});
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // Re-check only fields already showing an error, so each message clears once it's fixed.
+  const set = (k) => (e) => {
+    const next = { ...form, [k]: e.target.value };
+    setForm(next);
+    setErrors((prev) => {
+      if (!Object.keys(prev).length) return prev;
+      const fresh = validate(next);
+      return Object.fromEntries(Object.keys(prev).filter((f) => fresh[f]).map((f) => [f, fresh[f]]));
+    });
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const found = validate(form);
+    setErrors(found);
+    if (Object.keys(found).length) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await login(form.email.trim(), form.password);
+      if (result.mfa) setMfa(result.mfa);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const restart = () => { setMfa(null); setFinish(null); setForm((f) => ({ ...f, password: '' })); };
+
+  if (finish?.codes) {
+    return (
+      <AuthShell title="Save your backup codes" subtitle="Two-step verification is on.">
+        <BackupCodes codes={finish.codes} onContinue={() => completeSession(finish.res)} />
+      </AuthShell>
+    );
+  }
+  if (finish?.left !== undefined) {
+    return (
+      <AuthShell title="Signed in with a backup code" subtitle="That code can't be used again.">
+        <BackupCodeUsed left={finish.left} onContinue={() => completeSession(finish.res)} />
+      </AuthShell>
+    );
+  }
+  if (mfa?.setup) {
+    return (
+      <AuthShell title="Set up two-step verification" subtitle="Administrator accounts need a code from an authenticator app every time they sign in.">
+        <MfaSetup mfaToken={mfa.token} onRestart={restart}
+          onDone={(res) => setFinish({ codes: res.backup_codes, res })} />
+      </AuthShell>
+    );
+  }
+  if (mfa) {
+    return (
+      <AuthShell title="Two-step verification" subtitle="Enter the code from your authenticator app to finish signing in.">
+        <MfaVerify mfaToken={mfa.token} onRestart={restart}
+          onDone={(res) => (res.backup_codes_left !== undefined ? setFinish({ left: res.backup_codes_left, res }) : completeSession(res))} />
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell title="Sign in" subtitle="Use the account your administrator created, or your donor account.">
+      <form onSubmit={submit} noValidate className="space-y-4">
+        <ErrorNote error={error} />
+        <Field label="Email" required error={errors.email}>
+          <input className={`input ${errors.email ? 'border-red-400 focus:border-red-500 focus:ring-red-200' : ''}`}
+            type="email" autoComplete="email" required value={form.email} onChange={set('email')}
+            aria-invalid={!!errors.email || undefined} />
+        </Field>
+        <Field label="Password" required error={errors.password}>
+          <PasswordInput value={form.password} onChange={set('password')} invalid={!!errors.password} autoComplete="current-password" />
+        </Field>
+        <Button type="submit" className="w-full" size="lg" loading={loading}>Sign in</Button>
+      </form>
+      <p className="mt-6 text-center text-sm text-slate-500">
+        Want to support the home? <Link to="/register" className="font-medium text-brand hover:underline">Create a donor account</Link>
+      </p>
+    </AuthShell>
+  );
+}
