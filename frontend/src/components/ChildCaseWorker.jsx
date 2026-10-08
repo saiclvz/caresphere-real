@@ -8,7 +8,8 @@ import { Card, Field } from './ui';
 export default function ChildCaseWorker({ child, onSaved }) {
   const { toast } = useApp();
   const users = useApi('/users?role=Staff');
-  const staff = (users.data?.data || []).filter((u) => u.is_active);
+  // A case worker needs the Health records duty (the server checks it too).
+  const staff = (users.data?.data || []).filter((u) => u.is_active && (u.duties || []).includes('health'));
   const [busy, setBusy] = useState(false);
   const save = async (value) => {
     setBusy(true);

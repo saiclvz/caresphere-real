@@ -8,7 +8,34 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const str = (v) => (v === undefined || v === null ? '' : String(v).trim());
 
-export const isVisible = (def, data) => !def.when || def.when.in.includes(data?.[def.when.field]);
+function yearsSince(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return null;
+  const [y, m, d] = String(date).split('-').map(Number);
+  const now = new Date();
+  let age = now.getFullYear() - y;
+  if (now.getMonth() + 1 < m || (now.getMonth() + 1 === m && now.getDate() < d)) age -= 1;
+  return age;
+}
+
+/** The answers plus what conditions need (same as the server's answersFor). data.application_type must be set. */
+export function answersFor(data) {
+  const type = data?.application_type || 'Regular';
+  const age = type === 'Regular' ? null : yearsSince(data?.adoptee_dob);
+  return {
+    ...(data || {}), application_type: type,
+    adoptee_minor: type === 'Regular' ? 'Yes' : age === null ? '' : age < 18 ? 'Yes' : 'No',
+    adoptee_10_plus: age === null ? '' : age >= 10 ? 'Yes' : 'No',
+    adoptee_5_plus: age === null ? '' : age >= 5 ? 'Yes' : 'No',
+  };
+}
+
+/** Shown for these answers? Every condition must hold. */
+export function isVisible(def, data) {
+  if (!def.when) return true;
+  const conds = Array.isArray(def.when) ? def.when : [def.when];
+  const a = data && 'adoptee_minor' in data ? data : answersFor(data);
+  return conds.every((c) => c.in.includes(a?.[c.field]));
+}
 export function isRequired(def, data) {
   if (!isVisible(def, data)) return false;
   if (def.required) return true;
@@ -53,6 +80,18 @@ function checkField(key, def, data, config) {
     }
     return str(v) ? null : required(label);
   }
+  if (def.type === 'clearances') {
+    const rows = Array.isArray(v) ? v : [];
+    if (!isRequired(def, data)) return null;
+    const min = data.civil_status === 'Married' ? 2 : 1;
+    if (rows.length < min) return min === 2 ? 'Add a clearance for you and one for your spouse.' : 'Add your clearance.';
+    for (let i = 0; i < rows.length; i += 1) {
+      const r = rows[i];
+      if (!str(r.holder) || !str(r.kind) || !str(r.number) || !DATE.test(str(r.issue_date))) return `Clearance ${i + 1}: fill in every detail.`;
+      if (r.issue_date > todayIso()) return `Clearance ${i + 1}: the date issued cannot be in the future.`;
+    }
+    return null;
+  }
   if (!str(v)) return isRequired(def, data) ? required(label) : null;
   switch (def.type) {
     case 'email': return EMAIL.test(str(v)) ? null : 'Enter a valid email address.';
@@ -60,8 +99,10 @@ function checkField(key, def, data, config) {
     case 'zip': return /^\d{4}$/.test(str(v)) ? null : 'Enter a 4-digit ZIP code.';
     case 'select': return def.options.includes(v) ? null : `Choose a ${label.toLowerCase()} from the list.`;
     case 'province': return config.address.provinces.includes(v) ? null : 'Choose a province from the list.';
+    case 'idnumber': return /^[A-Z0-9-]{4,40}$/.test(str(v).toUpperCase().replace(/\s+/g, '')) ? null : 'Enter the ID number exactly as printed (letters, numbers and dashes).';
     case 'date':
       if (!DATE.test(str(v))) return `Enter a valid ${label.toLowerCase()}.`;
+      if (def.future) return v <= todayIso() ? 'This ID has expired. Please use an ID that is still valid.' : null;
       if (v > todayIso()) return `${label} cannot be in the future.`;
       if (def.minAge && ageOn(v) < def.minAge) return `Applicants must be at least ${def.minAge} years old.`;
       return null;
@@ -90,7 +131,7 @@ export function validatePage(config, page, data) {
 /** Done / Missing / Optional for a field, as shown on the review page. */
 export function fieldStatus(config, key, def, data) {
   const v = data[key];
-  const empty = def.type === 'household' ? !(Array.isArray(v) && v.length) : !str(key === 'city' && v === config.address.other_city ? data.city_other : v);
+  const empty = def.type === 'household' || def.type === 'clearances' ? !(Array.isArray(v) && v.length) : !str(key === 'city' && v === config.address.other_city ? data.city_other : v);
   if (checkField(key, def, data, config)) return 'Missing';
   if (empty) return isRequired(def, data) ? 'Missing' : 'Optional';
   return 'Done';
@@ -102,6 +143,7 @@ export function displayValue(config, key, def, data) {
   if (def.type === 'household') {
     return Array.isArray(v) && v.length ? v.map((m) => `${m.full_name} (${m.age}, ${m.relationship})`).join('; ') : '';
   }
+  if (def.type === 'clearances') return Array.isArray(v) && v.length ? v.map((c) => `${c.kind} of ${c.holder}, no. ${c.number}, issued ${c.issue_date}`).join('; ') : '';
   if (key === 'city' && v === config.address.other_city) return str(data.city_other);
   return str(v);
 }

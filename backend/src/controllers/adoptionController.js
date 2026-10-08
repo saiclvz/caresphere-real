@@ -2,18 +2,19 @@ const { pool, withTransaction } = require('../config/db');
 const Adoption = require('../models/adoptionModel');
 const HttpError = require('../utils/HttpError');
 const { saveUpload, readUpload, deleteUpload, verifyUpload, MB } = require('../utils/files');
-const { toInt } = require('../utils/validate');
-const { logActivity } = require('../utils/audit');
+const { toInt, localToday } = require('../utils/validate');
+const { logActivity, logActivityWith } = require('../utils/audit');
 const {
-  DOCUMENTS, STAGE_DOCUMENTS, PAGES, FILE_RULES, CONSENT_VERSION, PRIVACY_NOTICE, APPLICATION_TYPES, FIELDS, isVisible, formConfig,
+  DOCUMENTS, STAGE_DOCUMENTS, PAGES, FILE_RULES, CONSENT_VERSION, PRIVACY_NOTICE, APPLICATION_TYPES, FIELDS, isVisible, formConfig, expiresOn, DOCUMENT_STATUSES, RETIRED_DOCUMENTS,
 } = require('../config/adoptionForm');
 const WF = require('../config/adoptionWorkflow');
-const { clean, validatePage, validateSubmission } = require('../services/adoptionValidation');
+const { clean, validatePage, validateSubmission, documentChecklist } = require('../services/adoptionValidation');
 const workflow = require('../services/adoptionWorkflow');
 const P = require('../services/protectedRecords');
 const { watermarkFile } = require('../services/watermark');
 const U = require('../services/unlockService');
 const Notify = require('../services/notifications');
+const Verification = require('../services/verification');
 const Settings = require('../models/settingsModel');
 const S = require('../config/adoptionSensitive');
 const { isPublicRef, normalizePublicRef, formatPublicRef } = require('../utils/publicRef');
@@ -43,18 +44,6 @@ async function loadById(req) {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) throw new HttpError(404, NOT_FOUND);
   return loadForUser(req, id);
-}
-
-/** 9-page documents with Done / Missing / Optional, for the visible types (and any type with files). */
-function checklist(form, documents, isLegacy) {
-  const current = documents.filter((d) => d.status !== 'Replaced');
-  return Object.entries(DOCUMENTS)
-    .filter(([key, def]) => isVisible(def, form) || current.some((d) => d.doc_type === key))
-    .map(([key, def]) => {
-      const files = current.filter((d) => d.doc_type === key);
-      const required = def.required && isVisible(def, form) && !isLegacy;
-      return { doc_type: key, label: def.label, page: def.page, multiple: def.multiple, required, status: files.length ? 'Done' : required ? 'Missing' : 'Optional', files };
-    });
 }
 
 /** The current stage in plain language, for the 4-phase tracker. */
@@ -138,7 +127,19 @@ async function fullApplication(req, app) {
     matched_child: app.matched_child_id ? { display_name: `${app.child_first_name} ${app.child_last_initial}.` } : null,
     trial: app.trial_start ? { start: app.trial_start, end: app.trial_end } : null,
     form, history, requests, interviews, documents,
-    checklist: checklist(form, documents, !!app.is_legacy),
+    ...(await (async () => {
+      const c = documentChecklist(form, app.application_type, documents, { isLegacy: !!app.is_legacy });
+      // ID and clearance checks count toward completeness too.
+      const verifications = app.status === 'Draft' ? [] : await Verification.list(id, { withHistory: !forDonor });
+      const vBlocking = verifications.filter((v) => v.status !== 'Verified')
+        .map((v) => ({ doc_type: `verification:${v.slot}`, label: v.kind === 'government_id' ? `Government ID (${v.item_type})` : `${v.item_type} of ${v.holder || 'applicant'}`, status: v.status }));
+      const blocking = [...c.summary.blocking, ...vBlocking];
+      return {
+        checklist: c.items, retired_documents_files: c.retired, verifications,
+        documents_summary: { ...c.summary, required: c.summary.required + verifications.length, verified: c.summary.verified + verifications.filter((v) => v.status === 'Verified').length,
+          blocking, complete: blocking.length === 0 },
+      };
+    })()),
     can_withdraw: WF.WITHDRAWABLE.includes(app.status) && !app.archived_at,
     can_edit: app.status === 'Draft',
     can_upload_forum_certificate: forDonor && WF.PREPARATION.includes(app.status),
@@ -172,7 +173,7 @@ async function fullApplication(req, app) {
       unlocked: true, admin: isAdmin, assigned: true, expires_at: access.expires_at || null,
       remaining_seconds: access.remaining_seconds || 0, purpose: access.purpose || null,
     },
-    stage_documents: Object.entries(STAGE_DOCUMENTS).map(([key, def]) => ({
+    stage_documents: Object.entries(STAGE_DOCUMENTS).filter(([, def]) => !def.tracks || def.tracks.includes(WF.trackOf(app.application_type))).map(([key, def]) => ({
       doc_type: key, label: def.label, multiple: def.multiple, protected: Boolean(def.protected),
       can_upload: def.uploaders.includes(req.user.role) && !WF.FINAL.includes(app.status),
       files: documents.filter((d) => d.doc_type === key && d.status !== 'Replaced'),
@@ -198,7 +199,9 @@ async function logView(req, app, sensitive) {
 exports.formConfig = async (req, res) => {
   res.json({
     success: true,
-    data: { ...formConfig(), statuses: WF.STATUSES, status_labels: Adoption.LABELS, phases: WF.PHASES,
+    data: { ...formConfig(), retired_documents: require('../config/adoptionForm').RETIRED_DOCUMENTS,
+      verification: { methods: require('../config/verificationRules').VERIFY_METHODS, review_results: Verification.REVIEW_RESULTS, id_types: Object.keys(require('../config/verificationRules').ID_TYPES) },
+      statuses: WF.STATUSES, status_labels: Adoption.LABELS, phases: WF.PHASES,
       stages: Object.fromEntries(Object.entries(WF.STAGES).map(([k, v]) => [k, { phase: v.phase, description: v.donor, next_step: v.next }])) },
   });
 };
@@ -239,7 +242,10 @@ exports.downloadDocument = async (req, res) => {
   const isStaff = req.user.role === 'Staff';
   if (download && isStaff) {
     const allowed = String((await Settings.getAll()).staff_download_doc_types || '').split(',').map((x) => x.trim());
-    if (!allowed.includes(doc.doc_type)) throw new HttpError(403, 'Downloading this document type is not allowed for Staff. You can view it here.');
+    if (!allowed.includes(doc.doc_type)) {
+      await logActivity(req, `DOWNLOAD_ADOPTION_DOCUMENT_DENIED (${doc.doc_type})`, `Application #${app.application_id}`); // attempt logged
+      throw new HttpError(403, 'ACCESS DENIED – You are not authorized to download this document. You can view it here.');
+    }
   }
   const verified = verifyUpload(doc.storage_key, doc.sha256);
   let body = readUpload(doc.storage_key);
@@ -279,7 +285,7 @@ const PROGRESS_STEPS = [
   { key: 'submitted', label: 'Submitted', statuses: ['Submitted'] },
   { key: 'review', label: 'Under review', statuses: ['Initial review'] },
   { key: 'documents', label: 'Documents requested', statuses: [] },
-  { key: 'visit', label: 'Interview or home visit', statuses: ['Home study scheduled', 'Home study completed'] },
+  { key: 'visit', label: 'Interview or home visit', statuses: ['Home study scheduled', 'Case study completed'] },
   { key: 'decision', label: 'Decision', statuses: ['Cleared for matching', 'Declined', 'Withdrawn'] },
 ];
 async function progressFor(ids) {
@@ -317,7 +323,7 @@ exports.mine = async (req, res) => {
 /** POST /api/adoptions (Donor) { application_type: Regular|Relative } - starts a draft. One active application per donor. */
 exports.createDraft = async (req, res) => {
   const type = req.body?.application_type ? String(req.body.application_type) : 'Regular';
-  if (!APPLICATION_TYPES[type]) throw new HttpError(400, 'Choose Regular or Relative/Stepchild.');
+  if (!APPLICATION_TYPES[type]) throw new HttpError(400, 'Choose an adoption type from the list.');
   const result = await withTransaction(async (conn) => {
     const active = await Adoption.activeFor(conn, req.user.user_id);
     if (active) return { existing: active };
@@ -342,7 +348,7 @@ exports.saveDraft = async (req, res) => {
   const data = clean(req.body?.data);
   const page = req.body?.current_page === undefined ? null : toInt(req.body.current_page, 'current_page', { min: 1, max: PAGES.length });
   const type = req.body?.application_type;
-  if (type !== undefined && !APPLICATION_TYPES[type]) throw new HttpError(400, 'Choose Regular or Relative/Stepchild.');
+  if (type !== undefined && !APPLICATION_TYPES[type]) throw new HttpError(400, 'Choose an adoption type from the list.');
   await withTransaction(async (conn) => {
     await Adoption.saveForm(conn, app.application_id, data);
     await conn.query('UPDATE tbl_adoption_applications SET current_page = COALESCE(?, current_page), application_type = COALESCE(?, application_type), updated_at = NOW() WHERE application_id = ?',
@@ -351,7 +357,7 @@ exports.saveDraft = async (req, res) => {
   let validation;
   if (req.body?.validate_page !== undefined) {
     const vp = toInt(req.body.validate_page, 'validate_page', { min: 1, max: PAGES.length });
-    const errors = validatePage(vp, await Adoption.form(app.application_id));
+    const errors = validatePage(vp, await Adoption.form(app.application_id), type ?? app.application_type);
     validation = { page: vp, valid: !Object.keys(errors).length, errors };
   }
   res.json({ success: true, data: { saved_at: new Date().toISOString(), validation } });
@@ -368,7 +374,7 @@ exports.submit = async (req, res) => {
   if (req.body?.consent === true && (req.body.consent_version !== CONSENT_VERSION || req.body.privacy_notice_version !== PRIVACY_NOTICE.version)) {
     throw new HttpError(409, 'The privacy notice or consent text has changed. Reload the page, read it again and tick the box.');
   }
-  const check = validateSubmission(await Adoption.form(app.application_id), await Adoption.documents(app.application_id), req.body?.consent === true);
+  const check = validateSubmission(await Adoption.form(app.application_id), await Adoption.documents(app.application_id), req.body?.consent === true, app.application_type);
   if (!check.ok) {
     throw new HttpError(422, 'Some required items are missing. Check the highlighted pages.', {
       pages: check.pages, missing_documents: check.missing_documents, consent: check.consent,
@@ -389,6 +395,8 @@ exports.submit = async (req, res) => {
     const params = { id: app.application_id, ref };
     await Notify.adoptionStatus(conn, { applicantId: req.user.user_id, applicationId: app.application_id, reference: ref, status: 'Submitted', historyId });
     await Notify.toAdmins(conn, 'admin_application_submitted', { entityType: 'application', entityId: app.application_id, params, groupKey: `admin_submitted:${app.application_id}` });
+    // The government ID and clearances get their verification records (automatic checks; a person verifies).
+    await Verification.syncFromForm(conn, app, await Adoption.form(app.application_id), req.user.user_id);
     return ref;
   });
   await logActivity(req, `ADOPTION_SUBMITTED (${reference}, consent ${CONSENT_VERSION}, notice ${PRIVACY_NOTICE.version})`, `Application #${app.application_id}`);
@@ -433,7 +441,16 @@ exports.uploadDocument = async (req, res) => {
     }
   } else if (role === 'Staff') {
     requireAssigned(req, app);
-    if (!isStage || !STAGE_DOCUMENTS[docType].uploaders.includes('Staff')) throw new HttpError(403, 'Staff can upload the case study, monitoring reports and proof of publication.');
+    if (!isStage || !STAGE_DOCUMENTS[docType].uploaders.includes('Staff')) throw new HttpError(403, 'Staff can upload the case study, monitoring reports, proof of publication and the child\'s documents.');
+  }
+  // Documents with a validity period need the date issued or taken; a document already too old is refused.
+  let issuedDate = null;
+  const formDef = DOCUMENTS[docType];
+  if (formDef?.validity_months) {
+    issuedDate = String(req.body?.issued_date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(issuedDate)) throw new HttpError(400, `Enter the ${formDef.issued_label.toLowerCase()}.`);
+    if (issuedDate > localToday()) throw new HttpError(400, `The ${formDef.issued_label.toLowerCase()} cannot be in the future.`);
+    if (expiresOn(formDef, issuedDate) < localToday()) throw new HttpError(400, `${formDef.label} must be from the last ${formDef.validity_months} months.`);
   }
   const existing = (await Adoption.documents(app.application_id)).filter((d) => d.doc_type === docType && d.status !== 'Replaced');
   if (def.multiple && existing.length >= FILE_RULES.maxFilesPerType) throw new HttpError(400, `Up to ${FILE_RULES.maxFilesPerType} files for ${def.label}.`);
@@ -455,7 +472,7 @@ exports.uploadDocument = async (req, res) => {
       }
       const documentId = await Adoption.insertDocument(conn, {
         ...saved, application_id: app.application_id, doc_type: docType, page: DOCUMENTS[docType]?.page ?? null,
-        uploaded_by: req.user.user_id, request_id: requests[0]?.request_id,
+        uploaded_by: req.user.user_id, request_id: requests[0]?.request_id, issued_date: issuedDate,
       });
       if (isStage && STAGE_DOCUMENTS[docType].protected) {
         await P.createRecord(conn, { type: STAGE_DOCUMENTS[docType].protected, label: `${def.label}, ${app.reference_no}`,
@@ -479,6 +496,11 @@ exports.uploadDocument = async (req, res) => {
   }
   replacedKeys.forEach(deleteUpload);
   await logActivity(req, `UPLOAD_ADOPTION_DOCUMENT (${docType}${requests.length ? ', requested' : ''})`, `Application #${app.application_id}`);
+  // A new government ID photo is read (OCR) in the background; the ID checks use the result.
+  if (docType === 'valid_id') {
+    const [[latest]] = await pool.query("SELECT document_id FROM tbl_adoption_documents WHERE application_id = ? AND doc_type = 'valid_id' AND status = 'Uploaded' ORDER BY document_id DESC LIMIT 1", [app.application_id]);
+    if (latest) require('../services/idReader').readInBackground(latest.document_id);
+  }
   res.status(201).json({ success: true, data: await fullApplication(req, await Adoption.findById(app.application_id)) });
 };
 
@@ -634,5 +656,100 @@ exports.logQrPrint = async (req, res) => {
 exports.assign = async (req, res) => {
   const app = await loadById(req);
   await require('../services/assignment').assign(req, 'adoption_application', app.application_id, req.body?.staff_user_id, app.reference_no);
+  res.json({ success: true, data: await fullApplication(req, await Adoption.findById(app.application_id)) });
+};
+
+/**
+ * POST /api/adoptions/:id/documents/:docId/review (Admin, Staff) { status, note }
+ * Manual verification of one uploaded document: Under validation, Verified, Rejected, Requires
+ * correction or Manual verification required. Nothing is verified automatically (there is no official
+ * verification service). Rejected or Requires correction needs a note for the applicant and opens a
+ * document request so they can upload a new file. Staff: assigned and unlocked.
+ */
+exports.reviewDocument = async (req, res) => {
+  const app = await loadById(req);
+  await requireSensitive(req, app, 'Document review');
+  const docId = toInt(req.params.docId, 'docId', { min: 1 });
+  const status = String(req.body?.status || '');
+  if (!DOCUMENT_STATUSES.includes(status) || status === 'Submitted') throw new HttpError(400, 'Choose a review result.');
+  const note = String(req.body?.note || '').trim().slice(0, 500);
+  if (['Rejected', 'Requires correction'].includes(status) && note.length < 5) throw new HttpError(400, 'Tell the applicant what is wrong (at least 5 characters).');
+  await withTransaction(async (conn) => {
+    const [[doc]] = await conn.query("SELECT document_id, doc_type, verification_status FROM tbl_adoption_documents WHERE document_id = ? AND application_id = ? AND status = 'Uploaded' FOR UPDATE",
+      [docId, app.application_id]);
+    if (!doc) throw new HttpError(404, 'Document not found.');
+    if (STAGE_DOCUMENTS[doc.doc_type]) throw new HttpError(400, 'Workflow documents are handled through the stages.');
+    await conn.query('UPDATE tbl_adoption_documents SET verification_status = ?, reviewed_by = ?, reviewed_at = NOW(), review_note = ? WHERE document_id = ?',
+      [status, req.user.user_id, note || null, docId]);
+    await logActivityWith(conn, req, `DOCUMENT_REVIEWED (${doc.doc_type}: ${doc.verification_status} -> ${status})`, `Application #${app.application_id}`);
+    if (['Rejected', 'Requires correction'].includes(status) && app.applicant_id) {
+      const label = DOCUMENTS[doc.doc_type]?.label || RETIRED_DOCUMENTS[doc.doc_type] || doc.doc_type;
+      await conn.query("INSERT INTO tbl_application_document_requests (application_id, doc_type, message, requested_by) VALUES (?, ?, ?, ?)",
+        [app.application_id, doc.doc_type, `${label}: ${note}`.slice(0, 500), req.user.user_id]);
+      await Notify.emit(conn, 'documents_requested', { userId: app.applicant_id, applicationId: app.application_id, entityType: 'application',
+        entityId: app.application_id, params: { id: app.application_id, ref: app.reference_no }, groupKey: `document_review:${docId}:${Date.now()}` });
+    }
+  });
+  await U.logEvent(req, { recordType: 'adoption_application', recordId: app.application_id, event: 'document_reviewed', detail: `document #${docId}: ${status}` });
+  res.json({ success: true, data: await fullApplication(req, await Adoption.findById(app.application_id)) });
+};
+
+/**
+ * POST /api/adoptions/:id/verifications/:vid/review (Admin, Staff) { status, method?, method_ref?, note? }
+ * A person's verification of the government ID or a clearance. Verified needs the method (original sighted,
+ * official QR checked, confirmed with the issuer). Requires correction needs a note for the applicant.
+ */
+exports.reviewVerification = async (req, res) => {
+  const app = await loadById(req);
+  await requireSensitive(req, app, 'ID and clearance verification');
+  const vid = toInt(req.params.vid, 'vid', { min: 1 });
+  await withTransaction(async (conn) => {
+    const r = await Verification.review(conn, req, app, vid, req.body || {});
+    await logActivityWith(conn, req, `${r.kind === 'government_id' ? 'ID' : 'CLEARANCE'}_VERIFICATION (${r.slot}: ${r.from} -> ${r.to})`, `Application #${app.application_id}`);
+    if (['Requires correction', 'Invalid', 'Invalid ID', 'Invalid ID number', 'Information mismatch', 'Expired', 'ID type mismatch', 'Not verified', 'Verification failed'].includes(r.to) && app.applicant_id) {
+      await Notify.emit(conn, 'documents_requested', { userId: app.applicant_id, applicationId: app.application_id, entityType: 'application', entityId: app.application_id,
+        params: { id: app.application_id, ref: app.reference_no }, groupKey: `verification:${vid}:${Date.now()}` });
+    }
+  });
+  await U.logEvent(req, { recordType: 'adoption_application', recordId: app.application_id, event: 'verification_reviewed', detail: `verification #${vid}` });
+  res.json({ success: true, data: await fullApplication(req, await Adoption.findById(app.application_id)) });
+};
+
+/**
+ * PUT /api/adoptions/:id/verifications/:vid (Donor, own application) - corrects the ID or one clearance when
+ * the home asked for a correction (or the checks found a problem). The automatic checks run again and the
+ * record goes back for a person's review.
+ */
+exports.correctVerification = async (req, res) => {
+  const app = await loadById(req);
+  if (req.user.role !== 'Donor') throw new HttpError(403, 'Only the applicant corrects these details.');
+  const vid = toInt(req.params.vid, 'vid', { min: 1 });
+  const [[v]] = await pool.query('SELECT verification_id, kind, slot, status FROM tbl_verifications WHERE verification_id = ? AND application_id = ?', [vid, app.application_id]);
+  if (!v) throw new HttpError(404, 'Record not found.');
+  if (v.status === 'Verified') throw new HttpError(409, 'This is already verified.');
+  const form = await Adoption.form(app.application_id);
+  let patch;
+  if (v.kind === 'government_id') {
+    patch = clean({ id_type: req.body?.id_type, id_type_other: req.body?.id_type_other, id_number: req.body?.id_number, id_expiry: req.body?.id_expiry, id_name: req.body?.id_name, id_dob: req.body?.id_dob });
+    const errors = validatePage(3, { ...form, ...patch }, app.application_type);
+    const mine = Object.fromEntries(Object.entries(errors).filter(([k]) => k.startsWith('id_')));
+    if (Object.keys(mine).length) throw new HttpError(400, 'Please check the highlighted details.', { errors: mine });
+  } else {
+    const index = Number(v.slot.split('-')[1]) - 1;
+    const rows = [...(form.clearances || [])];
+    rows[index] = req.body?.clearance || {};
+    patch = clean({ clearances: rows });
+    const errors = validatePage(4, { ...form, ...patch }, app.application_type);
+    if (errors.clearances) throw new HttpError(400, errors.clearances, { errors: { clearances: errors.clearances } });
+  }
+  await withTransaction(async (conn) => {
+    await Adoption.saveForm(conn, app.application_id, patch);
+    await Verification.syncFromForm(conn, app, { ...form, ...patch }, req.user.user_id);
+    await logActivityWith(conn, req, `${v.kind === 'government_id' ? 'ID' : 'CLEARANCE'}_DETAILS_CORRECTED (${v.slot})`, `Application #${app.application_id}`);
+    const params = { id: app.application_id, ref: app.reference_no };
+    const common = { entityType: 'application', entityId: app.application_id, params, groupKey: `docs_uploaded:${app.application_id}`, mode: 'set' };
+    await Notify.toAdmins(conn, 'admin_documents_uploaded', common);
+    if (app.assigned_staff_id && app.assigned_staff_active) await Notify.emit(conn, 'staff_documents_uploaded', { ...common, userId: app.assigned_staff_id });
+  });
   res.json({ success: true, data: await fullApplication(req, await Adoption.findById(app.application_id)) });
 };

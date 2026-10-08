@@ -36,6 +36,11 @@ async function assignWith(conn, req, recordType, recordId, rawStaffId, reference
   if (staffId !== null) {
     const [[u]] = await pool.query('SELECT u.is_active, r.role_name FROM tbl_users u JOIN tbl_roles r ON r.role_id = u.role_id WHERE u.user_id = ?', [staffId]);
     if (!u || u.role_name !== 'Staff' || !u.is_active) throw new HttpError(400, 'Choose an active Staff account.');
+    // The staff member needs the duty for this kind of record (Health for a case worker).
+    const { DUTIES, DUTY_FOR_RECORD } = require('../config/staffDuties');
+    const duty = DUTY_FOR_RECORD[recordType];
+    const [[has]] = await pool.query('SELECT 1 AS ok FROM tbl_staff_duties WHERE user_id = ? AND duty = ?', [staffId, duty]);
+    if (duty && !has) throw new HttpError(400, `This staff member doesn't have the ${DUTIES[duty].label} duty. Add it under User accounts first.`);
   }
   const [[cur]] = await pool.query(`SELECT assigned_staff_id FROM ${t.table} WHERE ${t.id} = ? FOR UPDATE`, [recordId]);
   if (!cur) throw new HttpError(404, 'Record not found.');

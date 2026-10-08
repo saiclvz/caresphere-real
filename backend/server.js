@@ -52,6 +52,8 @@ const jsonLarge = express.json({ limit: '15mb' });
 const jsonSmall = express.json({ limit: '1mb' });
 app.use((req, res, next) => (UPLOAD_ROUTES.some((r) => r.test(req.path)) ? jsonLarge : jsonSmall)(req, res, next));
 
+// API responses can hold personal data: never cache them in the browser or shared caches.
+app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); next(); });
 app.use('/api', routes);
 app.use('/api', notFound);
 

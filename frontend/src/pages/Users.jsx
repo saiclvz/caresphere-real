@@ -9,6 +9,10 @@ import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
 import { formatDate, matches } from '../lib/format';
+import { DUTY_LABELS } from '../lib/duties';
+
+const ALL_DUTIES = Object.keys(DUTY_LABELS);
+const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
 const ROLES = ['Admin', 'Staff', 'Donor'];
 // Any role that no longer exists (e.g. the old Applicant role) shows as Donor, so the dropdown is never blank.
@@ -83,8 +87,13 @@ export default function Users() {
         const body = { full_name: form.full_name, email: form.email, role: form.role };
         if (form.password) { body.password = form.password; body.confirm_password = form.confirm; }
         await api(`/users/${form.user_id}`, { method: 'PUT', body });
+        // Duties are saved separately, only when they changed (or the account just became Staff).
+        if (form.role === 'Staff' && (form.originalRole !== 'Staff' || !sameSet(form.duties, form.originalDuties))) {
+          await api(`/users/${form.user_id}/duties`, { method: 'PUT', body: { duties: form.duties } });
+        }
       } else {
-        await api('/users', { method: 'POST', body: { full_name: form.full_name, email: form.email, role: form.role, password: form.password, confirm_password: form.confirm } });
+        await api('/users', { method: 'POST', body: { full_name: form.full_name, email: form.email, role: form.role, password: form.password, confirm_password: form.confirm,
+          ...(form.role === 'Staff' && { duties: form.duties }) } });
       }
       setForm(null); toast('Account saved.'); reload();
     } catch (err) { setFormError(err); } finally { setSaving(false); }
@@ -101,7 +110,7 @@ export default function Users() {
   return (
     <>
       <PageHeader title="User accounts" description="Create staff and admin accounts, change roles, and deactivate people who have left."
-        actions={<Button onClick={() => { setForm({ full_name: '', email: '', password: '', confirm: '', role: 'Staff' }); setFormError(null); setPwErrors({}); }}><Plus className="h-4 w-4" /> Create account</Button>} />
+        actions={<Button onClick={() => { setForm({ full_name: '', email: '', password: '', confirm: '', role: 'Staff', duties: ALL_DUTIES }); setFormError(null); setPwErrors({}); }}><Plus className="h-4 w-4" /> Create account</Button>} />
 
       <div className="mb-4 inline-flex rounded-lg bg-white p-1 shadow-card">
         {['', ...ROLES].map((r) => (
@@ -131,12 +140,17 @@ export default function Users() {
                         ? <Badge tone="green">MFA on</Badge>
                         : <Badge tone="amber">MFA setup pending</Badge>)}
                     </div>
+                    {u.role === 'Staff' && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {(u.duties || []).length === ALL_DUTIES.length ? 'All duties' : (u.duties || []).length ? u.duties.map((d) => DUTY_LABELS[d] || d).join(', ') : 'No duties yet'}
+                      </p>
+                    )}
                   </td>
                   <td className="td">{u.is_active ? <Badge tone="green">Active</Badge> : <Badge tone="slate">Deactivated</Badge>}</td>
                   <td className="td">{formatDate(u.created_at)}</td>
                   <td className="td">
                     <div className="flex justify-end gap-1">
-                      <Button size="sm" variant="ghost" aria-label="Edit" onClick={() => { setForm({ ...u, role: safeRole(u.role), is_active: Boolean(u.is_active), password: '', confirm: '' }); setFormError(null); setPwErrors({}); }}><Pencil className="h-4 w-4" /></Button>
+                      <Button size="sm" variant="ghost" aria-label="Edit" onClick={() => { setForm({ ...u, role: safeRole(u.role), is_active: Boolean(u.is_active), password: '', confirm: '', originalRole: u.role, originalDuties: u.duties || [], duties: u.role === 'Staff' ? (u.duties || []) : ALL_DUTIES }); setFormError(null); setPwErrors({}); }}><Pencil className="h-4 w-4" /></Button>
                       {/* Two-step verification exists only for Admin accounts. */}
                       {u.role === 'Admin' && u.mfa_enabled && u.user_id !== me.user_id && <Button size="sm" variant="ghost" aria-label="Reset two-step verification" title="Reset two-step verification" onClick={() => openReset(u)}><KeyRound className="h-4 w-4" /></Button>}
                       {u.user_id !== me.user_id && (u.is_active
@@ -161,6 +175,22 @@ export default function Users() {
             <Field label="Role" hint={form.user_id === me.user_id ? 'You cannot change your own role.' : undefined}>
               <select className="input" value={form.role} disabled={form.user_id === me.user_id} onChange={(e) => setForm({ ...form, role: e.target.value })}>{ROLES.map((r) => <option key={r}>{r}</option>)}</select>
             </Field>
+            {form.role === 'Staff' && (
+              <fieldset className="rounded-lg border border-slate-200 p-3">
+                <legend className="px-1 text-sm font-medium text-navy-800">Duties</legend>
+                <p className="mb-2 text-xs text-slate-500">The areas this staff member can open. Sensitive records still need the record assigned to them and the QR unlock.</p>
+                <div className="grid gap-1.5 sm:grid-cols-2">
+                  {ALL_DUTIES.map((d) => (
+                    <label key={d} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" className="h-4 w-4 accent-brand" checked={form.duties.includes(d)}
+                        onChange={(e) => setForm({ ...form, duties: e.target.checked ? [...form.duties, d] : form.duties.filter((x) => x !== d) })} />
+                      {DUTY_LABELS[d]}
+                    </label>
+                  ))}
+                </div>
+                {form.duties.length === 0 && <p className="mt-2 text-xs text-amber-700">With no duties, this account can only see the dashboard, its schedule and notifications.</p>}
+              </fieldset>
+            )}
             <Field label={form.user_id ? 'New password' : 'Password'} required={!form.user_id} error={pwErrors.password}
               hint={form.user_id ? 'Leave blank to keep the current password.' : 'Share it with the person privately.'}>
               <PasswordInput value={form.password} onChange={(e) => updateForm({ password: e.target.value })} invalid={!!pwErrors.password}

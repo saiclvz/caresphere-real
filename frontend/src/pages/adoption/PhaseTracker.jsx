@@ -15,7 +15,7 @@ export default function PhaseTracker({ app }) {
       {app.status !== 'Draft' && !ended && (
         <ol className="mb-4 grid grid-cols-4 gap-2" aria-label="Adoption phases">
           {phases.map((p, i) => {
-            const skipped = type === 'Relative' && p.key === 'matching';
+            const skipped = type && type !== 'Regular' && p.key === 'matching';
             const done = closed || i < current || (skipped && current > i);
             const isCurrent = !closed && i === current;
             return (

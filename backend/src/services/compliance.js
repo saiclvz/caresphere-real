@@ -1,90 +1,9 @@
 /**
- * Confidentiality undertakings (per area, first opening in each sign-in session), release of information, data subject
+ * Release of information, data subject
  * requests and the security incident log (RA 10173).
  */
 const { pool } = require('../config/db');
 const HttpError = require('../utils/HttpError');
-
-const U = require('../config/undertaking');
-const { deviceType } = require('../utils/device');
-const ipOf = (req) => (req.ip || '').replace(/^::ffff:/, '').slice(0, 45);
-/** Short, non-secret reference for a sign-in session (for the audit log). */
-const sessionRef = (jti) => require('crypto').createHash('sha256').update(String(jti || '')).digest('hex').slice(0, 8);
-
-function cleanArea(area) {
-  const a = String(area || '');
-  if (!U.AREAS[a]) throw new HttpError(400, 'Unknown area. Use adoption or transition.');
-  return a;
-}
-
-/** The current version for an area (its first version is added from config/undertaking.js on first use). */
-async function currentVersion(area) {
-  const a = U.textArea(cleanArea(area));
-  const [[row]] = await pool.query('SELECT version_id, version, area, title, paragraphs, created_at FROM tbl_undertaking_versions WHERE area = ? ORDER BY version_id DESC LIMIT 1', [a]);
-  if (row) return { ...row, paragraphs: JSON.parse(row.paragraphs) };
-  const f = U.AREAS[a].first;
-  await pool.query('INSERT IGNORE INTO tbl_undertaking_versions (version, area, title, paragraphs) VALUES (?, ?, ?, ?)', [f.version, a, f.title, JSON.stringify(f.paragraphs)]);
-  return currentVersion(a);
-}
-
-// Accepted (session, area) pairs; the database is the record, this only saves queries.
-const accepted = new Set();
-/** Has this sign-in session accepted the undertaking for the area? */
-async function sessionAccepted(jti, area) {
-  if (!jti) return false;
-  const key = `${jti}:${U.acceptanceArea(area)}`;
-  if (accepted.has(key)) return true;
-  const [[row]] = await pool.query('SELECT undertaking_id FROM tbl_confidentiality_undertakings WHERE session_jti = ? AND area = ?', [jti, U.acceptanceArea(area)]);
-  if (row) accepted.add(key);
-  return Boolean(row);
-}
-
-async function undertakingStatus(req, area) {
-  const a = cleanArea(area);
-  const v = await currentVersion(a);
-  return { area: a, area_label: U.AREAS[a].label, records: U.AREAS[a].records, version: v.version, title: v.title, paragraphs: v.paragraphs,
-    accepted: await sessionAccepted(req.auth?.jti, a), scope: U.SCOPE };
-}
-
-/** Accept for this session and area: user, session, area, version shown, time, device and IP. */
-async function acceptUndertaking(req, area) {
-  const a = cleanArea(area);
-  const v = await currentVersion(a);
-  if (req.body?.version && req.body.version !== v.version) throw new HttpError(409, 'The undertaking was updated. Read the new version and accept it.');
-  await pool.query(
-    'INSERT IGNORE INTO tbl_confidentiality_undertakings (user_id, version, version_id, area, session_jti, ip_address, device_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [req.user.user_id, v.version, v.version_id, U.acceptanceArea(a), req.auth.jti, ipOf(req), deviceType(req)]);
-  accepted.add(`${req.auth.jti}:${U.acceptanceArea(a)}`);
-  return { area: a, area_label: U.AREAS[a].label, version: v.version, session: sessionRef(req.auth.jti) };
-}
-
-/** Admin: a new version of an area's text (CU-<year>-<n> or CU-TR-<year>-<n>); old versions stay as saved. */
-async function updateUndertaking(req, area, body) {
-  const a = cleanArea(area);
-  const title = String(body?.title || '').trim();
-  const paragraphs = (Array.isArray(body?.paragraphs) ? body.paragraphs : []).map((x) => String(x).trim()).filter(Boolean);
-  if (title.length < 3 || title.length > 150) throw new HttpError(400, 'Title must be 3 to 150 characters.');
-  if (!paragraphs.length || paragraphs.length > 12 || paragraphs.some((x) => x.length > 2000)) throw new HttpError(400, 'Enter 1 to 12 paragraphs, each up to 2,000 characters.');
-  const cur = await currentVersion(a);
-  if (cur.title === title && JSON.stringify(cur.paragraphs) === JSON.stringify(paragraphs)) throw new HttpError(400, 'Nothing changed.');
-  const year = new Date().getFullYear();
-  const prefix = U.AREAS[a].versionPrefix;
-  const [[n]] = await pool.query('SELECT COUNT(*) AS n FROM tbl_undertaking_versions WHERE area = ? AND version LIKE ?', [a, `${prefix}-${year}-%`]);
-  const version = `${prefix}-${year}-${Number(n.n) + 1}`;
-  await pool.query('INSERT INTO tbl_undertaking_versions (version, area, title, paragraphs, previous_version, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-    [version, a, title, JSON.stringify(paragraphs), cur.version, req.user.user_id]);
-  return { area: a, old: cur.version, version };
-}
-
-async function undertakingHistory(area) {
-  const a = cleanArea(area);
-  await currentVersion(a); // make sure the first version exists
-  const [rows] = await pool.query(
-    `SELECT v.version_id, v.version, v.area, v.previous_version, v.title, v.paragraphs, v.created_at, u.full_name AS created_by_name,
-            (SELECT COUNT(*) FROM tbl_confidentiality_undertakings c WHERE c.version = v.version) AS acceptances
-       FROM tbl_undertaking_versions v LEFT JOIN tbl_users u ON u.user_id = v.created_by WHERE v.area = ? ORDER BY v.version_id DESC`, [a]);
-  return rows.map((r) => ({ ...r, paragraphs: JSON.parse(r.paragraphs), acceptances: Number(r.acceptances) }));
-}
 
 // ------------------------------------------------------------------ release of information (Admin)
 const str = (v) => (v === undefined || v === null ? '' : String(v).trim());
@@ -229,7 +148,6 @@ async function securityEvents(limit = 300) {
 }
 
 module.exports = {
-  undertakingStatus, acceptUndertaking, sessionAccepted, currentVersion, updateUndertaking, undertakingHistory, sessionRef, cleanArea,
   recordRelease, listReleases, createRequest, listRequests, updateRequest, DSR_KINDS, DSR_STATUSES,
   createIncident, updateIncident, listIncidents, securityEvents, SEVERITIES,
 };

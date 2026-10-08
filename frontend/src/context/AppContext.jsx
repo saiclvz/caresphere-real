@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../api/client';
+import { hasDuty } from '../lib/duties';
 import { useAuth } from './AuthContext';
 
 const AppContext = createContext(null);
@@ -37,7 +38,7 @@ export function AppProvider({ children }) {
   useEffect(() => { setSearchRaw(''); setQuery(''); setMobileOpen(false); }, [location.pathname]);
 
   const refreshLowStock = useCallback(async () => {
-    if (!user || !['Admin', 'Staff'].includes(user.role)) return;
+    if (!user || !['Admin', 'Staff'].includes(user.role) || !hasDuty(user, 'inventory')) return;
     try {
       // X-Background: polling must not count as activity for the idle-session timeout.
       const res = await api('/inventory/low-stock-count', { headers: { 'X-Background': '1' } });

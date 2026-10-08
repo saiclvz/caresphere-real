@@ -3,6 +3,14 @@ const { pool } = require('../config/db');
 const BASE = `SELECT u.user_id, u.full_name, u.email, u.is_active, u.created_at, u.mfa_enabled, r.role_name AS role
                 FROM tbl_users u JOIN tbl_roles r ON r.role_id = u.role_id`;
 
+/** Adds each Staff account's duties (the areas they may use). */
+async function withDuties(rows) {
+  const staff = rows.filter((r) => r.role === 'Staff').map((r) => r.user_id);
+  if (!staff.length) return rows;
+  const [d] = await pool.query('SELECT user_id, duty FROM tbl_staff_duties WHERE user_id IN (?)', [staff]);
+  return rows.map((r) => (r.role === 'Staff' ? { ...r, duties: d.filter((x) => x.user_id === r.user_id).map((x) => x.duty) } : r));
+}
+
 module.exports = {
   async findByEmailWithHash(email) {
     const [rows] = await pool.query(
@@ -12,7 +20,12 @@ module.exports = {
   },
   async findById(id) {
     const [rows] = await pool.query(`${BASE} WHERE u.user_id = ?`, [id]);
-    return rows[0] || null;
+    return rows[0] ? (await withDuties(rows))[0] : null;
+  },
+  /** Replaces a Staff account's duties (in the caller's transaction). */
+  async setDuties(conn, userId, duties, grantedBy) {
+    await conn.query('DELETE FROM tbl_staff_duties WHERE user_id = ?', [userId]);
+    for (const d of duties) await conn.query('INSERT INTO tbl_staff_duties (user_id, duty, granted_by) VALUES (?, ?, ?)', [userId, d, grantedBy || null]);
   },
   async list({ role } = {}) {
     const params = [];
@@ -20,7 +33,7 @@ module.exports = {
     if (role) { sql += ' WHERE r.role_name = ?'; params.push(role); }
     sql += ' ORDER BY u.full_name';
     const [rows] = await pool.query(sql, params);
-    return rows;
+    return withDuties(rows);
   },
   async roleId(roleName) {
     const [rows] = await pool.query('SELECT role_id FROM tbl_roles WHERE role_name = ?', [roleName]);

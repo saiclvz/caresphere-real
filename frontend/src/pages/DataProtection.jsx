@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
-import UndertakingEditor from '../components/UndertakingEditor';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table } from '../components/ui';
@@ -197,7 +196,6 @@ export default function DataProtection() {
       {tab === 'requests' && <RequestsTab />}
       {tab === 'incidents' && isAdmin && <IncidentsTab />}
       {tab === 'events' && isAdmin && <SecurityEventsTab />}
-      {isAdmin && <UndertakingEditor />}
     </>
   );
 }

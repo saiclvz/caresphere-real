@@ -243,7 +243,7 @@ export default function DonationForm({ visit = null, onClose, onSaved }) {
           <Field label="Donor" required error={errors.donor_id} hint={donorList.length === 0 && !donors.loading ? 'No donor accounts yet. Use Walk-in, or have the donor register.' : 'The receipt and history appear in this donor\'s portal.'}>
             <select className={`input ${errors.donor_id ? badInput : ''}`} value={form.donor_id} onChange={set('donor_id')}>
               <option value="">Select a donor</option>
-              {donorList.map((d) => <option key={d.user_id} value={d.user_id}>{d.full_name} ({d.email})</option>)}
+              {donorList.map((d) => <option key={d.user_id} value={d.user_id}>{d.full_name}{d.email ? ` (${d.email})` : ''}</option>)}
             </select>
           </Field>
         )}

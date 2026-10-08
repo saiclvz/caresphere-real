@@ -54,13 +54,7 @@ export function AuthProvider({ children }) {
     clear();
   }, [clear]);
 
-  // Undertaking areas accepted in this sign-in (only to skip the screen; the server checks every request).
-  const [acceptedAreas, setAcceptedAreas] = useState(() => new Set());
-  const markAreaAccepted = useCallback((area) => setAcceptedAreas((a) => new Set(a).add(area)), []);
-  useEffect(() => { if (!user) setAcceptedAreas(new Set()); }, [user]);
-
-  const value = useMemo(() => ({ user, loading, login, completeSession, register, logout, acceptedAreas, markAreaAccepted }),
-    [user, loading, login, completeSession, register, logout, acceptedAreas, markAreaAccepted]);
+  const value = useMemo(() => ({ user, loading, login, completeSession, register, logout }), [user, loading, login, completeSession, register, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

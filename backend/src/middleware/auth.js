@@ -68,6 +68,11 @@ async function authenticate(req, res, next) {
       email: user.email,
       role: user.role_name,
     };
+    // Staff duties (the areas they may use), read fresh so a change applies on the next request.
+    if (user.role_name === 'Staff') {
+      const [duties] = await pool.query('SELECT duty FROM tbl_staff_duties WHERE user_id = ?', [user.user_id]);
+      req.user.duties = duties.map((d) => d.duty);
+    }
     req.auth = { jti: decoded.jti, exp: decoded.exp, iat: decoded.iat };
     next();
   } catch (err) {
@@ -80,7 +85,7 @@ const authorize = (...roles) => (req, res, next) => {
   if (!req.user) return next(sessionError('Sign in to continue.'));
   if (!roles.includes(req.user.role)) {
     logSecurityEvent(req, 'UNAUTHORIZED_ACCESS', { detail: `${req.method} ${req.originalUrl}`.slice(0, 300) });
-    return next(new HttpError(403, 'Your role does not have access to this resource.'));
+    return next(new HttpError(403, 'ACCESS DENIED – You are not authorized to view this information.'));
   }
   next();
 };

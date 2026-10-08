@@ -5,11 +5,10 @@ import { api } from '../../api/client';
 import { unlockHeaders } from '../../lib/grants';
 import { formatDate, formatDateTime } from '../../lib/format';
 import { Badge, Card, ErrorNote, Spinner } from '../ui';
-import LockedSection from '../LockedSection';
 
 /**
- * Child page: adoption status history. Fetched separately, and only returned by the server when this
- * session accepted the Adoption undertaking and (Staff) the child record is unlocked.
+ * Child page: adoption status history. Fetched separately; for Staff the server only returns it while
+ * the child record is unlocked (purpose, QR token, 3-minute access).
  */
 export default function AdoptionHistorySection({ childId }) {
   const [state, setState] = useState({ loading: true });
@@ -22,7 +21,6 @@ export default function AdoptionHistorySection({ childId }) {
     return () => window.removeEventListener('caresphere-unlock', onChange);
   }, [childId, load]);
 
-  if (state.error?.details?.undertaking_required) return <LockedSection title="Adoption status history" area="adoption" to="/adoptions" />;
   return (
     <Card className="p-5">
       <h2 className="mb-3 flex items-center gap-2 font-semibold text-navy-900"><FileHeart className="h-4 w-4" /> Adoption status history</h2>

@@ -162,6 +162,37 @@ async function applyStatusUpdate(app, u, userId) {
     const notes = [];
     let closed = [];
 
+    // The application is complete only when every required document is verified and unexpired.
+    if (WF.DOCUMENTS_COMPLETE_FOR.includes(u.target) && !cur.is_legacy) {
+      const { documentChecklist } = require('./adoptionValidation');
+      const c = documentChecklist(await Adoption.form(id), cur.application_type, await Adoption.documents(id, conn));
+      const all = [...c.summary.blocking, ...(await require('./verification').blocking(id))];
+      if (all.length) {
+        const list = all.slice(0, 8).map((b) => `${b.label} (${b.status})`).join('; ');
+        throw new HttpError(409, `The application isn't complete yet. These still need verification: ${list}${all.length > 8 ? '; and more' : ''}.`,
+          { incomplete_documents: all });
+      }
+      // Submitted before the ID and clearance checks existed: those details must be collected first.
+      const [[vc]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_verifications WHERE application_id = ?', [id]);
+      if (!Number(vc.n) && cur.submitted_at) {
+        throw new HttpError(409, 'This application has no ID or clearance checks (it was submitted before they existed). Ask the applicant for the details, then record them.',
+          { incomplete_documents: [{ doc_type: 'verification:missing', label: 'Government ID and clearance details', status: 'Pending submission' }] });
+      }
+    }
+    // Regular adoption: the home's documents for the matched child must be uploaded before the petition.
+    if (u.target === 'Petition filed' && WF.trackOf(cur.application_type) === 'Regular' && cur.matched_child_id) {
+      const { STAGE_DOCUMENTS } = require('../config/adoptionForm');
+      const [[child]] = await conn.query('SELECT TIMESTAMPDIFF(YEAR, dob, CURDATE()) AS age FROM tbl_children WHERE child_id = ?', [cur.matched_child_id]);
+      const age = Number(child?.age ?? 0);
+      const missing = [];
+      for (const [key, def] of Object.entries(STAGE_DOCUMENTS)) {
+        if (!def.petition) continue;
+        if ((def.petition === 'age5' && age < 5) || (def.petition === 'age10' && age < 10)) continue;
+        if (!(await hasDocument(conn, id, key))) missing.push(def.label);
+      }
+      if (missing.length) throw new HttpError(409, `Upload the child's documents before filing the petition: ${missing.join('; ')}.`);
+    }
+
     switch (u.target) {
       case 'Forum attended':
         if (!(await hasDocument(conn, id, 'forum_certificate'))) throw new HttpError(409, 'Upload the applicant\'s forum certificate before recording Forum attended.');
@@ -268,7 +299,7 @@ async function applyStatusUpdate(app, u, userId) {
       await Notify.emit(conn, 'application_remark', { userId: cur.applicant_id, applicationId: id, entityType: 'application', entityId: id,
         params: { id, ref: cur.reference_no }, groupKey: `application_remark:history:${historyId}` });
     }
-    if (u.target === 'Home study completed') {
+    if (u.target === 'Case study completed') {
       await Notify.toAdmins(conn, 'admin_decision_needed', { entityType: 'application', entityId: id, params: { id, ref: cur.reference_no },
         groupKey: `admin_decision_needed:history:${historyId}` });
     }

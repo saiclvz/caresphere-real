@@ -12,9 +12,7 @@ export default function DueSoon() {
     <Card className="p-5">
       <h2 className="mb-3 flex items-center gap-2 font-semibold text-navy-900"><AlarmClock className="h-4 w-4 text-brand" aria-hidden /> Due soon (adoption)</h2>
       {loading && !data ? <Spinner /> : error ? (
-        <p className="text-sm text-slate-500">{error.details?.undertaking_required
-          ? <>Accept the confidentiality undertaking on the <Link to="/adoptions" className="text-brand hover:underline">Adoption</Link> page to see deadlines.</>
-          : error.message}</p>
+        <p className="text-sm text-slate-500">{error.message}</p>
       ) : items.length === 0 ? <p className="text-sm text-slate-500">Nothing due in the next 14 days.</p> : (
         <ul className="divide-y divide-slate-100">
           {items.map((it) => (

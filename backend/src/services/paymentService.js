@@ -4,7 +4,7 @@
  *    donation is created ONLY when PayMongo's signed webhook reports the payment as paid, in one
  *    transaction: donation (general, Portal, Registered), receipt code, payment link, notification
  *    and audit entry. A repeated webhook finds the payment already paid and changes nothing.
- *  - Bank transfer (manual): the donor gives the transfer reference, date and proof. A donation is
+ *  - Bank transfer (manual): the donor gives the transfer reference, date and amount (an attachment is optional). A donation is
  *    created as "Pending verification" with no receipt until Staff or Admin confirm it.
  */
 const env = require('../config/env');
@@ -184,7 +184,8 @@ async function submitBankTransfer(req, body) {
   if (last4 && !/^\d{4}$/.test(last4)) throw new HttpError(400, 'Enter only the last 4 digits of your account, or leave it empty.');
   const [[dup]] = await pool.query('SELECT payment_id FROM tbl_payments WHERE transfer_reference = ?', [reference]);
   if (dup) throw new HttpError(409, 'This transfer reference number was already submitted. Check the number, or contact the home if you think this is a mistake.');
-  const file = saveUpload(body?.proof, PROOF_OPTS);
+  // An attachment is optional: staff verify by reference number, amount and date against the bank statement.
+  const file = body?.proof ? saveUpload(body.proof, PROOF_OPTS) : null;
 
   const [[donor]] = await pool.query('SELECT full_name FROM tbl_users WHERE user_id = ?', [req.user.user_id]);
   try {
@@ -198,8 +199,8 @@ async function submitBankTransfer(req, body) {
         `INSERT INTO tbl_payments (donor_id, method_id, method_name, gateway, amount, reason, status, transfer_reference, transfer_date, account_last4,
            proof_storage_key, proof_name, proof_mime, proof_size, proof_sha256, donation_id)
          VALUES (?, ?, ?, 'manual', ?, ?, 'pending_verification', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [req.user.user_id, m.method_id, m.name, amount, reason, reference, transferDate, last4, file.storage_key, file.original_name, file.mime_type,
-          file.size_bytes, file.sha256, donationId]);
+        [req.user.user_id, m.method_id, m.name, amount, reason, reference, transferDate, last4, file?.storage_key || null, file?.original_name || null, file?.mime_type || null,
+          file?.size_bytes || null, file?.sha256 || null, donationId]);
       await logActivityWith(conn, req, `BANK_TRANSFER_SUBMITTED (PHP ${amount.toFixed(2)})`, `Payment #${r.insertId}`);
       await Notify.emit(conn, 'transfer_submitted', { userId: req.user.user_id, entityType: 'payment', entityId: r.insertId, groupKey: `transfer_submitted:payment:${r.insertId}` });
       // One "to verify" row per Admin and Staff member, showing how many are waiting.

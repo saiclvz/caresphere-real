@@ -120,7 +120,7 @@ export default function TransitionReviewDetail() {
                 : <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700" role="status">You're not assigned to this record. Ask an Admin to assign you.</p>}
             </div>
           </Card>
-          <aside><AssignedStaffCard record={review} endpoint={`/transition-reviews/${review.review_id}/assign`} onSaved={() => load()} /></aside>
+          <aside><AssignedStaffCard duty="transition" record={review} endpoint={`/transition-reviews/${review.review_id}/assign`} onSaved={() => load()} /></aside>
         </div>
       </>
     );
@@ -193,7 +193,7 @@ export default function TransitionReviewDetail() {
           </Card>
         </div>
         <aside className="space-y-4">
-          <AssignedStaffCard record={review} endpoint={`/transition-reviews/${review.review_id}/assign`} onSaved={() => load()} />
+          <AssignedStaffCard duty="transition" record={review} endpoint={`/transition-reviews/${review.review_id}/assign`} onSaved={() => load()} />
           {isAdmin && <AccessSessions recordType={REC} recordId={review.review_id} />}
         </aside>
       </div>

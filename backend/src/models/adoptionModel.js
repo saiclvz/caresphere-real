@@ -11,7 +11,8 @@ const { STATUSES, ACTIVE, FINAL } = WF;
 const LABELS = {};
 /** Sensitive applicant fields stored encrypted (RA 10173). Legal name and email stay readable for search. */
 const ENCRYPTED = new Set(['date_of_birth', 'contact_number', 'house_unit', 'street', 'subdivision', 'barangay', 'province',
-  'postal_code', 'id_type', 'id_type_other', 'living_conditions', 'caregiving_experience']);
+  'postal_code', 'id_type', 'id_type_other', 'living_conditions', 'caregiving_experience', 'adoptee_dob', 'adoptee_relationship',
+  'id_number', 'id_expiry', 'id_name', 'id_dob']);
 const dec = (k, v) => (ENCRYPTED.has(k) ? decField(v) : (v ?? ''));
 
 // Columns of tbl_applicant_details that map 1:1 to form fields.
@@ -19,6 +20,8 @@ const DETAIL_FIELDS = [
   'legal_name', 'date_of_birth', 'contact_number', 'email', 'house_unit', 'street', 'subdivision', 'barangay', 'province',
   'postal_code', 'civil_status', 'employment_status', 'occupation', 'employer', 'position', 'employment_length',
   'income_source', 'housing', 'living_conditions', 'caregiving_experience', 'id_type', 'id_type_other',
+  'citizenship', 'children_10_plus', 'nonmarital_children_10_plus', 'has_adopted_before', 'adoptee_dob', 'adoptee_relationship',
+  'id_number', 'id_expiry', 'id_name', 'id_dob',
 ];
 
 const LIST_COLS = `a.application_id, a.reference_no, a.status, a.application_type, a.is_legacy, a.applicant_id, a.matched_child_id,
@@ -90,6 +93,10 @@ module.exports = {
     const form = {};
     for (const f of DETAIL_FIELDS) form[f] = dec(f, d?.[f]);
     form.date_of_birth = dateOnly(form.date_of_birth);
+    form.adoptee_dob = dateOnly(form.adoptee_dob);
+    form.id_expiry = dateOnly(form.id_expiry);
+    form.id_dob = dateOnly(form.id_dob);
+    try { form.clearances = d?.clearances ? JSON.parse(decField(d.clearances)) : []; } catch { form.clearances = []; }
     const city = decField(d?.city);
     const hasList = Boolean(CITY_LISTS[form.province]);
     if (d?.city_is_other && hasList) { form.city = OTHER_CITY; form.city_other = city; } else { form.city = city; form.city_other = ''; }
@@ -104,6 +111,7 @@ module.exports = {
     const cols = DETAIL_FIELDS.filter((k) => k in f);
     const set = {};
     for (const k of cols) set[k] = f[k] === '' ? null : (ENCRYPTED.has(k) ? encField(f[k]) : f[k]);
+    if ('clearances' in f) set.clearances = encField(JSON.stringify(f.clearances || []));
     if ('city' in f || 'city_other' in f || 'province' in f) {
       const [[raw]] = await conn.query('SELECT province, city, city_is_other FROM tbl_applicant_details WHERE application_id = ?', [id]);
       const cur = raw ? { ...raw, province: decField(raw.province), city: decField(raw.city) } : null;
@@ -151,8 +159,10 @@ module.exports = {
   async documents(id, conn = pool) {
     const [rows] = await conn.query(
       `SELECT d.document_id, d.doc_type, d.page, d.original_name, d.mime_type, d.size_bytes, d.status, d.request_id, d.uploaded_at,
-              d.uploaded_by, d.sha256, u.full_name AS uploaded_by_name, pr.record_id AS protected_record_id, pr.public_id AS protected_public_id
+              d.uploaded_by, d.sha256, u.full_name AS uploaded_by_name, pr.record_id AS protected_record_id, pr.public_id AS protected_public_id,
+              d.verification_status, DATE_FORMAT(d.issued_date, '%Y-%m-%d') AS issued_date, d.reviewed_at, d.review_note, rv.full_name AS reviewed_by_name
          FROM tbl_adoption_documents d JOIN tbl_users u ON u.user_id = d.uploaded_by
+         LEFT JOIN tbl_users rv ON rv.user_id = d.reviewed_by
          LEFT JOIN tbl_protected_records pr ON pr.document_id = d.document_id
         WHERE d.application_id = ? ORDER BY d.page, d.doc_type, d.uploaded_at`, [id]);
     return rows;
@@ -165,9 +175,9 @@ module.exports = {
 
   async insertDocument(conn, d) {
     const [res] = await conn.query(
-      `INSERT INTO tbl_adoption_documents (application_id, doc_type, page, original_name, mime_type, size_bytes, storage_key, sha256, uploaded_by, request_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [d.application_id, d.doc_type, d.page ?? null, d.original_name, d.mime_type, d.size_bytes, d.storage_key, d.sha256 || null, d.uploaded_by, d.request_id || null]);
+      `INSERT INTO tbl_adoption_documents (application_id, doc_type, page, original_name, mime_type, size_bytes, storage_key, sha256, uploaded_by, request_id, issued_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [d.application_id, d.doc_type, d.page ?? null, d.original_name, d.mime_type, d.size_bytes, d.storage_key, d.sha256 || null, d.uploaded_by, d.request_id || null, d.issued_date || null]);
     return res.insertId;
   },
 

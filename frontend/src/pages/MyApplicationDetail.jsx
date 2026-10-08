@@ -10,6 +10,7 @@ import { readFile } from '../lib/files';
 import { formatDate, formatDateTime } from '../lib/format';
 import { DocumentField } from './adoption/FieldControls';
 import PhaseTracker from './adoption/PhaseTracker';
+import VerificationList from '../components/adoption/VerificationList';
 import PrivacyRequests from './adoption/PrivacyRequests';
 import { AFTER_ORDER } from './adoption/formLogic';
 import './adoption/adoption.css';
@@ -71,11 +72,11 @@ export default function MyApplicationDetail() {
 
   const openRequests = app.requests.filter((r) => r.status === 'Open');
   const upcoming = app.interviews.filter((i) => new Date(String(i.scheduled_at).replace(' ', 'T')) >= new Date(Date.now() - 86400000));
-  const docLabel = (t) => config.documents[t]?.label || t;
+  const docLabel = (t) => config.documents[t]?.label || config.retired_documents?.[t] || t;
 
-  const uploadRequested = async (docType, file) => {
+  const uploadRequested = async (docType, file, issuedDate) => {
     const f = await readFile(file);
-    const res = await api(`/adoptions/${app.application_id}/documents`, { method: 'POST', body: { doc_type: docType, file: { name: f.name, data: f.data } } });
+    const res = await api(`/adoptions/${app.application_id}/documents`, { method: 'POST', body: { doc_type: docType, file: { name: f.name, data: f.data }, issued_date: issuedDate } });
     setApp(res.data);
     refreshRequests?.();
     toast(docType === 'forum_certificate' ? 'Forum certificate sent to the home.' : 'Document sent to the home.');
@@ -137,6 +138,7 @@ export default function MyApplicationDetail() {
         </section>
       )}
 
+      <VerificationList app={app} config={config} mode="donor" onUpdated={setApp} />
       {app.can_upload_forum_certificate && config.stage_documents?.forum_certificate && (
         <section className="cs-card space-y-2 p-4" aria-labelledby="forum-title">
           <h2 id="forum-title" className="cs-title">Adoption forum certificate</h2>

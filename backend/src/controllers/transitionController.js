@@ -8,6 +8,11 @@ const { maskName } = require('../config/adoptionSensitive');
 const { LOCKED_TRANSITION } = require('../config/transitionSensitive');
 
 const STATUSES = ['For Review', 'In Progress', 'Completed'];
+/** List order. Default: most recent activity. Age is only a sort the user picks. */
+const TRANSITION_SORTS = {
+  recent: 'COALESCE(tr.updated_at, tr.flagged_at) DESC, tr.review_id DESC', flagged: 'tr.flagged_at DESC, tr.review_id DESC',
+  status: "FIELD(tr.review_status, 'For Review', 'In Progress', 'Completed'), tr.flagged_at DESC", case: 'c.child_id ASC', age: 'c.dob DESC',
+};
 const REC = 'transition_review';
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -80,7 +85,7 @@ exports.list = async (req, res) => {
     else { where.push('c.child_id LIKE ?'); params.push(p); }
   }
   const [rows] = await pool.query(`${SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY FIELD(tr.review_status, 'For Review', 'In Progress', 'Completed'), c.dob`, params);
+    ORDER BY ${TRANSITION_SORTS[req.query.sort] || TRANSITION_SORTS.recent}`, params);
   if (isAdmin) await logActivity(req, 'VIEW_TRANSITION_REVIEWS (Admin full access)', 'Transition reviews');
   res.json({
     success: true,

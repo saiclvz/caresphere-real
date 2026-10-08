@@ -37,11 +37,11 @@ export default function BankTransferQueue({ onChanged }) {
   return (
     <Card className="mb-4 border border-amber-200">
       <h2 className="flex items-center gap-2 px-4 pt-4 font-semibold text-navy-900"><Building2 className="h-4 w-4 text-amber-700" aria-hidden /> Bank transfers to verify <Badge tone="amber">{rows.length}</Badge></h2>
-      <p className="px-4 text-xs text-slate-500">Check each transfer against the home's bank account before confirming.</p>
+      <p className="px-4 text-xs text-slate-500">Match the reference number, amount and date against the home's bank statement before confirming. An attachment is optional.</p>
       {error ? <div className="p-4"><ErrorNote error={error} onRetry={reload} /></div> : (
         <Table>
           <thead className="bg-slate-50"><tr>
-            <th className="th">Submitted</th><th className="th">Donor</th><th className="th">Amount</th><th className="th">Reference</th><th className="th">Transfer date</th><th className="th">Proof</th><th className="th"><span className="sr-only">Actions</span></th>
+            <th className="th">Submitted</th><th className="th">Donor</th><th className="th">Amount</th><th className="th">Reference</th><th className="th">Transfer date</th><th className="th">Attachment</th><th className="th"><span className="sr-only">Actions</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100">
             {rows.map((p) => (
@@ -51,7 +51,7 @@ export default function BankTransferQueue({ onChanged }) {
                 <td className="td whitespace-nowrap font-semibold text-navy-900">{formatMoney(p.amount)}</td>
                 <td className="td font-mono text-sm">{p.transfer_reference}{p.account_last4 && <p className="font-sans text-xs text-slate-500">Account ending {p.account_last4}</p>}</td>
                 <td className="td whitespace-nowrap">{formatDate(p.transfer_date)}</td>
-                <td className="td">{p.has_proof && <Button size="sm" variant="ghost" onClick={() => viewProof(p)}><Eye className="h-3.5 w-3.5" /> View</Button>}</td>
+                <td className="td">{p.has_proof ? <Button size="sm" variant="ghost" onClick={() => viewProof(p)}><Eye className="h-3.5 w-3.5" /> View</Button> : <span className="text-xs text-slate-400">None</span>}</td>
                 <td className="td whitespace-nowrap text-right">
                   <Button size="sm" onClick={() => open(p, 'confirm')}>Confirm</Button>{' '}
                   <Button size="sm" variant="ghost" onClick={() => open(p, 'reject')}>Reject</Button>

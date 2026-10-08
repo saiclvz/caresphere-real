@@ -12,12 +12,13 @@ import { Button, Card, Field } from './ui';
  * active Staff accounts plus Unassigned, and Save. Staff: read-only. The server rejects changes
  * from anyone but Admin.
  */
-export default function AssignedStaffCard({ record, endpoint, onSaved, label = 'Assigned staff' }) {
+export default function AssignedStaffCard({ record, endpoint, onSaved, label = 'Assigned staff', duty }) {
   const { user } = useAuth();
   const { toast } = useApp();
   const isAdmin = user.role === 'Admin';
   const users = useApi(isAdmin ? '/users?role=Staff' : null);
-  const staff = (users.data?.data || []).filter((u) => u.is_active);
+  // Only active Staff with the duty for this kind of record (the server checks it too).
+  const staff = (users.data?.data || []).filter((u) => u.is_active && (!duty || (u.duties || []).includes(duty)));
   const current = record.assigned_staff?.user_id ? String(record.assigned_staff.user_id) : '';
   const [value, setValue] = useState(current);
   const [busy, setBusy] = useState(false);

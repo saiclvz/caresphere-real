@@ -24,7 +24,8 @@ export default function Transitions() {
   const isAdmin = user.role === 'Admin';
   const [status, setStatus] = useState('');
   const [assigned, setAssigned] = useState('');
-  const { data, loading, error, reload } = useApi(`/transition-reviews${qs({ status, assigned: assigned || undefined, q: query })}`);
+  const [sort, setSort] = useState('recent');
+  const { data, loading, error, reload } = useApi(`/transition-reviews${qs({ status, assigned: assigned || undefined, sort, q: query })}`);
   const rows = data?.data || [];
 
   return (
@@ -39,7 +40,12 @@ export default function Transitions() {
           </button>
         ))}
       </div>
-      <div className="mb-3"><AssignedFilter value={assigned} onChange={setAssigned} /></div>
+      <div className="mb-3 flex flex-wrap items-center gap-3"><AssignedFilter value={assigned} onChange={setAssigned} />
+        <label className="sr-only" htmlFor="tr-sort">Sort</label>
+        <select id="tr-sort" className="input h-10 w-56" value={sort} onChange={(e) => setSort(e.target.value)}>
+          {[['recent', 'Most recent activity'], ['flagged', 'Date flagged (newest)'], ['status', 'Status'], ['case', 'Case number'], ['age', 'Age (youngest first)']].map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+      </div>
       {!isAdmin && <p className="mb-3 text-xs text-slate-500">Names and plans are hidden until you unlock a review assigned to you. Search works by case number.</p>}
       <Card>
         {loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (

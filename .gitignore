@@ -16,3 +16,6 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 *.log
+
+# OCR language data (downloaded on first ID reading)
+backend/ocr-data/

@@ -27,6 +27,15 @@ function signSession(user, { mfa: mfaPassed = false } = {}) {
 }
 
 const publicUser = (u) => ({ user_id: u.user_id, full_name: u.full_name, email: u.email, role: u.role });
+/** The user for a sign-in response, with Staff duties so the menu is right straight away. */
+async function sessionUser(u) {
+  const out = publicUser(u);
+  if (u.role === 'Staff') {
+    const [d] = await require('../config/db').pool.query('SELECT duty FROM tbl_staff_duties WHERE user_id = ?', [u.user_id]);
+    out.duties = d.map((x) => x.duty);
+  }
+  return out;
+}
 
 exports.login = async (req, res) => {
   const b = req.body || {};
@@ -75,7 +84,7 @@ exports.login = async (req, res) => {
 
   const token = signSession(user);
   await logActivity(req, 'LOGIN', `User #${user.user_id}`, user.user_id);
-  res.json({ success: true, token, user: publicUser(user) });
+  res.json({ success: true, token, user: await sessionUser(user) });
 };
 
 // ---------------------------------------------------------------- two-step verification (Admin)
@@ -99,7 +108,7 @@ exports.mfaSetupConfirm = async (req, res) => {
   const user = await User.findById(ch.user_id);
   await logActivity(req, 'MFA_ENROLLED', `User #${user.user_id}`, user.user_id);
   await logActivity(req, 'LOGIN', `User #${user.user_id}`, user.user_id);
-  res.json({ success: true, token: signSession(user, { mfa: true }), user: publicUser(user), backup_codes: codes });
+  res.json({ success: true, token: signSession(user, { mfa: true }), user: await sessionUser(user), backup_codes: codes });
 };
 
 /** POST /api/auth/mfa/verify { mfa_token, code } - 6-digit code or a backup code. */
@@ -117,7 +126,7 @@ exports.mfaVerify = async (req, res) => {
   if (used === 'backup') await logActivity(req, 'MFA_BACKUP_CODE_USED', `User #${user.user_id}`, user.user_id);
   await logActivity(req, 'LOGIN', `User #${user.user_id}`, user.user_id);
   res.json({
-    success: true, token: signSession(user, { mfa: true }), user: publicUser(user),
+    success: true, token: signSession(user, { mfa: true }), user: await sessionUser(user),
     backup_codes_left: used === 'backup' ? await mfa.backupCodesLeft(user.user_id) : undefined,
   });
 };
@@ -152,7 +161,7 @@ exports.register = async (req, res) => {
   const user = await User.findById(userId);
 
   await logActivity(req, 'REGISTER_DONOR', `User #${userId}`, userId);
-  res.status(201).json({ success: true, token: signSession(user), user: publicUser(user) });
+  res.status(201).json({ success: true, token: signSession(user), user: await sessionUser(user) });
 };
 
 exports.logout = async (req, res) => {

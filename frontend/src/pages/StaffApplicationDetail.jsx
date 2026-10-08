@@ -14,6 +14,7 @@ import TokenVerifyModal from '../components/TokenVerifyModal';
 import UnlockedBar from '../components/UnlockedBar';
 import AccessSessions from '../components/AccessSessions';
 import AssignedStaffCard from '../components/AssignedStaffCard';
+import VerificationList from '../components/adoption/VerificationList';
 import useSensitiveLogging from '../hooks/useSensitiveLogging';
 import { clearGrant, readGrant, saveGrant, unlockHeaders } from '../lib/grants';
 import { publicBaseUrl } from '../lib/publicUrl';
@@ -24,7 +25,59 @@ import { DeadlineChip, statusTone } from './Adoptions';
 import NotFound from './NotFound';
 import './adoption/adoption.css'; // print rules for QR slips
 
-const CHIP_TONE = { Done: 'green', Missing: 'red', Optional: 'slate' };
+const CHIP_TONE = {
+  Done: 'green', Missing: 'red', Optional: 'slate', Verified: 'green', 'Pending submission': 'red', Rejected: 'red', Expired: 'red',
+  'Requires correction': 'amber', 'Under validation': 'blue', Submitted: 'blue', 'Manual verification required': 'amber', 'Not applicable': 'slate',
+};
+const REQ_TONE = { Required: 'red', Conditional: 'amber', Optional: 'slate', 'Not applicable': 'slate' };
+
+/**
+ * Manual verification of one file: there is no official verification service, so a person checks the
+ * document and records the result. Rejected or Requires correction needs a note for the applicant.
+ */
+function ReviewControls({ app, file, onSaved }) {
+  const { toast } = useApp();
+  const [status, setStatus] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const needsNote = ['Rejected', 'Requires correction'].includes(status);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const res = await api(`/adoptions/${app.application_id}/documents/${file.document_id}/review`, { method: 'POST', body: { status, note }, headers: unlockHeaders(REC, app.application_id) });
+      onSaved(res.data); setStatus(''); setNote(''); toast(`Marked ${status.toLowerCase()}.`);
+    } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  };
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+      <label className="sr-only" htmlFor={`rv-${file.document_id}`}>Review result for {file.original_name}</label>
+      <select id={`rv-${file.document_id}`} className="input h-8 w-48 text-xs" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <option value="">Review...</option>
+        {['Under validation', 'Verified', 'Requires correction', 'Rejected', 'Manual verification required'].map((s) => <option key={s} value={s}>{s}</option>)}
+      </select>
+      {needsNote && <input className="input h-8 w-64 text-xs" maxLength={500} placeholder="What the applicant must fix (sent to them)" value={note} onChange={(e) => setNote(e.target.value)} />}
+      {status && <Button size="sm" variant="secondary" loading={busy} disabled={needsNote && note.trim().length < 5} onClick={save}>Save</Button>}
+    </div>
+  );
+}
+
+/** Completeness: the application can't be cleared or petitioned until every required document is verified. */
+function DocumentsSummary({ app }) {
+  const s = app.documents_summary;
+  if (!s) return null;
+  return (
+    <Card className={`p-4 ${s.complete ? 'border border-emerald-200' : 'border border-amber-200'}`}>
+      <h2 className="font-semibold text-navy-900">Required documents: {s.verified} of {s.required} verified</h2>
+      {s.complete ? <p className="text-sm text-emerald-700">Complete. Every required document is verified and current.</p> : (
+        <>
+          <p className="text-sm text-slate-600">The application can't be cleared for matching or petitioned until these are verified:</p>
+          <ul className="mt-1 list-disc pl-5 text-sm text-slate-700">{s.blocking.map((b) => <li key={b.doc_type}>{b.label}: <span className="font-medium">{b.status}</span></li>)}</ul>
+        </>
+      )}
+      <p className="mt-2 text-xs text-slate-500">No official verification service is connected, so each document is verified by a person and the result is logged.</p>
+    </Card>
+  );
+}
 const LEGACY_LABELS = {
   address: 'Address', occupation: 'Occupation', employment_details: 'Employment details', spouse_details: 'Spouse / co-applicant details',
   household_members: 'Household members', living_conditions: 'Living conditions', caregiving_experience: 'Caregiving experience',
@@ -310,7 +363,7 @@ function ReleaseOfInformation({ app }) {
 }
 
 /** One of the 8 answer pages, with documents, in the staff layout. */
-function PageSection({ page, app, config, onOpenDoc, onDownload, onProtect }) {
+function PageSection({ page, app, config, onOpenDoc, onDownload, onProtect, onReviewed }) {
   const fields = pageFields(config, page.n, app.form);
   const docs = app.checklist.filter((c) => c.page === page.n);
   const legacyKeys = app.legacy ? {
@@ -353,12 +406,16 @@ function PageSection({ page, app, config, onOpenDoc, onDownload, onProtect }) {
                       {!f.is_protected && <button type="button" className="text-xs text-slate-500 hover:text-navy-900" onClick={() => onDownload(f)} aria-label={`Download ${f.original_name}`}><Download className="h-3.5 w-3.5" /></button>}
                       {onProtect && !f.is_protected && <button type="button" className="text-xs text-slate-500 hover:text-navy-900" onClick={() => onProtect(f)}>Mark protected</button>}
                       <span className="text-xs text-slate-400">{formatDate(f.uploaded_at)}</span>
+                      <Badge tone={f.expired ? 'red' : CHIP_TONE[f.verification_status]}>{f.expired ? 'Expired' : f.verification_status}</Badge>
+                      {f.issued_date && <span className="text-xs text-slate-500">issued {formatDate(f.issued_date)}{f.expires_on ? `, valid to ${formatDate(f.expires_on)}` : ''}</span>}
+                      {f.review_note && <span className="block w-full text-xs text-amber-800">Note: {f.review_note}</span>}
+                      {onReviewed && <span className="block w-full"><ReviewControls app={app} file={f} onSaved={onReviewed} /></span>}
                     </li>
                   ))}
                 </ul>
               ) : <span className="block text-slate-400">No file</span>}
             </dt>
-            <dd><Badge tone={CHIP_TONE[d.status]}>{d.status}</Badge></dd>
+            <dd className="flex flex-col items-end gap-1"><Badge tone={REQ_TONE[d.requirement]}>{d.requirement}</Badge><Badge tone={CHIP_TONE[d.status]}>{d.status}</Badge></dd>
           </div>
         ))}
         {page.n === 7 && <p className="py-2 text-sm text-slate-500">Home study report: written by a licensed social worker after the home visit. Nothing to upload.</p>}
@@ -534,7 +591,17 @@ function Inner() {
           </Card>
 
           <StageDocuments app={app} onChanged={setApp} onOpenDoc={openDoc} onDownload={downloadDoc} isAdmin={isAdmin} />
-          {config.pages.filter((p) => p.n <= 8).map((p) => <PageSection key={p.n} page={p} app={app} config={config} onOpenDoc={openDoc} onDownload={downloadDoc} onProtect={isAdmin ? protect : null} />)}
+          <DocumentsSummary app={app} />
+          <VerificationList app={app} config={config} mode="staff" onUpdated={app.status !== 'Draft' ? setApp : null} />
+          {config.pages.filter((p) => p.n <= 8).map((p) => <PageSection key={p.n} page={p} app={app} config={config} onOpenDoc={openDoc} onDownload={downloadDoc} onProtect={isAdmin ? protect : null} onReviewed={app.status !== 'Draft' ? setApp : null} />)}
+          {app.retired_documents_files?.length > 0 && (
+            <Card className="p-4">
+              <h2 className="mb-1 font-semibold text-navy-900">Earlier documents no longer required</h2>
+              <ul className="space-y-1 text-sm">{app.retired_documents_files.map((f) => (
+                <li key={f.document_id}><button type="button" className="text-brand hover:underline" onClick={() => openDoc(f)}>{f.original_name}</button> <span className="text-xs text-slate-500">{f.label}</span></li>
+              ))}</ul>
+            </Card>
+          )}
 
           <Card className="p-4">
             <h2 className="mb-2 font-semibold text-navy-900">Document requests</h2>
@@ -543,7 +610,7 @@ function Inner() {
                 {app.requests.map((r) => (
                   <li key={r.request_id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
                     <div className="min-w-0">
-                      <p className="font-medium text-navy-900">{config.documents[r.doc_type]?.label || config.stage_documents[r.doc_type]?.label || r.doc_type}</p>
+                      <p className="font-medium text-navy-900">{(config.documents[r.doc_type]?.label || config.retired_documents?.[r.doc_type]) || config.stage_documents[r.doc_type]?.label || r.doc_type}</p>
                       <p className="text-xs text-slate-500">Requested {formatDateTime(r.requested_at)} by {r.requested_by_name}{r.message && ` · "${r.message}"`}</p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -592,7 +659,7 @@ function Inner() {
         </div>
 
         <aside className="space-y-4">
-          <AssignedStaffCard record={app} endpoint={`/adoptions/${app.application_id}/assign`} onSaved={setApp} />
+          <AssignedStaffCard duty="adoption" record={app} endpoint={`/adoptions/${app.application_id}/assign`} onSaved={setApp} />
 
           <Card className="space-y-4 p-4">
             <div>
@@ -628,7 +695,7 @@ function Inner() {
                       {app.matched_child.cdclaa_verified ? ' · CDCLAA verified' : ' · CDCLAA not verified'}</p>
                   </div>
                 </div>
-              ) : <p className="text-sm text-slate-500">{app.application_type === 'Relative' ? 'Relative or stepchild adoption: no registry child is needed.' : 'No child matched. An administrator matches through Update status.'}</p>}
+              ) : <p className="text-sm text-slate-500">{app.application_type !== 'Regular' ? 'Relative or stepchild adoption: no registry child is needed.' : 'No child matched. An administrator matches through Update status.'}</p>}
             </div>
 
             {isAdmin && ['Closed', 'Declined', 'Withdrawn'].includes(app.status) && !app.archived_at && (

@@ -26,3 +26,14 @@
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
+
+/*
+ * Protected data (ProtectedArea): text can't be selected or copied and nothing prints. Form fields stay usable.
+ */
+.cs-protected { position: relative; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.cs-protected input, .cs-protected textarea, .cs-protected select { -webkit-user-select: text; user-select: text; }
+.cs-shield { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(16px); }
+@media print {
+  .cs-protected * { visibility: hidden !important; }
+  .cs-protected::before { content: 'Printing protected data is not allowed.'; visibility: visible; display: block; padding: 2rem; font-size: 14pt; }
+}

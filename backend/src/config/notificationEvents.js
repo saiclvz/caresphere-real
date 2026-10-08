@@ -65,6 +65,7 @@ const EVENTS = {
   // ---------------- Donor: account
   password_changed: { category: 'account', critical: true, title: () => 'Your password was changed', body: () => 'If this wasn\'t you, contact the home right away.', link: () => '/notifications' },
   account_reactivated: { category: 'account', title: () => 'Your account was reactivated', body: () => 'You can sign in again.', link: () => '/notifications' },
+  duties_changed: { category: 'assignments', title: () => 'Your duties were updated', body: (p) => `You can now work in: ${p.duties}.`, link: () => '/' },
   account_deactivated: { category: 'account', critical: true, title: () => 'Your account was deactivated', body: () => 'Contact the home if you have questions.', link: () => '/notifications' },
 
   // ---------------- Admin

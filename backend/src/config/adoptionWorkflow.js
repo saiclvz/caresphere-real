@@ -91,15 +91,24 @@ const DUE_SOON_DAYS = 14;
 const MONITORING_INTERVAL_DAYS = 30;
 
 /** Transitions this user may make from the current status for this application type. */
+/** Every NACC adoption type follows the Regular track or the Relative track (no matching). */
+const trackOf = (type) => require('./adoptionForm').trackOf(type);
+
 function allowedTargets(status, type, role) {
+  const track = trackOf(type);
   return (TRANSITIONS[status] || [])
-    .filter((t) => t.roles.includes(role) && (!t.types || t.types.includes(type)))
+    .filter((t) => t.roles.includes(role) && (!t.types || t.types.includes(track)))
     .map((t) => t.to);
 }
 
 function transition(status, type, to) {
-  return (TRANSITIONS[status] || []).find((t) => t.to === to && (!t.types || t.types.includes(type))) || null;
+  const track = trackOf(type);
+  return (TRANSITIONS[status] || []).find((t) => t.to === to && (!t.types || t.types.includes(track))) || null;
 }
+
+/** Moving to these needs every required document Verified and unexpired (the application is complete). */
+// From the home study on, every required document must be verified (no stage after it can be reached without it).
+const DOCUMENTS_COMPLETE_FOR = ['Home study scheduled', 'Cleared for matching', 'Petition filed'];
 
 /** For the 4-phase tracker: index of the current phase (0-3), or -1 for draft/declined/withdrawn. */
 function phaseIndex(status) {
@@ -108,6 +117,7 @@ function phaseIndex(status) {
 }
 
 module.exports = {
+  DOCUMENTS_COMPLETE_FOR, trackOf,
   OPS, ADMIN, PHASES, STAGES, STATUSES, TRANSITIONS, PREPARATION, ACTIVE, INACTIVE, FINAL, WITHDRAWABLE, AFTER_ORDER, PLACED,
   TRIAL_MONTHS, NACC_DECISION_DAYS, DUE_SOON_DAYS, MONITORING_INTERVAL_DAYS, allowedTargets, transition, phaseIndex,
 };

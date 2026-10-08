@@ -218,6 +218,9 @@ export default function Donations() {
           <Button variant="secondary" onClick={() => setVerifying(true)}><ScanLine className="h-4 w-4" /> Verify receipt</Button>
           <Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Record donation</Button>
         </>} />
+      {user.role !== 'Admin' && (
+        <p className="mb-3 text-xs text-slate-500">Donor details are confidential: names show as initials and contact numbers are masked. Match transfers by reference number, amount and date.</p>
+      )}
 
       <BankTransferQueue onChanged={reload} />
       <Card className="mb-4 p-4">

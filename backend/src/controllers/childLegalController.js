@@ -61,6 +61,103 @@ exports.getCdclaa = async (req, res) => {
   res.json({ success: true, data: { ...summary, locked: false, sensitive } });
 };
 
+
+/**
+ * PUT /api/children/:id/cdclaa (Admin, Staff) { number, date, file? }
+ * Recording or changing the CDCLAA clears its verification, and the child stops being
+ * Available for adoption until an Admin verifies it again.
+ */
+exports.saveCdclaa = async (req, res) => {
+  const id = req.params.id;
+  const number = String(req.body?.number || '').trim();
+  const date = String(req.body?.date || '').trim();
+  if (!number) throw new HttpError(400, 'CDCLAA number is required.');
+  if (number.length > 80) throw new HttpError(400, 'CDCLAA number can be up to 80 characters.');
+  if (!DATE.test(date)) throw new HttpError(400, 'Enter the CDCLAA issue date.');
+  const saved = req.body?.file ? saveUpload(req.body.file, { ...DOC_OPTS, folder: 'child-legal', label: 'CDCLAA copy' }) : null;
+  let oldKey = null;
+  try {
+    await withTransaction(async (conn) => {
+      const c = await child(id, conn, true);
+      if (c.status !== 'Active') throw new HttpError(409, `The child is ${c.status.toLowerCase()}; the CDCLAA can no longer change.`);
+      const set = { cdclaa_number: number, cdclaa_date: date, cdclaa_recorded_by: req.user.user_id, cdclaa_verified_at: null, cdclaa_verified_by: null,
+        available_for_adoption: 0 };
+      if (saved) {
+        oldKey = c.cdclaa_storage_key;
+        Object.assign(set, { cdclaa_storage_key: saved.storage_key, cdclaa_original_name: saved.original_name, cdclaa_mime: saved.mime_type,
+          cdclaa_size: saved.size_bytes, cdclaa_sha256: saved.sha256 });
+      }
+      const keys = Object.keys(set);
+      await conn.query(`UPDATE tbl_children SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE child_id = ?`, [...keys.map((k) => set[k]), id]);
+      const [[rec]] = await conn.query("SELECT record_id FROM tbl_protected_records WHERE child_id = ? AND record_type = 'cdclaa'", [id]);
+      if (!rec && (saved || c.cdclaa_storage_key)) await P.createRecord(conn, { type: 'cdclaa', label: `CDCLAA, ${id}`, childId: id, createdBy: req.user.user_id });
+    });
+  } catch (err) {
+    if (saved) deleteUpload(saved.storage_key);
+    throw err;
+  }
+  if (oldKey) deleteUpload(oldKey);
+  await logActivity(req, `CDCLAA_RECORDED${saved ? ' (file uploaded)' : ''}`, `Child ${id}`);
+  res.json({ success: true, data: await cdclaaSummary(id) });
+};
+
+/** POST /api/children/:id/cdclaa/verify (Admin) - requires number, date and an uploaded copy. */
+exports.verifyCdclaa = async (req, res) => {
+  const id = req.params.id;
+  const c = await child(id);
+  if (!c.cdclaa_number || !c.cdclaa_date || !c.cdclaa_storage_key) throw new HttpError(409, 'Record the CDCLAA number, issue date and an uploaded copy before verifying.');
+  await pool.query('UPDATE tbl_children SET cdclaa_verified_at = NOW(), cdclaa_verified_by = ? WHERE child_id = ?', [req.user.user_id, id]);
+  await logActivity(req, 'CDCLAA_VERIFIED', `Child ${id}`);
+  res.json({ success: true, data: await cdclaaSummary(id) });
+};
+
+/** GET /api/children/:id/sealed-records (Admin) - list only: the records show as "Sealed". */
+exports.listSealed = async (req, res) => {
+  const c = await child(req.params.id);
+  const [rows] = await pool.query(
+    `SELECT s.sealed_id, s.kind, s.uploaded_at, pr.record_id, pr.public_id
+       FROM tbl_sealed_records s LEFT JOIN tbl_protected_records pr ON pr.sealed_id = s.sealed_id
+      WHERE s.child_id = ? ORDER BY s.uploaded_at`, [c.child_id]);
+  res.json({ success: true, data: { original_birth_sealed: !!c.original_birth_sealed, records: rows.map((r) => ({ ...r, label: SEALED_KINDS[r.kind], sealed: true })) } });
+};
+
+/** POST /api/children/:id/sealed-records (Admin) { kind, file } - always a protected record. */
+exports.uploadSealed = async (req, res) => {
+  const id = req.params.id;
+  const kind = String(req.body?.kind || '');
+  if (!SEALED_KINDS[kind]) throw new HttpError(400, 'Choose the original birth certificate or the natural parents\' identity.');
+  await child(id);
+  const saved = saveUpload(req.body?.file, { ...DOC_OPTS, folder: 'sealed', label: SEALED_KINDS[kind] });
+  try {
+    await withTransaction(async (conn) => {
+      const [r] = await conn.query(
+        `INSERT INTO tbl_sealed_records (child_id, kind, original_name, mime_type, size_bytes, storage_key, sha256, uploaded_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [id, kind, saved.original_name, saved.mime_type, saved.size_bytes, saved.storage_key, saved.sha256, req.user.user_id]);
+      await P.createRecord(conn, { type: 'sealed_birth_record', label: `Sealed birth record, ${id}`, childId: id, sealedId: r.insertId, createdBy: req.user.user_id });
+      await conn.query('UPDATE tbl_children SET original_birth_sealed = TRUE WHERE child_id = ?', [id]);
+    });
+  } catch (err) {
+    deleteUpload(saved.storage_key);
+    throw err;
+  }
+  await logActivity(req, `SEALED_RECORD_STORED (${kind})`, `Child ${id}`);
+  return exports.listSealed(req, res);
+};
+
+/** GET /api/adoptions-matchable-children (Admin, Staff) - Active, under 18, Available, verified CDCLAA, not placed. */
+exports.matchable = async (req, res) => {
+  const [rows] = await pool.query(
+    `SELECT child_id, full_name, first_name, LEFT(last_name, 1) AS last_initial, gender, TIMESTAMPDIFF(YEAR, dob, CURDATE()) AS age,
+            cdclaa_number, cdclaa_verified_at
+       FROM tbl_children
+      WHERE status = 'Active' AND available_for_adoption = TRUE AND placement_status = 'None' AND cdclaa_verified_at IS NOT NULL
+        AND TIMESTAMPDIFF(YEAR, dob, CURDATE()) < ? ORDER BY first_name, last_name`, [Number(env.transitionAge)]);
+  res.json({ success: true, data: rows });
+};
+
+exports.cdclaaSummary = cdclaaSummary;
+
+
 /**
  * PUT /api/children/:id/assign (Admin) { staff_user_id | null } - the child's case worker (health records).
  * Shared assignment logic (services/assignment.js): who/when, audit with old and new staff, notification,

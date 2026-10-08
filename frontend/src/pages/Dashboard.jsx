@@ -1,4 +1,5 @@
 import DueSoon from '../components/adoption/DueSoon';
+import { hasDuty } from '../lib/duties';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AlertTriangle, Baby, Boxes, HandCoins, UserCheck, UtensilsCrossed } from 'lucide-react';
@@ -32,12 +33,12 @@ export default function Dashboard() {
           <div className="min-w-0">
             <p className="text-2xl font-semibold tabular-nums text-navy-900">{formatMoney(d.donations.received_total)}</p>
             <p className="text-sm text-slate-500">Received from {d.donations.count} donation{d.donations.count === 1 ? '' : 's'}</p>
-            <Link to="/donations" className="text-sm font-medium text-brand hover:underline">View donations</Link>
+            {hasDuty(user, 'donations') && <Link to="/donations" className="text-sm font-medium text-brand hover:underline">View donations</Link>}
           </div>
         </Card>
       </div>
 
-      <div className="mt-6"><DueSoon /></div>
+      {hasDuty(user, 'adoption') && <div className="mt-6"><DueSoon /></div>}
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <Card className="p-5 xl:col-span-2">
@@ -59,7 +60,7 @@ export default function Dashboard() {
         <Card className="p-5">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-navy-900">Running low</h2>
-            <Link to="/inventory" className="text-sm font-medium text-brand hover:underline">Inventory</Link>
+            {hasDuty(user, 'inventory') && <Link to="/inventory" className="text-sm font-medium text-brand hover:underline">Inventory</Link>}
           </div>
           {d.low_items.length === 0 ? (
             <p className="mt-6 text-sm text-slate-500">Every item is above its minimum level.</p>

@@ -59,6 +59,41 @@ function HouseholdEditor({ id, value, onChange, error }) {
   );
 }
 
+const CLEARANCE_KINDS = ['NBI clearance', 'Police clearance', 'Court clearance'];
+
+/** Clearances: whose, which kind, the reference number and the date issued. No screenshot is needed. */
+function ClearancesEditor({ id, value, onChange, error }) {
+  const rows = Array.isArray(value) ? value : [];
+  const set = (i, patch) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="space-y-2" id={id}>
+      {rows.length === 0 && <p className="cs-hint">No clearance added yet.</p>}
+      {rows.map((r, i) => (
+        <div key={i} className="cs-card cs-surface-2 grid gap-2 p-3 sm:grid-cols-[1.2fr_1fr_1fr_1fr_auto] sm:items-end">
+          <div><label className="cs-label" htmlFor={`${id}-${i}-holder`}>Whose clearance<span className="cs-req" aria-hidden="true">*</span></label>
+            <input id={`${id}-${i}-holder`} className="cs-input" maxLength={150} value={r.holder || ''} placeholder="Full name" onChange={(e) => set(i, { holder: e.target.value })} /></div>
+          <div><label className="cs-label" htmlFor={`${id}-${i}-kind`}>Kind<span className="cs-req" aria-hidden="true">*</span></label>
+            <select id={`${id}-${i}-kind`} className="cs-input" value={r.kind || ''} onChange={(e) => set(i, { kind: e.target.value })}>
+              <option value="">Select...</option>{CLEARANCE_KINDS.map((k) => <option key={k}>{k}</option>)}</select></div>
+          <div><label className="cs-label" htmlFor={`${id}-${i}-number`}>Reference number<span className="cs-req" aria-hidden="true">*</span></label>
+            <input id={`${id}-${i}-number`} className="cs-input" maxLength={50} value={r.number || ''} onChange={(e) => set(i, { number: e.target.value.toUpperCase() })} /></div>
+          <div><label className="cs-label" htmlFor={`${id}-${i}-date`}>Date issued<span className="cs-req" aria-hidden="true">*</span></label>
+            <input id={`${id}-${i}-date`} type="date" className="cs-input" max={todayIso()} value={r.issue_date || ''} onChange={(e) => set(i, { issue_date: e.target.value })} /></div>
+          <button type="button" className="cs-btn cs-btn-sm cs-btn-danger" onClick={() => onChange(rows.filter((_, j) => j !== i))} aria-label={`Remove clearance ${i + 1}`}>
+            <Trash2 className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+      ))}
+      {error && <p className="cs-error" role="alert">{error}</p>}
+      {rows.length < 6 && (
+        <button type="button" className="cs-btn cs-btn-sm" onClick={() => onChange([...rows, { holder: '', kind: '', number: '', issue_date: '' }])}>
+          <Plus className="h-4 w-4" aria-hidden /> Add clearance
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
  * One form field from the config. `form` holds all answers (conditions and the
  * province/city pair need them). Changing the province clears the city.
@@ -74,6 +109,9 @@ export function FormField({ name, def, form, onChange, error, config }) {
 
   if (def.type === 'household') {
     return <FieldShell id={id} label={label} required={req} hint="Names, ages and relationship to you."><HouseholdEditor id={id} value={value} onChange={set} error={error} /></FieldShell>;
+  }
+  if (def.type === 'clearances') {
+    return <FieldShell id={id} label={label} required={req} hint="Issued within the last 12 months. One for you, and one for your spouse if you are married."><ClearancesEditor id={id} value={value} onChange={set} error={error} /></FieldShell>;
   }
 
   let control;
@@ -124,7 +162,10 @@ export function FormField({ name, def, form, onChange, error, config }) {
       break;
     }
     case 'date':
-      control = <input {...common} type="date" max={todayIso()} value={value} onChange={(e) => set(e.target.value)} />;
+      control = <input {...common} type="date" {...(def.future ? { min: todayIso() } : { max: todayIso() })} value={value} onChange={(e) => set(e.target.value)} />;
+      break;
+    case 'idnumber':
+      control = <input {...common} type="text" autoComplete="off" spellCheck={false} maxLength={def.max} value={value} onChange={(e) => set(e.target.value.toUpperCase())} />;
       break;
     case 'zip':
       control = <input {...common} inputMode="numeric" maxLength={4} placeholder="0000" value={value} onChange={(e) => set(e.target.value.replace(/\D/g, '').slice(0, 4))} />;
@@ -150,7 +191,9 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
   const id = useId();
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [issued, setIssued] = useState('');
   const has = files.length > 0;
+  const needsDate = Boolean(def.validity_months);
 
   const pick = async (e) => {
     const file = e.target.files?.[0];
@@ -159,8 +202,9 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
     if (!rules.types.includes(file.type)) { setError('Only PDF, PNG or JPG files are accepted.'); return; }
     if (file.size > rules.maxBytes) { setError(`The file is larger than ${Math.round(rules.maxBytes / (1024 * 1024))} MB.`); return; }
     if (file.size === 0) { setError('The file is empty.'); return; }
+    if (needsDate && !issued) { setError(`Enter the ${def.issued_label.toLowerCase()} first.`); return; }
     setError(null); setBusy(true);
-    try { await onUpload(docType, file); } catch (err) { setError(err.message); } finally { setBusy(false); }
+    try { await onUpload(docType, file, issued || undefined); setIssued(''); } catch (err) { setError(err.message); } finally { setBusy(false); }
   };
   const buttonLabel = busy ? 'Uploading...' : !has ? 'Choose file' : def.multiple ? 'Add another file' : 'Replace';
 
@@ -169,7 +213,13 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p id={`${id}-label`} className="cs-title text-sm">{def.label}{required && <span className="cs-req" aria-hidden="true">*</span>}{!required && <span className="cs-muted font-normal"> (optional)</span>}</p>
-          <p className="cs-hint">{def.hint ? `${def.hint} ` : ''}PDF, PNG or JPG, up to {Math.round(rules.maxBytes / (1024 * 1024))} MB{def.multiple ? ' each. You can add more than one file.' : '.'}</p>
+          <p className="cs-hint">{def.hint ? `${def.hint} ` : ''}{needsDate ? `Must be from the last ${def.validity_months} months. ` : ''}PDF, PNG or JPG, up to {Math.round(rules.maxBytes / (1024 * 1024))} MB{def.multiple ? ' each. You can add more than one file.' : '.'}</p>
+          {needsDate && (
+            <label className="mt-1 flex flex-wrap items-center gap-2 text-sm">
+              <span>{def.issued_label}<span className="cs-req" aria-hidden="true">*</span></span>
+              <input type="date" className="cs-input" style={{ width: 'auto', minHeight: '2rem' }} value={issued} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setIssued(e.target.value)} />
+            </label>
+          )}
         </div>
         <button type="button" className="cs-btn cs-btn-sm" onClick={() => inputRef.current?.click()} disabled={busy || disabled} aria-describedby={`${id}-label`}>
           <Upload className="h-4 w-4" aria-hidden /> {buttonLabel}
@@ -184,6 +234,7 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
               <FileText className="h-4 w-4 shrink-0" aria-hidden />
               <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--cs-text)' }}>{f.original_name}</span>
               <span className="cs-muted shrink-0 text-xs">{formatBytes(f.size_bytes)}</span>
+              {f.verification_status && <span className="cs-chip shrink-0 text-xs" title={f.review_note || undefined}>{f.verification_status}</span>}
               {canRemove && (
                 <button type="button" className="cs-btn cs-btn-sm cs-btn-danger" onClick={() => onRemove(f)} aria-label={`Remove ${f.original_name}`}>
                   <X className="h-4 w-4" aria-hidden />

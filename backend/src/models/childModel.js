@@ -28,6 +28,11 @@ function withPhotoUrl(row) {
     profile_photo_url: row.has_photo ? `/children/${row.child_id}/photo?v=${v}` : null };
 }
 
+const CHILD_SORTS = {
+  recent: 'c.updated_at DESC, c.child_id DESC', registered: 'c.created_at DESC, c.child_id DESC',
+  case: 'c.child_id ASC', name: 'c.full_name ASC, c.child_id ASC', age: 'c.dob DESC, c.child_id ASC',
+};
+
 module.exports = {
   PHI_FIELDS,
   CASE_FIELDS,
@@ -37,7 +42,11 @@ module.exports = {
    * Children list (youngest first). With `paging` ({ page, limit } from utils/pagination),
    * returns { rows, pagination }; without it, returns every matching row.
    */
-  async list({ status, search, flagged, paging } = {}) {
+  /**
+   * Child records list. Default order: most recent activity. Age is only a sort the user picks.
+   * sort: recent | registered | case | name | age
+   */
+  async list({ status, search, flagged, paging, sort = 'recent' } = {}) {
     const where = [];
     const params = [];
     if (status) { where.push('c.status = ?'); params.push(status); }
@@ -51,7 +60,7 @@ module.exports = {
     const select = `SELECT ${LIST_COLS}
          FROM tbl_children c LEFT JOIN tbl_transition_reviews tr ON tr.child_id = c.child_id
         ${whereSql}
-        ORDER BY c.dob DESC, c.child_id`;
+        ORDER BY ${CHILD_SORTS[sort] || CHILD_SORTS.recent}`;
     if (!paging) {
       const [rows] = await pool.query(select, params);
       return rows.map(withPhotoUrl);

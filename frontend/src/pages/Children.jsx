@@ -20,6 +20,9 @@ const TABS = [
   { key: 'flagged', label: 'Transition Review (18+)' },
 ];
 
+/** Sort options. Default: most recent activity; age only when chosen. */
+const SORTS = [['recent', 'Most recent activity'], ['registered', 'Date registered (newest)'], ['case', 'Case number'], ['name', 'Name (A to Z)'], ['age', 'Age (youngest first)']];
+
 export default function Children() {
   const { user } = useAuth();
   const { query, toast } = useApp();
@@ -28,26 +31,35 @@ export default function Children() {
   const [tab, setTab] = useState('');
   const [adding, setAdding] = useState(false);
   const [limit, setLimit] = useState(20);
-  // Back to page 1 whenever the tab, search or page size changes.
-  const [page, setPage] = usePageState(JSON.stringify({ tab, query, limit }));
+  const [sort, setSort] = useState('recent');
+  // Back to page 1 whenever the tab, search, sort or page size changes.
+  const [page, setPage] = usePageState(JSON.stringify({ tab, query, limit, sort }));
   const params = tab === 'flagged' ? { flagged: 1, q: query } : { status: tab, q: query };
-  const { data, loading, error, reload } = useApi(`/children${qs({ ...params, page, limit })}`);
+  const { data, loading, error, reload } = useApi(`/children${qs({ ...params, sort, page, limit })}`);
   const rows = data?.data || [];
   const changePage = (p) => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 
   return (
     <>
       <PageHeader title="Children"
-        description="Every child in care, youngest first. Health records and case files stay locked until you verify your access."
+        description="Every child in care, most recent activity first. Health records and case files stay locked until you verify your access."
         actions={canRegister && <Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Register child</Button>} />
 
-      <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Filter by status">
-        {TABS.map((t) => (
-          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
-            className={`rounded-full px-3 py-1.5 text-sm font-medium ${tab === t.key ? 'bg-navy-900 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
-            {t.label}
-          </button>
-        ))}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter by status">
+          {TABS.map((t) => (
+            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
+              className={`rounded-full px-3 py-1.5 text-sm font-medium ${tab === t.key ? 'bg-navy-900 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto">
+          <label className="sr-only" htmlFor="sort">Sort</label>
+          <select id="sort" className="input h-9 w-56" value={sort} onChange={(e) => setSort(e.target.value)}>
+            {SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        </div>
       </div>
 
       <Card>

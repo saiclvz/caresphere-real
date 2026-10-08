@@ -15,7 +15,6 @@ import { MB, checkFile } from '../lib/files';
 import PhotoCropDialog from '../components/PhotoCropDialog';
 import ChildLegalPanel from '../components/adoption/ChildLegalPanel';
 import ChildCaseWorker from '../components/ChildCaseWorker';
-import LockedSection from '../components/LockedSection';
 import AdoptionHistorySection from '../components/adoption/AdoptionHistorySection';
 
 function Info({ label, children }) {
@@ -90,7 +89,7 @@ export default function ChildDetail() {
             <p className="text-sm text-slate-500">{child.child_id}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Badge tone={STATUS_TONE[child.status]}>{child.status}</Badge>
-              {child.transition_flag && <Badge tone="amber"><GraduationCap className="h-3 w-3" /> Transition Review (18+){!child.transition_locked && child.transition_status ? `: ${child.transition_status}` : ''}</Badge>}
+              {child.transition_flag && <Badge tone="amber"><GraduationCap className="h-3 w-3" /> Transition Review (18+){child.transition_status ? `: ${child.transition_status}` : ''}</Badge>}
               {child.is_public && <Badge tone="blue">Shown on donor portal</Badge>}
               {child.available_for_adoption && <Badge tone="green">Available for adoption</Badge>}
             </div>
@@ -121,11 +120,7 @@ export default function ChildDetail() {
             </dl>
           </Card>
 
-          {child.transition_flag && child.transition_locked && (
-            <LockedSection title="Transition Review (18+)" area="transition"
-              to={child.transition_review_id ? `/transition-reviews/${child.transition_review_id}` : '/transitions'} />
-          )}
-          {child.transition_flag && !child.transition_locked && (
+          {child.transition_flag && (
             <Card className="border-amber-200 p-5">
               <h2 className="flex items-center gap-2 font-semibold text-navy-900"><GraduationCap className="h-4 w-4 text-amber-600" /> Transition Review (18+)</h2>
               <p className="mt-1 text-sm text-slate-600">

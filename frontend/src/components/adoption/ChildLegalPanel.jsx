@@ -10,8 +10,6 @@ import { formatDate } from '../../lib/format';
 import { Badge, Button, Card, ErrorNote, Field, Spinner } from '../ui';
 import ProtectedRecords from './ProtectedRecords';
 import TokenVerifyModal from '../TokenVerifyModal';
-import LockedSection from '../LockedSection';
-import useAreaAccepted from '../../hooks/useAreaAccepted';
 import { clearGrant, saveGrant, unlockHeaders } from '../../lib/grants';
 
 const FILE_TYPES = ['application/pdf', 'image/png', 'image/jpeg'];
@@ -164,15 +162,9 @@ function AdminRecords({ childId }) {
   return <ProtectedRecords records={data?.data} onChanged={reload} title="Protected record QR (child)" />;
 }
 
-/**
- * Child page: adoption legal records. Adoption data: until this session accepted the Adoption
- * undertaking (in the Adoption area), only a locked placeholder shows here, never the undertaking card.
- */
+/** Child page: adoption legal records (CDCLAA; sealed records and protected files for Admin). */
 export default function ChildLegalPanel({ childId, onChanged }) {
   const { user } = useAuth();
-  const accepted = useAreaAccepted('adoption');
-  if (accepted === null) return null;
-  if (!accepted) return <LockedSection title="Adoption legal records" area="adoption" to="/adoptions" />;
   return (
       <div className="space-y-4">
         <Card className="space-y-3 p-5">

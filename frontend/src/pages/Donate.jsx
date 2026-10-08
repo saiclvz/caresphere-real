@@ -42,7 +42,7 @@ function BankDetails({ method }) {
       <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-700">
         <li>Transfer the amount to this account.</li>
         <li>Enter your transfer reference number below.</li>
-        <li>Upload a screenshot or photo of your proof of transfer.</li>
+        <li>Enter the transfer date and amount. The staff check them against the home's bank statement.</li>
       </ol>
       {method.instructions && <p className="text-xs text-slate-500">{method.instructions}</p>}
     </div>
@@ -93,7 +93,6 @@ export default function Donate() {
       if (!/^[A-Za-z0-9-\s]{4,100}$/.test(form.transfer_reference.trim())) e.transfer_reference = 'Enter the transfer reference number from your receipt.';
       if (!form.transfer_date || form.transfer_date > today()) e.transfer_date = 'Enter the date of the transfer (not in the future).';
       if (form.account_last4 && !/^\d{4}$/.test(form.account_last4)) e.account_last4 = 'Only the last 4 digits, or leave it empty.';
-      if (!proof) e.proof = 'Upload your proof of transfer (JPG, PNG or PDF, up to 5 MB).';
       if (!(method.bank_name && method.account_name && method.account_number)) e.method = "The home's bank details aren't set yet.";
     }
     setErrors(e);
@@ -185,7 +184,7 @@ export default function Donate() {
                 <Field label="Last 4 digits of your account (optional)" error={errors.account_last4} hint="Only to help staff match your transfer. Never enter the full number.">
                   <input className="input w-32 font-mono" inputMode="numeric" maxLength={4} value={form.account_last4} onChange={set('account_last4')} autoComplete="off" />
                 </Field>
-                <Field label="Proof of transfer" required error={errors.proof} hint="Screenshot or photo: JPG, PNG or PDF, up to 5 MB.">
+                <Field label="Bank receipt or confirmation (optional)" error={errors.proof} hint="Not required. If you have the bank's receipt or e-mail confirmation, you can attach it: JPG, PNG or PDF, up to 5 MB.">
                   <input className="input" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={pickProof} />
                   {proof && <p className="mt-1 text-xs text-emerald-700">{proof.name} ({Math.round(proof.size / 1024)} KB)</p>}
                 </Field>
@@ -202,7 +201,7 @@ export default function Donate() {
             <h2 className="font-semibold text-navy-900">Review your donation</h2>
             <dl className="divide-y divide-slate-100 text-sm">
               {[['To', orgName], ['Amount', formatMoney(Number(form.amount))], ['Payment method', method.name], ['Type', 'General donation'], ['Reason', form.reason.trim()],
-                ...(isBank ? [['Transfer reference', form.transfer_reference.trim().toUpperCase()], ['Date of transfer', form.transfer_date], ['Proof', proof?.name]] : [])]
+                ...(isBank ? [['Transfer reference', form.transfer_reference.trim().toUpperCase()], ['Date of transfer', form.transfer_date], ['Attachment', proof?.name || 'None']] : [])]
                 .map(([k, v]) => <div key={k} className="flex justify-between gap-4 py-2"><dt className="text-slate-500">{k}</dt><dd className="text-right font-medium text-navy-900">{v}</dd></div>)}
             </dl>
             <p className="text-xs text-slate-500">{isBank ? 'Your donation will be confirmed by the staff after they check the transfer.' : "You'll be sent to PayMongo's secure page to pay. CareSphere never sees your wallet login."}</p>

@@ -10,6 +10,16 @@ const {
   toInt, toMoney, requireDate, oneOf, isBlank, requireText, toBool,
 } = require('../utils/validate');
 const { logActivity, logActivityWith } = require('../utils/audit');
+
+// Donor information is confidential: viewing the lists is logged, at most once per user and list every 5 minutes.
+const lastView = new Map();
+function logView(req, code, what) {
+  const key = `${req.user.user_id}:${code}`;
+  if (Date.now() - (lastView.get(key) || 0) < 5 * 60 * 1000) return;
+  lastView.set(key, Date.now());
+  logActivity(req, code, what).catch(() => {});
+}
+exports.logView = logView;
 const { pool, withTransaction } = require('../config/db');
 const { readDateFilter } = require('../config/listFilters');
 
@@ -61,13 +71,16 @@ exports.list = async (req, res) => {
     search: q.q,
   };
   const [rows, summary] = await Promise.all([Donation.list(filters), Donation.summary(filters)]);
-  res.json({ success: true, data: rows, summary });
+  const { forViewer } = require('../config/donorConfidentiality');
+  logView(req, 'VIEW_DONATIONS', 'Donations list');
+  res.json({ success: true, data: rows.map((r) => forViewer(r, req.user.role)), summary });
 };
 
 /** GET /api/donations/donors - donor accounts for the "record donation" form */
 exports.donors = async (req, res) => {
   const donors = (await User.list({ role: 'Donor' })).filter((d) => d.is_active);
-  res.json({ success: true, data: donors.map(({ user_id, full_name, email }) => ({ user_id, full_name, email })) });
+  // Names only for Staff (donor contact details are confidential); Admin also sees the email.
+  res.json({ success: true, data: donors.map(({ user_id, full_name, email }) => (req.user.role === 'Admin' ? { user_id, full_name, email } : { user_id, full_name })) });
 };
 
 /** Validates in-kind item lines: an existing inventory item or a new one, each with a quantity. */

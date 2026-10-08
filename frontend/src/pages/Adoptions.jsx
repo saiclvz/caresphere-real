@@ -80,7 +80,7 @@ function Inner() {
                 <tr key={a.application_id} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/adoptions/${a.application_id}`)}>
                   <td className="td whitespace-nowrap">
                     <button type="button" className="font-mono font-medium text-navy-900 hover:text-brand" onClick={(e) => { e.stopPropagation(); navigate(`/adoptions/${a.application_id}`); }}>{a.reference_no}</button>
-                    <p className="text-xs text-slate-500">{a.application_type === 'Relative' ? 'Relative / stepchild' : 'Regular'}{a.is_legacy ? ' · earlier form' : ''}</p>
+                    <p className="text-xs text-slate-500">{TYPE_LABELS[a.application_type] || a.application_type}{a.is_legacy ? ' · earlier form' : ''}</p>
                   </td>
                   <td className="td"><p className="font-medium text-navy-900">{a.legal_name || '-'}</p>{!a.masked && <p className="text-xs text-slate-500">{a.email}</p>}</td>
                   <td className="td whitespace-nowrap">{formatDate(a.submitted_at)}</td>
@@ -104,6 +104,8 @@ function Inner() {
     </>
   );
 }
+
+const TYPE_LABELS = { Regular: 'Regular', Stepparent: 'Stepparent', Relative: 'Relative', Relative_own_child: 'Own non-marital child', Adult: 'Adult' };
 
 export default function Adoptions() {
   return <Inner />;

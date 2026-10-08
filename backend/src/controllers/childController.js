@@ -65,25 +65,15 @@ exports.list = async (req, res) => {
   await syncFlags();
   const status = req.query.status ? oneOf(req.query.status, STATUSES, 'status') : undefined;
   const paging = readPagination(req.query);
-  const result = await Child.list({ status, search: req.query.q, flagged: toBool(req.query.flagged), paging });
+  const sort = req.query.sort ? oneOf(req.query.sort, ['recent', 'registered', 'case', 'name', 'age'], 'sort') : 'recent';
+  const result = await Child.list({ status, search: req.query.q, flagged: toBool(req.query.flagged), paging, sort });
   if (paging) return res.json({ success: true, data: await areaView(req, result.rows), pagination: result.pagination });
   res.json({ success: true, data: await areaView(req, result) });
 };
 
-/**
- * Adoption and Transition Review details on child records are only sent when this sign-in session
- * accepted that area's confidentiality undertaking (Admin included). Otherwise they are left out of
- * the response, and the page shows a locked placeholder. Basics (name, age, status, case number) stay.
- */
+/** Adds the CDCLAA "verified" flag the availability control needs. */
 async function areaView(req, rows) {
-  const { sessionAccepted } = require('../services/compliance');
-  const [adoptionOk, transitionOk] = await Promise.all([sessionAccepted(req.auth?.jti, 'adoption'), sessionAccepted(req.auth?.jti, 'transition')]);
-  return rows.map((c) => {
-    const out = { ...c, cdclaa_verified: Boolean(c.cdclaa_verified_at), adoption_locked: !adoptionOk, transition_locked: !transitionOk };
-    if (!adoptionOk) { delete out.cdclaa_number; delete out.cdclaa_date; delete out.cdclaa_verified_at; delete out.placement_status; }
-    if (!transitionOk) delete out.transition_status;
-    return out;
-  });
+  return rows.map((c) => ({ ...c, cdclaa_verified: Boolean(c.cdclaa_verified_at) }));
 }
 
 /** GET /api/children/:id - profile only. Health, case files and adoption history have their own endpoints. */
@@ -98,8 +88,8 @@ exports.getOne = async (req, res) => {
 
 /**
  * GET /api/children/:id/adoption-history (Admin, Staff) - adoption status history for the child.
- * Needs this session's Adoption undertaking (route check) and, for Staff, the child's unlock
- * session (purpose, QR token, 3-minute access), like the adoption legal records.
+ * Staff need the child's unlock session (purpose, QR token, 3-minute access), like the adoption
+ * legal records; Admin has full access. Every view is logged.
  */
 exports.adoptionHistory = async (req, res) => {
   const child = await Child.findById(req.params.id);

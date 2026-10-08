@@ -7,6 +7,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import NotificationBell from './NotificationBell';
 import { useApp } from '../context/AppContext';
+import { hasDuty, PAGE_DUTY } from '../lib/duties';
 
 // Admin and Staff share the Children Management group.
 const CHILDREN_GROUP = {
@@ -117,7 +118,11 @@ function NavGroup({ group }) {
 function Sidebar() {
   const { user, logout } = useAuth();
   const { collapsed, orgName, mobileOpen, setMobileOpen } = useApp();
-  const items = NAV[user.role] || [];
+  // Staff see only the areas in their duties; a group with nothing left is hidden.
+  const allowed = (i) => !PAGE_DUTY[i.to] || hasDuty(user, PAGE_DUTY[i.to]);
+  const items = (NAV[user.role] || [])
+    .map((i) => (i.items ? { ...i, items: i.items.filter(allowed) } : i))
+    .filter((i) => (i.items ? i.items.length > 0 : allowed(i)));
 
   return (
     <>

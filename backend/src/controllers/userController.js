@@ -6,6 +6,15 @@ const { requireFields, isEmail, oneOf, toBool } = require('../utils/validate');
 const { logActivity, logActivityWith } = require('../utils/audit');
 const { withTransaction } = require('../config/db');
 const Notify = require('../services/notifications');
+const { DUTIES, DUTY_KEYS } = require('../config/staffDuties');
+
+/** A list of duty keys from the request, checked against config/staffDuties.js. */
+function cleanDuties(raw) {
+  const list = Array.isArray(raw) ? [...new Set(raw.map(String))] : [];
+  const bad = list.filter((d) => !DUTY_KEYS.includes(d));
+  if (bad.length) throw new HttpError(400, `Unknown duties: ${bad.join(', ')}.`);
+  return list;
+}
 
 /**
  * Activating or deactivating an account, its audit entry and notifications in one transaction:
@@ -68,6 +77,12 @@ exports.create = async (req, res) => {
   const id = await withTransaction(async (conn) => {
     const newId = await User.create({ full_name: fullName, email, password_hash: hash, role_id: roleId }, conn);
     await logActivityWith(conn, req, `CREATE_USER (${role})`, `User #${newId}`);
+    // A new Staff account gets the duties chosen in the form (every duty if none were sent).
+    if (role === 'Staff') {
+      const duties = req.body.duties === undefined ? DUTY_KEYS : cleanDuties(req.body.duties);
+      await User.setDuties(conn, newId, duties, req.user.user_id);
+      await logActivityWith(conn, req, `UPDATE_DUTIES (none -> ${duties.join(', ') || 'none'})`, `User #${newId}`);
+    }
     await Notify.toAdmins(conn, 'admin_account_changed', { params: { role, change: 'created', id: newId }, exceptUserId: req.user.user_id });
     return newId;
   });
@@ -120,6 +135,12 @@ exports.update = async (req, res) => {
 
   if (Object.keys(fields).length) {
     await User.update(id, fields);
+    // Becoming Staff starts with every duty (Admin can narrow them); leaving Staff clears them.
+    if (fields.role_id !== undefined) {
+      const newRole = cleanRole(req.body.role);
+      if (newRole === 'Staff' && user.role !== 'Staff') await withTransaction((conn) => User.setDuties(conn, id, DUTY_KEYS, req.user.user_id));
+      if (newRole !== 'Staff' && user.role === 'Staff') await withTransaction((conn) => User.setDuties(conn, id, [], req.user.user_id));
+    }
     if (leavingAdmin) {
       await mfa.reset(id);
       await logActivity(req, 'MFA_CLEARED (no longer an administrator)', `User #${id}`);
@@ -174,4 +195,28 @@ exports.resetMfa = async (req, res) => {
   await mfa.reset(id);
   await logActivity(req, 'MFA_RESET', `User #${id}`);
   res.json({ success: true, message: `Two-step verification was reset for ${target.full_name}. They will set it up again at their next sign-in.` });
+};
+
+/**
+ * PUT /api/users/:id/duties (Admin) { duties: [...] } - the areas this Staff account may use.
+ * Logged with the old and new duties; the staff member is notified. Admin always has every area.
+ */
+exports.setDuties = async (req, res) => {
+  const id = Number(req.params.id);
+  const user = await User.findById(id);
+  if (!user) throw new HttpError(404, 'User not found.');
+  if (user.role !== 'Staff') throw new HttpError(400, 'Duties are only for Staff accounts. Admin has every area.');
+  const duties = cleanDuties(req.body?.duties);
+  const before = user.duties || [];
+  await withTransaction(async (conn) => {
+    await User.setDuties(conn, id, duties, req.user.user_id);
+    await logActivityWith(conn, req, `UPDATE_DUTIES (${before.join(', ') || 'none'} -> ${duties.join(', ') || 'none'})`, `User #${id}`);
+    await Notify.emit(conn, 'duties_changed', { userId: id, params: { duties: duties.map((d) => DUTIES[d].label).join(', ') || 'none' } });
+  });
+  res.json({ success: true, data: await User.findById(id) });
+};
+
+/** GET /api/users/duties (Admin) - the duties for the account form. */
+exports.dutyOptions = async (req, res) => {
+  res.json({ success: true, data: Object.entries(DUTIES).map(([key, d]) => ({ key, ...d })) });
 };

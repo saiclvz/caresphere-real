@@ -26,9 +26,10 @@ exports.update = async (req, res) => {
       throw new HttpError(400, 'Access log retention must be 12 to 240 months.');
     }
     if (k === 'staff_download_doc_types') {
+      // Keep only current document types (removed types are dropped quietly).
       const { DOCUMENTS, STAGE_DOCUMENTS } = require('../config/adoptionForm');
-      const bad = String(v).split(',').map((x) => x.trim()).filter(Boolean).filter((x) => !DOCUMENTS[x] && !STAGE_DOCUMENTS[x]);
-      if (bad.length) throw new HttpError(400, `Unknown document types: ${bad.join(', ')}.`);
+      const entry = updates.find(([key]) => key === k);
+      entry[1] = String(v).split(',').map((x) => x.trim()).filter((x) => DOCUMENTS[x] || STAGE_DOCUMENTS[x]).join(',');
     }
   }
   await withTransaction(async (conn) => {

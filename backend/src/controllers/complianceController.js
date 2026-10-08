@@ -1,42 +1,9 @@
 const HttpError = require('../utils/HttpError');
-const { logActivity } = require('../utils/audit');
+const { logActivity, logSecurityEvent } = require('../utils/audit');
 const C = require('../services/compliance');
 const Adoption = require('../models/adoptionModel');
 
 const idParam = (v) => { const n = Number(v); if (!Number.isInteger(n) || n < 1) throw new HttpError(404, 'Not found.'); return n; };
-
-/** GET /api/compliance/undertaking?area=adoption|transition (Admin, Staff) - current text and whether this session accepted it. */
-exports.undertaking = async (req, res) => {
-  res.json({ success: true, data: await C.undertakingStatus(req, req.query.area) });
-};
-
-/** POST /api/compliance/undertaking { area, version } (Admin, Staff) - accepts for this sign-in session and area. */
-exports.acceptUndertaking = async (req, res) => {
-  const d = await C.acceptUndertaking(req, req.body?.area);
-  await logActivity(req, `CONFIDENTIALITY_UNDERTAKING_ACCEPTED (${d.area_label}, ${d.version}, session ${d.session})`, `User #${req.user.user_id}`);
-  res.json({ success: true, data: d });
-};
-
-/** POST /api/compliance/undertaking/decline { area } (Admin, Staff) - logged; the user stays signed in. */
-exports.declineUndertaking = async (req, res) => {
-  const area = C.cleanArea(req.body?.area);
-  const v = await C.currentVersion(area);
-  const label = require('../config/undertaking').AREAS[area].label;
-  await logActivity(req, `CONFIDENTIALITY_UNDERTAKING_DECLINED (${label}, ${v.version}, session ${C.sessionRef(req.auth.jti)})`, `User #${req.user.user_id}`);
-  res.json({ success: true, message: 'You need to accept the undertaking to open these records.' });
-};
-
-/** GET /api/compliance/undertaking/versions?area= (Admin) - every version of an area's text, with who and when. */
-exports.undertakingVersions = async (req, res) => {
-  res.json({ success: true, data: await C.undertakingHistory(req.query.area) });
-};
-
-/** PUT /api/compliance/undertaking { area, title, paragraphs[] } (Admin) - saves a new version for the area. */
-exports.updateUndertaking = async (req, res) => {
-  const r = await C.updateUndertaking(req, req.body?.area, req.body || {});
-  await logActivity(req, `UNDERTAKING_TEXT_CHANGED (${r.area}: ${r.old} -> ${r.version})`, 'Confidentiality undertaking');
-  res.json({ success: true, data: await C.undertakingHistory(r.area) });
-};
 
 /** POST /api/adoptions/:id/releases (Admin) - release of information to a third party (NACC authorization required). */
 exports.createRelease = async (req, res) => {
@@ -101,4 +68,19 @@ exports.updateIncident = async (req, res) => {
 /** GET /api/security-events (Admin) - failed logins, lockouts, unauthorized access, token failures. */
 exports.securityEvents = async (req, res) => {
   res.json({ success: true, data: await C.securityEvents() });
+};
+
+const CAPTURE_KINDS = ['print_screen', 'capture_shortcut', 'print', 'save_page', 'copy', 'cut', 'right_click', 'drag'];
+/**
+ * POST /api/security/capture-attempts (signed in) { area, kind, path } - a screenshot, print or copy attempt
+ * the browser noticed on a protected page. Logged as a security event and in the Audit log.
+ */
+exports.captureAttempt = async (req, res) => {
+  const kind = String(req.body?.kind || '');
+  if (!CAPTURE_KINDS.includes(kind)) throw new HttpError(400, 'Unknown attempt.');
+  const area = String(req.body?.area || '').replace(/[^\w\s-]/g, '').slice(0, 60) || 'Protected page';
+  const path = String(req.body?.path || '').slice(0, 200);
+  await logSecurityEvent(req, 'CAPTURE_ATTEMPT', { detail: `${kind} on ${area} (${path})` });
+  await logActivity(req, `CAPTURE_ATTEMPT (${kind}, ${area})`, path || area);
+  res.json({ success: true });
 };

@@ -43,7 +43,7 @@ export function StartApplication() {
 
   // ?type=Regular|Relative starts right away (used by links that already chose).
   const preset = params.get('type');
-  useEffect(() => { if (preset === 'Regular' || preset === 'Relative') start(preset); }, [preset, start]);
+  useEffect(() => { if (preset && types?.[preset]) start(preset); }, [preset, start, types]);
 
   return (
     <div className="cs-theme cs-page">
@@ -190,7 +190,7 @@ export default function AdoptionForm() {
     api(`/adoptions/${id}`).then((res) => {
       if (!alive) return;
       if (res.data.status !== 'Draft') { navigate(`/applications/${id}`, { replace: true }); return; }
-      setApp(res.data); setForm(res.data.form); setPage(Math.min(9, Math.max(1, res.data.current_page || 1)));
+      setApp(res.data); setForm({ ...res.data.form, application_type: res.data.application_type }); setPage(Math.min(9, Math.max(1, res.data.current_page || 1)));
     }).catch((err) => alive && setLoadError(err));
     return () => { alive = false; };
   }, [id, navigate]);
@@ -259,7 +259,9 @@ export default function AdoptionForm() {
     try {
       await api(`/adoptions/${id}`, { method: 'PUT', body: { data: formRef.current, application_type: type } });
       setApp((a) => ({ ...a, application_type: type }));
-      toast(type === 'Relative' ? 'Changed to Relative or stepchild. Matching and trial custody will be skipped.' : 'Changed to Regular.');
+      formRef.current = { ...formRef.current, application_type: type };
+      setForm(formRef.current);
+      toast(`Changed to ${config.application_types[type]?.label || type}. The document list was updated.`);
     } catch (err) { toast(err.message, 'error'); }
   };
 
@@ -267,9 +269,9 @@ export default function AdoptionForm() {
     try { await save(); toast('Draft saved. You can come back to it anytime from My applications.'); } catch (err) { toast(err.message, 'error'); }
   };
 
-  const upload = async (docType, file) => {
+  const upload = async (docType, file, issuedDate) => {
     const f = await readFile(file);
-    const res = await api(`/adoptions/${id}/documents`, { method: 'POST', body: { doc_type: docType, file: { name: f.name, data: f.data } } });
+    const res = await api(`/adoptions/${id}/documents`, { method: 'POST', body: { doc_type: docType, file: { name: f.name, data: f.data }, issued_date: issuedDate } });
     setApp(res.data);
   };
   const removeFile = async (doc) => {

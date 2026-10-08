@@ -18,7 +18,9 @@ ALTER TABLE tbl_confidentiality_undertakings
   ADD COLUMN IF NOT EXISTS version_id INT NULL AFTER version;
 CREATE INDEX IF NOT EXISTS idx_undertaking_user_version ON tbl_confidentiality_undertakings (user_id, version);
 ALTER TABLE tbl_confidentiality_undertakings DROP INDEX IF EXISTS uq_undertaking;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_undertaking_session ON tbl_confidentiality_undertakings (session_jti);
+-- A plain index: migration 019 adds the real rule (one acceptance per session AND area). A unique index on
+-- the session alone can't be rebuilt once a session has accepted both areas, so it is not created here.
+CREATE INDEX IF NOT EXISTS idx_undertaking_session_jti ON tbl_confidentiality_undertakings (session_jti);
 
 CREATE TABLE IF NOT EXISTS tbl_undertaking_versions (
     version_id       INT AUTO_INCREMENT PRIMARY KEY,

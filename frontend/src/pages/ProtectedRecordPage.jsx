@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Navigate, useParams } from 'react-router-dom';
 import { Download, KeyRound, Lock, ShieldAlert } from 'lucide-react';
 import { api } from '../api/client';
-import LockedSection from '../components/LockedSection';
-import useAreaAccepted from '../hooks/useAreaAccepted';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { Button, Card, ErrorNote, Field, Spinner } from '../components/ui';
@@ -183,9 +181,5 @@ function ProtectedRecordInner() {
 }
 
 export default function ProtectedRecordPage() {
-  // Protected records are adoption legal records: until Adoption is accepted this session, a placeholder.
-  const accepted = useAreaAccepted('adoption');
-  if (accepted === null) return null;
-  if (!accepted) return <div className="mx-auto max-w-xl"><LockedSection title="Protected record" area="adoption" to="/adoptions" /></div>;
   return <ProtectedRecordInner />;
 }
