@@ -45,12 +45,6 @@ module.exports = {
         item.is_needed_by_donors, item.last_updated_by]);
     return res.insertId;
   },
-  async update(id, fields) {
-    const keys = Object.keys(fields);
-    if (!keys.length) return;
-    await pool.query(`UPDATE tbl_inventory SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE item_id = ?`,
-      [...keys.map((k) => fields[k]), id]);
-  },
   async remove(id) {
     await pool.query('DELETE FROM tbl_inventory WHERE item_id = ?', [id]);
   },

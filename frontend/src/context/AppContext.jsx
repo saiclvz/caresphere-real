@@ -15,6 +15,9 @@ export function AppProvider({ children }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [lowStock, setLowStock] = useState(0);
+  // Unread notifications: total (bell badge) and per chip. Donors' "My applications" count = the Applications chip.
+  const [notifCounts, setNotifCounts] = useState({ all: 0 });
+  const openRequests = notifCounts.applications || 0;
   const [orgName, setOrgName] = useState('CareSphere');
   const [toasts, setToasts] = useState([]);
   const toastId = useRef(0);
@@ -36,10 +39,32 @@ export function AppProvider({ children }) {
   const refreshLowStock = useCallback(async () => {
     if (!user || !['Admin', 'Staff'].includes(user.role)) return;
     try {
-      const res = await api('/inventory/low-stock-count');
+      // X-Background: polling must not count as activity for the idle-session timeout.
+      const res = await api('/inventory/low-stock-count', { headers: { 'X-Background': '1' } });
       setLowStock(res.count);
     } catch { /* badge is non-critical */ }
   }, [user]);
+
+  const refreshRequests = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await api('/notifications/unread-count', { headers: { 'X-Background': '1' } });
+      setNotifCounts(res.data.counts || { all: res.data.unread });
+    } catch { /* badge is non-critical */ }
+  }, [user]);
+  // Every 30 seconds while the tab is visible; paused when hidden, refreshed when it becomes visible again.
+  useEffect(() => {
+    if (!user) return undefined;
+    let id = null;
+    const start = () => { if (!id) id = setInterval(refreshRequests, 30000); };
+    const stop = () => { clearInterval(id); id = null; };
+    const onVisibility = () => { if (document.hidden) stop(); else { refreshRequests(); start(); } };
+    refreshRequests();
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
+  }, [user, refreshRequests]);
+  useEffect(() => { refreshRequests(); }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!user) return undefined;
@@ -58,8 +83,8 @@ export function AppProvider({ children }) {
 
   const value = useMemo(() => ({
     search, setSearch, query, commitSearch, collapsed, setCollapsed, mobileOpen, setMobileOpen,
-    lowStock, refreshLowStock, orgName, setOrgName, toast,
-  }), [search, setSearch, query, commitSearch, collapsed, mobileOpen, lowStock, refreshLowStock, orgName, toast]);
+    lowStock, refreshLowStock, orgName, setOrgName, toast, openRequests, refreshRequests, notifCounts,
+  }), [search, setSearch, query, commitSearch, collapsed, mobileOpen, lowStock, refreshLowStock, orgName, toast, openRequests, refreshRequests, notifCounts]);
 
   return (
     <AppContext.Provider value={value}>

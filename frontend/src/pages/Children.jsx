@@ -9,6 +9,7 @@ import AuthImage from '../components/AuthImage';
 import ChildForm from './ChildForm';
 import { Badge, Button, Card, EmptyState, ErrorNote, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
 import { formatDate } from '../lib/format';
+import Pagination, { usePageState } from '../components/Pagination';
 
 export const STATUS_TONE = { Active: 'green', Discharged: 'slate', Adopted: 'blue' };
 const TABS = [
@@ -26,9 +27,13 @@ export default function Children() {
   const canRegister = ['Admin', 'Staff'].includes(user.role);
   const [tab, setTab] = useState('');
   const [adding, setAdding] = useState(false);
+  const [limit, setLimit] = useState(20);
+  // Back to page 1 whenever the tab, search or page size changes.
+  const [page, setPage] = usePageState(JSON.stringify({ tab, query, limit }));
   const params = tab === 'flagged' ? { flagged: 1, q: query } : { status: tab, q: query };
-  const { data, loading, error, reload } = useApi(`/children${qs(params)}`);
+  const { data, loading, error, reload } = useApi(`/children${qs({ ...params, page, limit })}`);
   const rows = data?.data || [];
+  const changePage = (p) => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); };
 
   return (
     <>
@@ -83,6 +88,9 @@ export default function Children() {
               ))}
             </tbody>
           </Table>
+        )}
+        {rows.length > 0 && (
+          <Pagination pagination={data?.pagination} label="children" onPageChange={changePage} onLimitChange={setLimit} />
         )}
       </Card>
 

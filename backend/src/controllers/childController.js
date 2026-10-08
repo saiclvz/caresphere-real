@@ -1,9 +1,6 @@
-const bcrypt = require('bcryptjs');
 const env = require('../config/env');
 const { withTransaction } = require('../config/db');
 const Child = require('../models/childModel');
-const User = require('../models/userModel');
-const qr = require('../services/qrService');
 const access = require('../services/healthAccessService');
 const HttpError = require('../utils/HttpError');
 const { sha256, randomCode } = require('../utils/crypto');
@@ -12,10 +9,12 @@ const {
   requireFields, oneOf, requireDate, trimOrNull, toBool, localToday, ageOn, requireText,
 } = require('../utils/validate');
 const { logActivity } = require('../utils/audit');
+const { readPagination } = require('../utils/pagination');
 
 const GENDERS = ['Male', 'Female'];
 const STATUSES = ['Active', 'Discharged', 'Adopted'];
-const PHOTO_OPTS = { folder: 'child-photos', allowed: ['jpg', 'png'], maxBytes: 5 * MB, label: 'Profile photo' };
+// square: profile photos are cropped to a square in the browser; the server checks it too.
+const PHOTO_OPTS = { folder: 'child-photos', allowed: ['jpg', 'png'], maxBytes: 5 * MB, label: 'Profile photo', square: true };
 const OVER_AGE = 'Registration denied. The child exceeds the maximum age requirement.';
 
 // Re-check 18+ flags at most every 10 minutes (and at start-up / daily from server.js).
@@ -65,20 +64,58 @@ exports.rules = async (req, res) => {
 exports.list = async (req, res) => {
   await syncFlags();
   const status = req.query.status ? oneOf(req.query.status, STATUSES, 'status') : undefined;
-  const rows = await Child.list({ status, search: req.query.q, flagged: toBool(req.query.flagged) });
-  res.json({ success: true, data: rows });
+  const paging = readPagination(req.query);
+  const result = await Child.list({ status, search: req.query.q, flagged: toBool(req.query.flagged), paging });
+  if (paging) return res.json({ success: true, data: await areaView(req, result.rows), pagination: result.pagination });
+  res.json({ success: true, data: await areaView(req, result) });
 };
 
-/** GET /api/children/:id - profile only. Health and case files need health access. */
+/**
+ * Adoption and Transition Review details on child records are only sent when this sign-in session
+ * accepted that area's confidentiality undertaking (Admin included). Otherwise they are left out of
+ * the response, and the page shows a locked placeholder. Basics (name, age, status, case number) stay.
+ */
+async function areaView(req, rows) {
+  const { sessionAccepted } = require('../services/compliance');
+  const [adoptionOk, transitionOk] = await Promise.all([sessionAccepted(req.auth?.jti, 'adoption'), sessionAccepted(req.auth?.jti, 'transition')]);
+  return rows.map((c) => {
+    const out = { ...c, cdclaa_verified: Boolean(c.cdclaa_verified_at), adoption_locked: !adoptionOk, transition_locked: !transitionOk };
+    if (!adoptionOk) { delete out.cdclaa_number; delete out.cdclaa_date; delete out.cdclaa_verified_at; delete out.placement_status; }
+    if (!transitionOk) delete out.transition_status;
+    return out;
+  });
+}
+
+/** GET /api/children/:id - profile only. Health, case files and adoption history have their own endpoints. */
 exports.getOne = async (req, res) => {
   const child = await Child.findById(req.params.id);
   if (!child) throw new HttpError(404, 'Child record not found.');
   delete child.profile_photo_path;
-  const [discharges, adoptions] = await Promise.all([Child.dischargeHistory(child.child_id), Child.adoptionHistory(child.child_id)]);
-  res.json({ success: true, data: { ...child, discharge_history: discharges, adoption_status_history: adoptions } });
+  const discharges = await Child.dischargeHistory(child.child_id);
+  const [view] = await areaView(req, [child]);
+  res.json({ success: true, data: { ...view, discharge_history: discharges } });
 };
 
-/** POST /api/children (Admin) - new registrations enforce the maximum admission age. */
+/**
+ * GET /api/children/:id/adoption-history (Admin, Staff) - adoption status history for the child.
+ * Needs this session's Adoption undertaking (route check) and, for Staff, the child's unlock
+ * session (purpose, QR token, 3-minute access), like the adoption legal records.
+ */
+exports.adoptionHistory = async (req, res) => {
+  const child = await Child.findById(req.params.id);
+  if (!child) throw new HttpError(404, 'Child record not found.');
+  if (req.user.role !== 'Admin') {
+    const s = await require('../services/unlockService').sessionFor(req, 'health', child.child_id);
+    if (!s) throw new HttpError(403, 'Unlock the child record to see its adoption history.', { locked: true });
+  }
+  await logActivity(req, 'VIEW_CHILD_ADOPTION_HISTORY', `Child ${child.child_id}`);
+  const rows = await Child.adoptionHistory(child.child_id);
+  // Staff unlocked the child, not each application: applicant names stay masked (need-to-know per application).
+  const { maskName } = require('../config/adoptionSensitive');
+  res.json({ success: true, data: req.user.role === 'Admin' ? rows : rows.map((r) => ({ ...r, applicant: maskName(r.applicant) })) });
+};
+
+/** POST /api/children (Admin, Staff) - new registrations enforce the maximum admission age. Only Admin can set is_public. */
 exports.create = async (req, res) => {
   requireFields(req.body, ['first_name', 'last_name', 'gender', 'dob', 'admission_date']);
   const dob = cleanDob(req.body.dob);
@@ -95,6 +132,9 @@ exports.create = async (req, res) => {
     // Only an Admin may publish a profile to the Donor portal. Staff-registered
     // children always start hidden (RA 10173); an Admin can publish them later.
     is_public: req.user.role === 'Admin' ? toBool(req.body.is_public) : false,
+    // Admin or Staff may list a child on Adopt a Child. Defaults to not available.
+    // CDCLAA gate (RA 11642): a new child has no verified CDCLAA yet, so never starts as available.
+    available_for_adoption: false,
     background_care_info: trimOrNull(req.body.background_care_info, 10000),
     guardian_family_info: trimOrNull(req.body.guardian_family_info, 10000),
     qr_token: sha256(randomCode(16)),
@@ -127,7 +167,7 @@ exports.create = async (req, res) => {
  * PUT /api/children/:id  (Admin, Staff)
  * Status rules:
  *  - Active -> Discharged requires full discharge documentation (both roles).
- *  - Adopted is set only when an adoption is marked Completed.
+ *  - Adopted is set only when an Admin finalizes an approved adoption.
  *  - Leaving Discharged or Adopted is an Admin-only override.
  *  - Staff edits never change status unless status is sent explicitly.
  */
@@ -150,18 +190,31 @@ exports.update = async (req, res) => {
     if (!isAdmin) throw new HttpError(403, 'Only an administrator can change whether a child appears on the public portal.');
     fields.is_public = toBool(b.is_public) ? 1 : 0;
   }
+  // Admin and Staff may both change adoption availability.
+  if (b.available_for_adoption !== undefined) {
+    const want = toBool(b.available_for_adoption);
+    // CDCLAA gate (RA 11642): Available for adoption only with a CDCLAA verified by an Admin.
+    if (want && !child.cdclaa_verified_at) {
+      throw new HttpError(409, 'Record the CDCLAA (number, issue date and copy) and have an administrator verify it before marking this child Available for adoption.');
+    }
+    if (!want && child.placement_status && child.placement_status !== 'None') {
+      throw new HttpError(409, 'This child is matched or in trial custody. End the placement in the adoption application first.');
+    }
+    fields.available_for_adoption = want ? 1 : 0;
+  }
 
   const nextStatus = b.status !== undefined ? oneOf(b.status, STATUSES, 'status') : child.status;
   let discharge = null;
   if (nextStatus !== child.status) {
     if (nextStatus === 'Adopted') {
-      throw new HttpError(409, "A child's status becomes Adopted only when an adoption application is marked Completed.");
+      throw new HttpError(409, "A child's status becomes Adopted only when an administrator finalizes an approved adoption.");
     }
     if (child.status !== 'Active' && !isAdmin) {
       throw new HttpError(403, `Only an administrator can change the status of a ${child.status.toLowerCase()} child.`);
     }
     if (nextStatus === 'Discharged') discharge = cleanDischarge(b);
     fields.status = nextStatus;
+    if (nextStatus !== 'Active') fields.available_for_adoption = 0; // only Active children can be listed
   }
 
   await withTransaction(async (conn) => {
@@ -183,7 +236,7 @@ exports.remove = async (req, res) => {
   const child = await Child.photoPath(req.params.id);
   if (!child) throw new HttpError(404, 'Child record not found.');
   if (await Child.hasProtectedHistory(req.params.id)) {
-    throw new HttpError(409, 'This child has discharge or adoption records that must be kept. Change the status instead of deleting.');
+    throw new HttpError(409, 'This child has discharge, adoption or legal records that must be kept. Change the status instead of deleting.');
   }
   await Child.remove(req.params.id);
   deleteUpload(child.profile_photo_path);
@@ -224,16 +277,21 @@ exports.photo = async (req, res) => {
   sendPhoto(res, child.profile_photo_path);
 };
 
-/** GET /api/public-children/:id/photo - only for children marked public and Active */
+/** GET /api/public-children/:id/photo - only for Active children marked public or available for adoption */
 exports.publicPhoto = async (req, res) => {
   const child = await Child.photoPath(req.params.id);
-  if (!child?.profile_photo_path || !child.is_public || child.status !== 'Active') throw new HttpError(404, 'No photo.');
+  // Only children the home has published on the donor portal (adoption listings never show photos).
+  const listed = child && child.is_public;
+  if (!child?.profile_photo_path || !listed || child.status !== 'Active') throw new HttpError(404, 'No photo.');
   sendPhoto(res, child.profile_photo_path);
 };
 
 /** GET /api/public-children?q=&purpose=adoption - sanitised profiles */
 exports.publicList = async (req, res) => {
-  res.json({ success: true, data: await Child.publicList({ search: req.query.q, forAdoption: req.query.purpose === 'adoption' }) });
+  const paging = readPagination(req.query);
+  const result = await Child.publicList({ search: req.query.q, forAdoption: req.query.purpose === 'adoption', paging });
+  if (paging) return res.json({ success: true, data: result.rows, pagination: result.pagination });
+  res.json({ success: true, data: result });
 };
 
 // ---------------------------------------------------------------- health access (180 s)
@@ -248,25 +306,18 @@ exports.requestHealthAccess = async (req, res) => {
   if (!child) throw new HttpError(404, 'Child record not found.');
   const childId = String(req.params.id);
 
+  // Staff open health records through the shared unlock flow (purpose, QR, Token ID), which issues
+  // the health access token itself; this endpoint no longer accepts a typed token from Staff.
   if (req.user.role === 'Staff') {
-    try {
-      await qr.verifyToken(req.body.token_id, { scope: 'child', targetId: childId, userId: req.user.user_id });
-    } catch (err) {
-      await access.logEvent(req, childId, 'TOKEN_DENIED', err.message);
-      throw err;
-    }
-    await qr.consume(req.body.token_id);
-    return res.json({ success: true, data: await access.issue(req, childId, 'TYPED_TOKEN') });
+    await access.logEvent(req, childId, 'TOKEN_DENIED', 'use the unlock flow');
+    throw new HttpError(403, 'Use "Unlock child record" to open health records.');
   }
 
+  // Admin: full access with no token or password. Every view is still logged.
   if (req.user.role === 'Admin') {
-    const account = await User.findByEmailWithHash(req.user.email);
-    const ok = req.body.password && await bcrypt.compare(String(req.body.password), account.password_hash);
-    if (!ok) {
-      await access.logEvent(req, childId, 'TOKEN_DENIED', 'Wrong password');
-      throw new HttpError(401, 'Password is incorrect.');
-    }
-    return res.json({ success: true, data: await access.issue(req, childId, 'PASSWORD') });
+    const unlock = require('../services/unlockService');
+    await unlock.logEvent(req, { recordType: 'health', recordId: childId, event: 'view_sections', purpose: 'Admin full access', detail: 'health record and case files' });
+    return res.json({ success: true, data: await access.issue(req, childId, 'ADMIN_FULL_ACCESS', require('../config/sensitiveAccess').ACCESS_SESSION) });
   }
   throw new HttpError(403, 'Your role cannot view health records.');
 };

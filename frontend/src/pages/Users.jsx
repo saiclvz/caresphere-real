@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { KeyRound, Pencil, Plus, Trash2, UserCog } from 'lucide-react';
+import PasswordInput from '../components/PasswordInput';
+import PasswordChecklist from '../components/PasswordChecklist';
+import { problem as passwordProblem } from '../lib/passwordPolicy';
+import { KeyRound, Pencil, Plus, UserCheck, UserCog, UserX } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api, qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
 import { formatDate, matches } from '../lib/format';
 
 const ROLES = ['Admin', 'Staff', 'Donor'];
@@ -19,8 +22,10 @@ export default function Users() {
   const { data, loading, error, reload } = useApi(`/users${qs({ role })}`);
   const [form, setForm] = useState(null);
   const [formError, setFormError] = useState(null);
+  const [pwErrors, setPwErrors] = useState({});
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(null);
+  // Deactivate / Reactivate confirmation: the user row being changed.
+  const [toggling, setToggling] = useState(null);
   // Reset two-step verification (lost device): the acting admin confirms with their own code.
   const [resetting, setResetting] = useState(null);
   const [resetCode, setResetCode] = useState('');
@@ -48,31 +53,55 @@ export default function Users() {
 
   const rows = (data?.data || []).filter((u) => matches(query, u.full_name, u.email, u.role));
 
+  /** Password rules: required on create; on edit only when a new password is typed. */
+  const passwordErrors = (f) => {
+    const e = {};
+    if (String(f.full_name || '').trim().length < 2) e.full_name = 'Full name must be at least 2 characters.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(f.email || '').trim())) e.email = 'Enter a valid email address.';
+    const needs = !f.user_id || f.password;
+    if (!f.user_id && !f.password) e.password = 'Password is required.';
+    else if (needs) { const p = passwordProblem(f.password, { email: f.email, name: f.full_name }); if (p) e.password = p; }
+    if (needs && !f.confirm) e.confirm = f.user_id ? 'Confirm new password is required.' : 'Confirm password is required.';
+    else if (needs && f.confirm !== f.password) e.confirm = 'Passwords do not match.';
+    return e;
+  };
+  const updateForm = (patch) => {
+    const next = { ...form, ...patch };
+    setForm(next);
+    // Errors clear as soon as they are fixed.
+    if (Object.keys(pwErrors).length) { const fresh = passwordErrors(next); setPwErrors(Object.fromEntries(Object.keys(pwErrors).filter((k) => fresh[k]).map((k) => [k, fresh[k]]))); }
+  };
+
   const submit = async (e) => {
     e.preventDefault();
+    const pe = passwordErrors(form);
+    setPwErrors(pe);
+    if (Object.keys(pe).length) return;
     setSaving(true); setFormError(null);
     try {
       if (form.user_id) {
-        const body = { full_name: form.full_name, email: form.email, role: form.role, is_active: form.is_active };
-        if (form.password) body.password = form.password;
+        const body = { full_name: form.full_name, email: form.email, role: form.role };
+        if (form.password) { body.password = form.password; body.confirm_password = form.confirm; }
         await api(`/users/${form.user_id}`, { method: 'PUT', body });
       } else {
-        await api('/users', { method: 'POST', body: form });
+        await api('/users', { method: 'POST', body: { full_name: form.full_name, email: form.email, role: form.role, password: form.password, confirm_password: form.confirm } });
       }
       setForm(null); toast('Account saved.'); reload();
     } catch (err) { setFormError(err); } finally { setSaving(false); }
   };
 
-  const remove = async () => {
+  const setActive = async () => {
     setSaving(true);
-    try { await api(`/users/${deleting.user_id}`, { method: 'DELETE' }); setDeleting(null); toast('Account deleted.'); reload(); }
-    catch (err) { toast(err.message, 'error'); setDeleting(null); } finally { setSaving(false); }
+    try {
+      const res = await api(`/users/${toggling.user_id}/active`, { method: 'PUT', body: { is_active: !toggling.is_active } });
+      setToggling(null); toast(res.message); reload();
+    } catch (err) { toast(err.message, 'error'); setToggling(null); } finally { setSaving(false); }
   };
 
   return (
     <>
       <PageHeader title="User accounts" description="Create staff and admin accounts, change roles, and deactivate people who have left."
-        actions={<Button onClick={() => { setForm({ full_name: '', email: '', password: '', role: 'Staff' }); setFormError(null); }}><Plus className="h-4 w-4" /> Create account</Button>} />
+        actions={<Button onClick={() => { setForm({ full_name: '', email: '', password: '', confirm: '', role: 'Staff' }); setFormError(null); setPwErrors({}); }}><Plus className="h-4 w-4" /> Create account</Button>} />
 
       <div className="mb-4 inline-flex rounded-lg bg-white p-1 shadow-card">
         {['', ...ROLES].map((r) => (
@@ -107,9 +136,12 @@ export default function Users() {
                   <td className="td">{formatDate(u.created_at)}</td>
                   <td className="td">
                     <div className="flex justify-end gap-1">
-                      <Button size="sm" variant="ghost" aria-label="Edit" onClick={() => { setForm({ ...u, role: safeRole(u.role), is_active: Boolean(u.is_active), password: '' }); setFormError(null); }}><Pencil className="h-4 w-4" /></Button>
-                      {u.mfa_enabled && u.user_id !== me.user_id && <Button size="sm" variant="ghost" aria-label="Reset two-step verification" title="Reset two-step verification" onClick={() => openReset(u)}><KeyRound className="h-4 w-4" /></Button>}
-                      {u.user_id !== me.user_id && <Button size="sm" variant="ghost" aria-label="Delete" className="text-red-600" onClick={() => setDeleting(u)}><Trash2 className="h-4 w-4" /></Button>}
+                      <Button size="sm" variant="ghost" aria-label="Edit" onClick={() => { setForm({ ...u, role: safeRole(u.role), is_active: Boolean(u.is_active), password: '', confirm: '' }); setFormError(null); setPwErrors({}); }}><Pencil className="h-4 w-4" /></Button>
+                      {/* Two-step verification exists only for Admin accounts. */}
+                      {u.role === 'Admin' && u.mfa_enabled && u.user_id !== me.user_id && <Button size="sm" variant="ghost" aria-label="Reset two-step verification" title="Reset two-step verification" onClick={() => openReset(u)}><KeyRound className="h-4 w-4" /></Button>}
+                      {u.user_id !== me.user_id && (u.is_active
+                        ? <Button size="sm" variant="ghost" aria-label={`Deactivate ${u.full_name}`} title="Deactivate" className="text-red-600" onClick={() => setToggling(u)}><UserX className="h-4 w-4" /></Button>
+                        : <Button size="sm" variant="ghost" aria-label={`Reactivate ${u.full_name}`} title="Reactivate" className="text-emerald-700" onClick={() => setToggling(u)}><UserCheck className="h-4 w-4" /></Button>)}
                     </div>
                   </td>
                 </tr>
@@ -122,19 +154,29 @@ export default function Users() {
       <Modal open={Boolean(form)} onClose={() => setForm(null)} title={form?.user_id ? 'Edit account' : 'Create account'}
         footer={<><Button variant="secondary" onClick={() => setForm(null)}>Cancel</Button><Button type="submit" form="user-form" loading={saving}>{form?.user_id ? 'Save changes' : 'Create account'}</Button></>}>
         {form && (
-          <form id="user-form" onSubmit={submit} className="space-y-4">
+          <form id="user-form" onSubmit={submit} noValidate className="space-y-4">
             <ErrorNote error={formError} />
-            <Field label="Full name"><input className="input" required maxLength={100} value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} /></Field>
-            <Field label="Email"><input className="input" type="email" required maxLength={100} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
-            <Field label="Role"><select className="input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>{ROLES.map((r) => <option key={r}>{r}</option>)}</select></Field>
-            <Field label={form.user_id ? 'New password' : 'Password'} hint={form.user_id ? 'Leave blank to keep the current password' : 'At least 8 characters. Share it with the person privately.'}>
-              <input className="input" type="password" autoComplete="new-password" minLength={8} required={!form.user_id} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            <Field label="Full name" required error={pwErrors.full_name}><input className="input" maxLength={100} value={form.full_name} onChange={(e) => updateForm({ full_name: e.target.value })} /></Field>
+            <Field label="Email" required error={pwErrors.email}><input className="input" type="email" maxLength={100} value={form.email} onChange={(e) => updateForm({ email: e.target.value })} /></Field>
+            <Field label="Role" hint={form.user_id === me.user_id ? 'You cannot change your own role.' : undefined}>
+              <select className="input" value={form.role} disabled={form.user_id === me.user_id} onChange={(e) => setForm({ ...form, role: e.target.value })}>{ROLES.map((r) => <option key={r}>{r}</option>)}</select>
             </Field>
+            <Field label={form.user_id ? 'New password' : 'Password'} required={!form.user_id} error={pwErrors.password}
+              hint={form.user_id ? 'Leave blank to keep the current password.' : 'Share it with the person privately.'}>
+              <PasswordInput value={form.password} onChange={(e) => updateForm({ password: e.target.value })} invalid={!!pwErrors.password}
+                autoComplete="new-password" required={!form.user_id} describedBy="pw-checklist" />
+              {(!form.user_id || form.password) && <PasswordChecklist id="pw-checklist" password={form.password} email={form.email} name={form.full_name} />}
+            </Field>
+            {(!form.user_id || form.password) && (
+              <Field label={form.user_id ? 'Confirm new password' : 'Confirm password'} required error={pwErrors.confirm}>
+                <PasswordInput value={form.confirm} onChange={(e) => updateForm({ confirm: e.target.value })} invalid={!!pwErrors.confirm} autoComplete="new-password" />
+              </Field>
+            )}
             {form.user_id && (
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" className="rounded border-slate-300 text-brand" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
-                Account is active
-              </label>
+              <p className="text-sm text-slate-600">
+                Status: {form.is_active ? <Badge tone="green">Active</Badge> : <Badge tone="slate">Deactivated</Badge>}
+                <span className="mt-1 block text-xs text-slate-500">To change it, use Deactivate or Reactivate in the accounts list.</span>
+              </p>
             )}
           </form>
         )}
@@ -156,8 +198,22 @@ export default function Users() {
           </form>
         )}
       </Modal>
-      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={saving} title="Delete account?"
-        message={`${deleting?.full_name}'s account will be removed. Accounts with activity history can't be deleted; deactivate them instead.`} />
+      <Modal open={Boolean(toggling)} onClose={() => setToggling(null)} size="sm"
+        title={toggling?.is_active ? 'Deactivate account?' : 'Reactivate account?'}
+        footer={<>
+          <Button variant="secondary" onClick={() => setToggling(null)}>Cancel</Button>
+          <Button variant={toggling?.is_active ? 'danger' : 'primary'} loading={saving} onClick={setActive}>
+            {toggling?.is_active ? 'Deactivate' : 'Reactivate'}
+          </Button>
+        </>}>
+        {toggling && (
+          <p className="text-sm text-slate-600">
+            {toggling.is_active
+              ? <><strong>{toggling.full_name}</strong> will be signed out right away and won't be able to sign in. Their records and history are kept, and you can reactivate the account at any time.</>
+              : <><strong>{toggling.full_name}</strong> will be able to sign in again with their existing password.</>}
+          </p>
+        )}
+      </Modal>
     </>
   );
 }

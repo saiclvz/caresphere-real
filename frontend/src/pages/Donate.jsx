@@ -1,178 +1,218 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Baby, CheckCircle2, Gift, HeartHandshake } from 'lucide-react';
+import { Building2, Check, Copy, FlaskConical, Heart, Info, Wallet } from 'lucide-react';
 import useApi from '../hooks/useApi';
-import { api, qs } from '../api/client';
+import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
-import AuthImage from '../components/AuthImage';
-import { Button, Card, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner } from '../components/ui';
+import { Button, Card, ErrorNote, Field, PageHeader, Spinner } from '../components/ui';
+import { checkFile, MB, readFile } from '../lib/files';
 import { formatMoney } from '../lib/format';
-import { uuid } from '../lib/files';
 
-const METHODS = ['GCash', 'Maya', 'Bank Transfer', 'Cash', 'Check', 'In-kind'];
-const EMPTY = { payment_method: 'GCash', amount: '', item_description: '', reason_for_donation: '' };
+const PROOF_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const placeholder = (v) => v || <span className="text-slate-400">[set in Settings]</span>;
 
-function validate(form, selected) {
-  const e = {};
-  if (selected.length === 0) e.children = 'Select at least one child to support.';
-  const amount = Number(form.amount);
-  if (!form.amount || !Number.isFinite(amount) || amount <= 0) {
-    e.amount = form.payment_method === 'In-kind' ? 'Enter the estimated value of the items.' : 'Enter an amount greater than zero.';
-  } else if (amount >= 100000000) e.amount = 'Amount must be below 100,000,000.';
-  if (form.payment_method === 'In-kind' && !form.item_description.trim()) e.item_description = 'Describe the items you are donating.';
-  if (!form.reason_for_donation.trim()) e.reason_for_donation = 'Please provide a reason for your donation.';
-  return e;
+/** The home's bank details (from Settings > Payment details), with Copy for the account number. */
+function BankDetails({ method }) {
+  const [copied, setCopied] = useState(false);
+  const ready = method.bank_name && method.account_name && method.account_number;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(method.account_number.replace(/\s+/g, '')); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { setCopied(false); }
+  };
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+      {!ready && <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-900" role="alert">The home's bank details aren't set yet, so bank transfer can't be used right now.</p>}
+      <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+        <div><dt className="text-slate-500">Bank name</dt><dd className="font-medium text-navy-900">{placeholder(method.bank_name)}</dd></div>
+        <div><dt className="text-slate-500">Account name</dt><dd className="font-medium text-navy-900">{placeholder(method.account_name)}</dd></div>
+        <div>
+          <dt className="text-slate-500">Account number</dt>
+          <dd className="flex items-center gap-2 font-mono font-medium text-navy-900">
+            {placeholder(method.account_number)}
+            {method.account_number && (
+              <button type="button" onClick={copy} className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 font-sans text-xs text-slate-600 hover:bg-slate-100" aria-label="Copy account number">
+                {copied ? <><Check className="h-3.5 w-3.5 text-emerald-600" /> Copied</> : <><Copy className="h-3.5 w-3.5" /> Copy</>}
+              </button>
+            )}
+          </dd>
+        </div>
+        {method.branch && <div><dt className="text-slate-500">Branch</dt><dd className="font-medium text-navy-900">{method.branch}</dd></div>}
+      </dl>
+      <ol className="list-decimal space-y-1 pl-5 text-sm text-slate-700">
+        <li>Transfer the amount to this account.</li>
+        <li>Enter your transfer reference number below.</li>
+        <li>Upload a screenshot or photo of your proof of transfer.</li>
+      </ol>
+      {method.instructions && <p className="text-xs text-slate-500">{method.instructions}</p>}
+    </div>
+  );
 }
 
+/**
+ * Donor Donate page. E-wallets go to PayMongo's secure checkout (the server sets the amount and the
+ * donation is created only when PayMongo confirms payment). Bank transfer: the home's details, the
+ * transfer reference, date and proof; Staff confirm it before the receipt is issued.
+ */
 export default function Donate() {
-  const { query } = useApp();
-  const { data, loading, error, reload } = useApi(`/public-children${qs({ q: query })}`);
-  const children = data?.data || [];
-  const [selected, setSelected] = useState([]); // [{ child_id, display_name }]
-  const [form, setForm] = useState(EMPTY);
+  const { orgName } = useApp();
+  const options = useApi('/payments/options');
+  const methods = options.data?.data?.methods || [];
+  const demo = options.data?.data?.demo;
+  const minAmount = options.data?.data?.min_amount || 20;
+  const [code, setCode] = useState('');
+  const [form, setForm] = useState({ amount: '', reason: '', transfer_reference: '', transfer_date: today(), account_last4: '' });
+  const [proof, setProof] = useState(null);
   const [errors, setErrors] = useState({});
-  const [reviewing, setReviewing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState(null);
+  const [step, setStep] = useState('form');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
   const [done, setDone] = useState(null);
-  // One key per donation attempt: resubmitting (double click, retry) cannot create a duplicate.
-  const keyRef = useRef(uuid());
 
+  const method = methods.find((m) => m.code === code);
+  const isBank = method?.method_type === 'manual';
   const set = (k) => (e) => { setForm((f) => ({ ...f, [k]: e.target.value })); setErrors((x) => ({ ...x, [k]: undefined })); };
-  const isSelected = (id) => selected.some((c) => c.child_id === id);
-  const toggle = (c) => {
-    setSelected((list) => (isSelected(c.child_id) ? list.filter((x) => x.child_id !== c.child_id) : [...list, { child_id: c.child_id, display_name: c.display_name }]));
-    setErrors((x) => ({ ...x, children: undefined }));
+
+  const pickProof = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const problem = checkFile(file, { types: PROOF_TYPES, maxBytes: 5 * MB });
+    if (problem) { setErrors((x) => ({ ...x, proof: problem })); setProof(null); return; }
+    setErrors((x) => ({ ...x, proof: undefined }));
+    setProof(await readFile(file));
   };
 
-  const review = () => {
-    const e = validate(form, selected);
+  const validate = () => {
+    const e = {};
+    if (!method) e.method = 'Choose a payment method.';
+    const amount = Number(form.amount);
+    if (!(amount >= minAmount)) e.amount = `Enter an amount of at least PHP ${minAmount}.`;
+    if (!form.reason.trim()) e.reason = 'Reason for donation is required.';
+    if (isBank) {
+      if (!/^[A-Za-z0-9-\s]{4,100}$/.test(form.transfer_reference.trim())) e.transfer_reference = 'Enter the transfer reference number from your receipt.';
+      if (!form.transfer_date || form.transfer_date > today()) e.transfer_date = 'Enter the date of the transfer (not in the future).';
+      if (form.account_last4 && !/^\d{4}$/.test(form.account_last4)) e.account_last4 = 'Only the last 4 digits, or leave it empty.';
+      if (!proof) e.proof = 'Upload your proof of transfer (JPG, PNG or PDF, up to 5 MB).';
+      if (!(method.bank_name && method.account_name && method.account_number)) e.method = "The home's bank details aren't set yet.";
+    }
     setErrors(e);
-    if (Object.keys(e).length === 0) { setSubmitError(null); setReviewing(true); }
+    return Object.keys(e).length === 0;
   };
 
   const submit = async () => {
-    if (submitting) return;
-    setSubmitting(true);
-    setSubmitError(null);
+    setBusy(true); setError(null);
     try {
-      const res = await api('/donor/donations', {
-        method: 'POST',
-        headers: { 'Idempotency-Key': keyRef.current },
-        body: { ...form, amount: Number(form.amount), child_ids: selected.map((c) => c.child_id) },
-      });
-      setReviewing(false);
-      setDone(res.data);
-    } catch (err) {
-      setSubmitError(err);
-    } finally {
-      setSubmitting(false);
-    }
+      if (isBank) {
+        const res = await api('/payments/bank', { method: 'POST', body: {
+          method_code: method.code, amount: Number(form.amount), reason: form.reason.trim(), transfer_reference: form.transfer_reference.trim(),
+          transfer_date: form.transfer_date, account_last4: form.account_last4 || undefined, proof,
+        } });
+        setDone(res.data);
+      } else {
+        const res = await api('/payments/checkout', { method: 'POST', body: { method_code: method.code, amount: Number(form.amount), reason: form.reason.trim() } });
+        window.location.assign(res.data.checkout_url); // PayMongo's hosted checkout
+      }
+    } catch (err) { setError(err); setStep('form'); } finally { setBusy(false); }
   };
 
-  const startOver = () => {
-    keyRef.current = uuid();
-    setSelected([]); setForm(EMPTY); setErrors({}); setDone(null);
-  };
+  if (options.loading && !options.data) return <Spinner />;
 
   if (done) {
     return (
-      <Card className="mx-auto max-w-xl p-8 text-center">
-        <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-500" aria-hidden />
-        <h1 className="mt-4 text-xl font-semibold text-navy-900">Thank you for your donation</h1>
-        <p className="mt-2 text-sm text-slate-600">
-          Your donation of <strong>{formatMoney(done.amount)}</strong> ({done.payment_method}) for {done.supported_children} has been recorded
-          and is <strong>pending</strong> until the home confirms it was received. Your receipt will be available in your donation history after that.
-        </p>
-        <div className="mt-6 flex flex-wrap justify-center gap-2">
-          <Link to="/donations/history"><Button variant="secondary">View donation history</Button></Link>
-          <Button onClick={startOver}>Make another donation</Button>
-        </div>
-      </Card>
+      <div className="mx-auto max-w-xl">
+        <Card className="p-6 text-center">
+          <Building2 className="mx-auto h-10 w-10 text-brand" aria-hidden />
+          <h1 className="mt-3 text-xl font-semibold text-navy-900">Thank you! Your transfer was submitted.</h1>
+          <p className="mt-2 text-sm text-slate-600">It is now <strong>Pending verification</strong>. The staff will check it against the home's account and confirm it. You'll get a notification, and your receipt will appear in Donation history.</p>
+          <Link to="/donations/history" className="mt-4 inline-block"><Button>Go to Donation history</Button></Link>
+        </Card>
+      </div>
     );
   }
 
+  const groups = ['E-wallet', 'Bank transfer'].map((g) => [g, methods.filter((m) => m.method_group === g)]).filter(([, list]) => list.length);
   return (
-    <>
-      <PageHeader title="Donate" description="Choose the children you want to support, tell us about your donation, and review it before you submit." />
-
-      <div className="grid gap-6 lg:grid-cols-5">
-        <Card className="lg:col-span-3">
-          <div className="border-b border-slate-100 px-5 py-4">
-            <h2 className="font-semibold text-navy-900">1. Choose children to support</h2>
-            <p className="text-sm text-slate-500">To protect their privacy, children are shown by first name and last initial only.</p>
-            {errors.children && <p className="mt-2 text-sm text-red-600" role="alert">{errors.children}</p>}
-          </div>
-          {loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : children.length === 0 ? (
-            query ? <NoMatches /> : <EmptyState icon={Baby} title="No child profiles are available right now" description="Please check back later." />
-          ) : (
-            <ul className="grid gap-3 p-4 sm:grid-cols-2">
-              {children.map((c) => {
-                const on = isSelected(c.child_id);
-                return (
-                  <li key={c.child_id}>
-                    <label className={`flex h-full cursor-pointer gap-3 rounded-xl border p-3 transition-colors ${on ? 'border-brand bg-blue-50/60 ring-2 ring-brand/20' : 'border-slate-200 hover:border-slate-300'}`}>
-                      <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={on} onChange={() => toggle(c)} aria-label={`Support ${c.display_name}`} />
-                      <AuthImage src={c.photo_url} alt={c.display_name} className="h-14 w-14 shrink-0 rounded-lg" />
-                      <div className="min-w-0">
-                        <p className="font-medium text-navy-900">{c.display_name}</p>
-                        <p className="text-xs text-slate-500">{c.age_label} · {c.gender}</p>
-                        {c.public_bio && <p className="mt-1 line-clamp-2 text-xs text-slate-600">{c.public_bio}</p>}
-                        {c.urgent_needs && <p className="mt-1 line-clamp-2 text-xs text-amber-800">Needs: {c.urgent_needs}</p>}
-                      </div>
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Card>
-
-        <Card className="h-fit p-5 lg:col-span-2">
-          <h2 className="mb-4 font-semibold text-navy-900">2. Donation details</h2>
-          <div className="space-y-4">
-            <p className="text-sm text-slate-600">
-              {selected.length ? <>Supporting <strong>{selected.map((c) => c.display_name).join(', ')}</strong></> : 'No children selected yet.'}
-            </p>
-            <Field label="Donation type / method">
-              <select className="input" value={form.payment_method} onChange={set('payment_method')}>
-                {METHODS.map((m) => <option key={m}>{m}</option>)}
-              </select>
-            </Field>
-            <Field label={form.payment_method === 'In-kind' ? 'Estimated value (PHP)' : 'Amount (PHP)'} error={errors.amount}>
-              <input className="input" type="number" min="1" step="0.01" inputMode="decimal" value={form.amount} onChange={set('amount')} aria-invalid={!!errors.amount} />
-            </Field>
-            {form.payment_method === 'In-kind' && (
-              <Field label="Items you are donating" error={errors.item_description}>
-                <textarea className="input" rows={2} value={form.item_description} onChange={set('item_description')} aria-invalid={!!errors.item_description} />
-              </Field>
-            )}
-            <Field label="Reason for donation" error={errors.reason_for_donation}>
-              <textarea className="input" rows={3} value={form.reason_for_donation} onChange={set('reason_for_donation')}
-                placeholder="For example: for school supplies this term" aria-invalid={!!errors.reason_for_donation} />
-            </Field>
-            <Button className="w-full" onClick={review}><HeartHandshake className="h-4 w-4" /> Review donation</Button>
-          </div>
-        </Card>
-      </div>
-
-      <Modal open={reviewing} onClose={() => !submitting && setReviewing(false)} title="Review your donation" size="sm"
-        footer={<>
-          <Button variant="secondary" onClick={() => setReviewing(false)} disabled={submitting}>Back</Button>
-          <Button onClick={submit} loading={submitting} disabled={submitting}><Gift className="h-4 w-4" /> Confirm and submit</Button>
-        </>}>
-        <ErrorNote error={submitError} />
-        <dl className="space-y-3 text-sm">
-          <div><dt className="text-slate-500">Children supported</dt><dd className="font-medium text-navy-900">{selected.map((c) => c.display_name).join(', ')}</dd></div>
-          <div><dt className="text-slate-500">Type / method</dt><dd className="font-medium text-navy-900">{form.payment_method}</dd></div>
-          <div><dt className="text-slate-500">{form.payment_method === 'In-kind' ? 'Estimated value' : 'Amount'}</dt><dd className="font-medium text-navy-900">{formatMoney(form.amount)}</dd></div>
-          {form.item_description.trim() && <div><dt className="text-slate-500">Items</dt><dd className="whitespace-pre-wrap text-navy-900">{form.item_description.trim()}</dd></div>}
-          <div><dt className="text-slate-500">Reason for donation</dt><dd className="whitespace-pre-wrap text-navy-900">{form.reason_for_donation.trim()}</dd></div>
-        </dl>
-        <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-          CareSphere does not process payments. Send your donation through your chosen method; staff will mark it received and your receipt will appear in your history.
+    <div className="mx-auto max-w-xl">
+      <PageHeader title="Donate" description="Make a general donation to support the children in our care." />
+      {demo && (
+        <p className="mb-4 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900" role="status">
+          <FlaskConical className="h-4 w-4 shrink-0" aria-hidden /> Demo mode: no real money is charged.
         </p>
-      </Modal>
-    </>
+      )}
+      <Card className="space-y-5 p-5">
+        <ErrorNote error={error || options.error} />
+        {step === 'form' ? (
+          <>
+            <fieldset>
+              <legend className="mb-2 text-sm font-medium text-navy-800">Payment method<span className="ml-0.5 text-red-600" aria-hidden="true">*</span></legend>
+              {methods.length === 0 && <p className="text-sm text-slate-500">No payment methods are available right now. Please try again later.</p>}
+              {groups.map(([group, list]) => (
+                <div key={group} className="mb-3">
+                  <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {group === 'E-wallet' ? <Wallet className="h-3.5 w-3.5" aria-hidden /> : <Building2 className="h-3.5 w-3.5" aria-hidden />} {group}
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {list.map((m) => (
+                      <label key={m.code} className={`flex min-h-[3rem] cursor-pointer items-center gap-3 rounded-xl border p-3 text-sm ${code === m.code ? 'border-brand bg-brand/5 ring-1 ring-brand' : 'border-slate-200 hover:bg-slate-50'}`}>
+                        <input type="radio" name="method" className="h-4 w-4 accent-brand" checked={code === m.code} onChange={() => { setCode(m.code); setErrors((x) => ({ ...x, method: undefined })); }} />
+                        <span className="font-medium text-navy-900">{m.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {errors.method && <p className="text-xs text-red-600" role="alert">{errors.method}</p>}
+            </fieldset>
+            {method && !isBank && method.instructions && <p className="flex gap-2 text-xs text-slate-500"><Info className="h-4 w-4 shrink-0" aria-hidden />{method.instructions}</p>}
+            {isBank && <BankDetails method={method} />}
+            <Field label="Amount (PHP)" required error={errors.amount}>
+              <input className="input" type="number" min={minAmount} step="0.01" inputMode="decimal" value={form.amount} onChange={set('amount')} />
+            </Field>
+            <Field label="Reason for donation" required error={errors.reason}>
+              <textarea className="input" rows={2} maxLength={3000} value={form.reason} onChange={set('reason')} />
+            </Field>
+            {isBank && (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Transfer reference number" required error={errors.transfer_reference}>
+                    <input className="input font-mono uppercase" maxLength={100} value={form.transfer_reference} onChange={set('transfer_reference')} autoComplete="off" />
+                  </Field>
+                  <Field label="Date of transfer" required error={errors.transfer_date}>
+                    <input className="input" type="date" max={today()} value={form.transfer_date} onChange={set('transfer_date')} />
+                  </Field>
+                </div>
+                <Field label="Last 4 digits of your account (optional)" error={errors.account_last4} hint="Only to help staff match your transfer. Never enter the full number.">
+                  <input className="input w-32 font-mono" inputMode="numeric" maxLength={4} value={form.account_last4} onChange={set('account_last4')} autoComplete="off" />
+                </Field>
+                <Field label="Proof of transfer" required error={errors.proof} hint="Screenshot or photo: JPG, PNG or PDF, up to 5 MB.">
+                  <input className="input" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" onChange={pickProof} />
+                  {proof && <p className="mt-1 text-xs text-emerald-700">{proof.name} ({Math.round(proof.size / 1024)} KB)</p>}
+                </Field>
+              </>
+            )}
+            <p className="flex gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+              <Heart className="h-4 w-4 shrink-0 text-brand" aria-hidden />
+              Donations support all the children in our care. To give goods or cash in person, please visit the home.
+            </p>
+            <Button className="w-full" onClick={() => validate() && setStep('review')}>Review donation</Button>
+          </>
+        ) : (
+          <>
+            <h2 className="font-semibold text-navy-900">Review your donation</h2>
+            <dl className="divide-y divide-slate-100 text-sm">
+              {[['To', orgName], ['Amount', formatMoney(Number(form.amount))], ['Payment method', method.name], ['Type', 'General donation'], ['Reason', form.reason.trim()],
+                ...(isBank ? [['Transfer reference', form.transfer_reference.trim().toUpperCase()], ['Date of transfer', form.transfer_date], ['Proof', proof?.name]] : [])]
+                .map(([k, v]) => <div key={k} className="flex justify-between gap-4 py-2"><dt className="text-slate-500">{k}</dt><dd className="text-right font-medium text-navy-900">{v}</dd></div>)}
+            </dl>
+            <p className="text-xs text-slate-500">{isBank ? 'Your donation will be confirmed by the staff after they check the transfer.' : "You'll be sent to PayMongo's secure page to pay. CareSphere never sees your wallet login."}</p>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setStep('form')}>Back</Button>
+              <Button className="flex-1" loading={busy} onClick={submit}>{isBank ? 'Submit transfer' : `Confirm and pay with ${method.name}`}</Button>
+            </div>
+          </>
+        )}
+      </Card>
+    </div>
   );
 }

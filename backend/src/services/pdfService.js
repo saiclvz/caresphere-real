@@ -30,13 +30,16 @@ async function donationReceipt(res, donation, settings) {
 
   const qrPng = await QRCode.toBuffer(donation.qr_receipt_code, { errorCorrectionLevel: 'M', margin: 1, width: 300 });
   doc.image(qrPng, 405, 150, { width: 140 });
-  doc.font('Helvetica').fontSize(8).fillColor(MUTED).text('Scan to verify this receipt', 405, 294, { width: 140, align: 'center' });
+  // The code under the QR image is how receipts are verified, so it is printed as readable text.
+  doc.font('Helvetica').fontSize(8).fillColor(MUTED).text('Receipt code', 405, 294, { width: 140, align: 'center' });
+  doc.font('Courier-Bold').fontSize(9).fillColor(NAVY).text(donation.qr_receipt_code, 405, 306, { width: 140, align: 'center' });
+  doc.font('Helvetica').fontSize(7).fillColor(MUTED).text('Staff verify this code under Donations > Verify receipt.', 405, 340, { width: 140, align: 'center' });
 
   let y = 160;
   const gap = 26;
   row(doc, 'Receipt no.', `#${String(donation.donation_id).padStart(6, '0')}`, y); y += gap;
   row(doc, 'Date', donation.created_at, y); y += gap;
-  row(doc, 'Donor', donation.donor_name, y); y += gap;
+  row(doc, 'Donor', donation.donor_type === 'walk_in' ? `${donation.donor_name} (walk-in)` : donation.donor_name, y); y += gap;
   row(doc, 'Payment method', donation.payment_method, y); y += gap;
 
   y += 10;
@@ -47,7 +50,9 @@ async function donationReceipt(res, donation, settings) {
 
   doc.font('Helvetica-Bold').fontSize(11).fillColor(NAVY).text('How this donation is being used', 50, y);
   doc.font('Helvetica').fontSize(10).fillColor('#334155')
-    .text(donation.allocation_notes || 'Allocation has not been recorded yet. It will appear in your donor portal once assigned.', 50, y + 18, { width: 495 });
+    .text(donation.allocation_notes || (donation.donor_type === 'walk_in'
+      ? 'Allocation has not been recorded yet.'
+      : 'Allocation has not been recorded yet. It will appear in your donor portal once assigned.'), 50, y + 18, { width: 495 });
 
   doc.font('Helvetica').fontSize(8).fillColor(MUTED)
     .text(`Verification code: ${donation.qr_receipt_code}`, 50, 740, { width: 495 })
@@ -84,7 +89,7 @@ function complianceReport(res, data, settings) {
   line('Flagged for Transition Review (18+)', data.children.transition_flagged);
   line('Discharges recorded in period', data.discharges.count);
   line('Adoption applications in period', data.adoptions.submitted);
-  line('Adoptions completed in period', data.adoptions.completed);
+  line('Adoptions finalized in period', data.adoptions.completed);
   line('Active children without a health record', data.children.missing_health);
 
   y += 10; section('Protected health information access');
@@ -104,6 +109,13 @@ function complianceReport(res, data, settings) {
   line('Total amount', money(data.donations.total));
   line('Donor pledges awaiting confirmation', data.donations.pending);
   line('Donations without allocation notes', data.donations.unallocated);
+
+  if (data.audit) {
+    y += 10; section('Audit log (filters applied)');
+    line('Filters', data.audit.filters);
+    line('Entries matching the filters', data.audit.total);
+    for (const c of data.audit.by_category) line(`   ${c.label}`, c.count);
+  }
 
   y += 10; section('Visitors and meals');
   line('Visitor check-ins', data.visitors.count);

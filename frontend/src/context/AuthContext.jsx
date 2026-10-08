@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { clearAllGrants } from '../lib/grants';
 import { api, getToken, onUnauthorized, setToken } from '../api/client';
 
 const AuthContext = createContext(null);
@@ -49,10 +50,17 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     try { await api('/auth/logout', { method: 'POST' }); } catch { /* session already invalid */ }
+    clearAllGrants(); // sensitive sections lock again
     clear();
   }, [clear]);
 
-  const value = useMemo(() => ({ user, loading, login, completeSession, register, logout }), [user, loading, login, completeSession, register, logout]);
+  // Undertaking areas accepted in this sign-in (only to skip the screen; the server checks every request).
+  const [acceptedAreas, setAcceptedAreas] = useState(() => new Set());
+  const markAreaAccepted = useCallback((area) => setAcceptedAreas((a) => new Set(a).add(area)), []);
+  useEffect(() => { if (!user) setAcceptedAreas(new Set()); }, [user]);
+
+  const value = useMemo(() => ({ user, loading, login, completeSession, register, logout, acceptedAreas, markAreaAccepted }),
+    [user, loading, login, completeSession, register, logout, acceptedAreas, markAreaAccepted]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

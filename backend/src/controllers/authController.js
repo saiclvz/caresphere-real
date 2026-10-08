@@ -6,10 +6,13 @@ const { pool } = require('../config/db');
 const User = require('../models/userModel');
 const HttpError = require('../utils/HttpError');
 const { requireFields, isEmail } = require('../utils/validate');
-const { logActivity } = require('../utils/audit');
+const { logActivity, logSecurityEvent } = require('../utils/audit');
+const { problem: passwordProblem } = require('../utils/passwordPolicy');
 const mfa = require('../services/mfaService');
 
 // Pre-computed hash so failed lookups take the same time as real comparisons.
+const LOCK_AFTER = 10;
+const LOCK_MINUTES = 15;
 const DUMMY_HASH = bcrypt.hashSync('caresphere-timing-guard', 10);
 
 /** `mfa: true` marks a session that passed two-step verification (required for Admin). */
@@ -36,8 +39,29 @@ exports.login = async (req, res) => {
   const user = await User.findByEmailWithHash(email);
   const ok = await bcrypt.compare(password, user ? user.password_hash : DUMMY_HASH);
 
-  // One generic message: never reveal whether the email or the password was wrong.
-  if (!user || !ok) throw new HttpError(401, 'Incorrect email or password.');
+  // Per-account lockout (RA 10175): LOCK_AFTER wrong passwords lock the account for LOCK_MINUTES.
+  if (user) {
+    const [[lock]] = await pool.query(
+      "SELECT (locked_until > NOW()) AS locked, DATE_FORMAT(locked_until, '%h:%i %p') AS until FROM tbl_users WHERE user_id = ?", [user.user_id]);
+    if (lock?.locked) {
+      await logSecurityEvent(req, 'LOGIN_WHILE_LOCKED', { userId: user.user_id });
+      throw new HttpError(429, `Too many failed sign-in attempts. Try again after ${lock.until}.`);
+    }
+  }
+  if (!user || !ok) {
+    await logSecurityEvent(req, 'LOGIN_FAILED', { userId: user?.user_id ?? null, email });
+    if (user) {
+      await pool.query('UPDATE tbl_users SET failed_logins = failed_logins + 1 WHERE user_id = ?', [user.user_id]);
+      const [[u]] = await pool.query('SELECT failed_logins FROM tbl_users WHERE user_id = ?', [user.user_id]);
+      if (u.failed_logins >= LOCK_AFTER) {
+        await pool.query('UPDATE tbl_users SET failed_logins = 0, locked_until = NOW() + INTERVAL ? MINUTE WHERE user_id = ?', [LOCK_MINUTES, user.user_id]);
+        await logSecurityEvent(req, 'ACCOUNT_LOCKED', { userId: user.user_id, detail: `${LOCK_AFTER} failed sign-ins` });
+      }
+    }
+    // One generic message: never reveal whether the email or the password was wrong.
+    throw new HttpError(401, 'Incorrect email or password.');
+  }
+  await pool.query('UPDATE tbl_users SET failed_logins = 0, locked_until = NULL WHERE user_id = ?', [user.user_id]);
   if (!user.is_active) throw new HttpError(403, 'This account has been deactivated. Contact the administrator.');
 
   // Admins must pass two-step verification. No session is issued yet: the client gets a
@@ -115,7 +139,8 @@ exports.register = async (req, res) => {
   if (!email) throw new HttpError(400, 'Email is required.');
   if (!isEmail(email) || email.length > 100) throw new HttpError(400, 'Enter a valid email address.');
   if (!password) throw new HttpError(400, 'Password is required.');
-  if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
+  const weak = passwordProblem(password, { email, name: fullName });
+  if (weak) throw new HttpError(400, weak);
   if (!confirm) throw new HttpError(400, 'Confirm password is required.');
   if (password !== confirm) throw new HttpError(400, 'Passwords do not match.');
   if (await User.findByEmailWithHash(email)) throw new HttpError(409, 'An account with this email already exists.');
@@ -131,6 +156,9 @@ exports.register = async (req, res) => {
 };
 
 exports.logout = async (req, res) => {
+  // Signing out locks every sensitive section again (protected grants end).
+  await require('../services/protectedRecords').revokeGrantsForUser(req.user.user_id).catch(() => {});
+  await require('../services/unlockService').endForUser(req.user.user_id).catch(() => {});
   await pool.query('INSERT IGNORE INTO tbl_revoked_tokens (jti, expires_at) VALUES (?, FROM_UNIXTIME(?))',
     [req.auth.jti, req.auth.exp]);
   await logActivity(req, 'LOGOUT', `User #${req.user.user_id}`);
@@ -143,12 +171,19 @@ exports.me = async (req, res) => {
 
 exports.changePassword = async (req, res) => {
   requireFields(req.body, ['current_password', 'new_password']);
-  if (String(req.body.new_password).length < 8) throw new HttpError(400, 'New password must be at least 8 characters.');
+  const weak = passwordProblem(String(req.body.new_password), { email: req.user.email, name: req.user.full_name });
+  if (weak) throw new HttpError(400, weak);
+  if (req.body.confirm_password !== undefined && req.body.confirm_password !== req.body.new_password) throw new HttpError(400, 'Passwords do not match.');
   const user = await User.findByEmailWithHash(req.user.email);
   if (!(await bcrypt.compare(String(req.body.current_password), user.password_hash))) {
     throw new HttpError(400, 'Current password is incorrect.');
   }
-  await User.update(req.user.user_id, { password_hash: await bcrypt.hash(String(req.body.new_password), env.bcryptRounds) });
-  await logActivity(req, 'CHANGE_PASSWORD', `User #${req.user.user_id}`);
+  const hash = await bcrypt.hash(String(req.body.new_password), env.bcryptRounds);
+  // The change, its audit entry and (for donors) the "password changed" notice in one transaction.
+  await require('../config/db').withTransaction(async (conn) => {
+    await conn.query('UPDATE tbl_users SET password_hash = ? WHERE user_id = ?', [hash, req.user.user_id]);
+    await require('../utils/audit').logActivityWith(conn, req, 'CHANGE_PASSWORD', `User #${req.user.user_id}`);
+    if (req.user.role === 'Donor') await require('../services/notifications').emit(conn, 'password_changed', { userId: req.user.user_id });
+  });
   res.json({ success: true, message: 'Password updated.' });
 };

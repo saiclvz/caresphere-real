@@ -5,12 +5,14 @@ const helmet = require('helmet');
 const cors = require('cors');
 
 const env = require('./src/config/env');
-const { verifyConnection } = require('./src/config/db');
+const { verifyConnection, pool } = require('./src/config/db');
 const routes = require('./src/routes');
 const { notFound, errorHandler } = require('./src/middleware/errorHandler');
 const { purgeExpired } = require('./src/services/qrService');
 const mfa = require('./src/services/mfaService');
+const protectedRecords = require('./src/services/protectedRecords');
 const healthAccess = require('./src/services/healthAccessService');
+const paymentService = require('./src/services/paymentService');
 const { syncFlags } = require('./src/controllers/childController');
 
 const app = express();
@@ -34,14 +36,18 @@ app.use(cors({
     if (!origin || env.corsOrigins.includes(origin)) return cb(null, true);
     return cb(new Error(`Origin ${origin} is not allowed. Add it to CORS_ORIGINS in .env.`));
   },
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Health-Access', 'Idempotency-Key'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Health-Access', 'X-Unlock-Session', 'X-Protected-Access', 'X-Background', 'Idempotency-Key'],
   exposedHeaders: ['Content-Disposition'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
 }));
 
 // Uploads (child photos up to 5 MB, adoption documents up to 10 MB) arrive as
 // base64 JSON, about 4/3 of the file size. Only those routes get the larger limit.
-const UPLOAD_ROUTES = [/^\/api\/children$/, /^\/api\/children\/[^/]+\/photo$/, /^\/api\/adoptions\/\d+\/documents$/];
+const UPLOAD_ROUTES = [/^\/api\/children$/, /^\/api\/children\/[^/]+\/photo$/, /^\/api\/adoptions\/\d+\/documents$/, /^\/api\/payments\/bank$/];
+// PayMongo webhook: needs the raw body to check its signature, so it is mounted before the JSON parser.
+const payments = require('./src/controllers/paymentController');
+app.post('/api/payments/webhook', express.raw({ type: '*/*', limit: '1mb' }), (req, res, next) => payments.webhook(req, res).catch(next));
+
 const jsonLarge = express.json({ limit: '15mb' });
 const jsonSmall = express.json({ limit: '1mb' });
 app.use((req, res, next) => (UPLOAD_ROUTES.some((r) => r.test(req.path)) ? jsonLarge : jsonSmall)(req, res, next));
@@ -69,7 +75,8 @@ async function start() {
   }
 
   // Housekeeping: drop expired QR sessions and JWT denylist entries hourly.
-  const cleanup = () => Promise.all([purgeExpired(), healthAccess.purgeExpired(), mfa.purgeExpired()]).catch((e) => console.error('[cleanup]', e.message));
+  const cleanup = () => Promise.all([purgeExpired(), healthAccess.purgeExpired(), mfa.purgeExpired(), protectedRecords.cleanupGrants(), paymentService.expireStale(),
+    pool.query('DELETE FROM tbl_session_activity WHERE last_seen < NOW() - INTERVAL 1 DAY')]).catch((e) => console.error('[cleanup]', e.message));
   setInterval(cleanup, 60 * 60 * 1000).unref();
 
   // Flag children who have turned 18 for Transition Review (at start-up and every 6 hours).

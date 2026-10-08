@@ -5,6 +5,7 @@ import {
   LayoutDashboard, LogOut, Menu, Receipt, Search, Settings, ShieldCheck, UserCog, Users, UtensilsCrossed, X, FolderHeart,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import NotificationBell from './NotificationBell';
 import { useApp } from '../context/AppContext';
 
 // Admin and Staff share the Children Management group.
@@ -17,13 +18,21 @@ const CHILDREN_GROUP = {
   ],
 };
 
+// Admin and Staff: donations are one module; walk-in donations are logged from Visitors.
+const DONATIONS_GROUP = {
+  label: 'Donations', icon: HandCoins, match: ['/donations', '/visitors'],
+  items: [
+    { to: '/donations', label: 'Donations', icon: HandCoins, end: true },
+    { to: '/visitors', label: 'Visitors', icon: Users },
+  ],
+};
+
 const NAV = {
   Admin: [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
     CHILDREN_GROUP,
     { to: '/inventory', label: 'Inventory', icon: Boxes, badge: true },
-    { to: '/donations', label: 'Donations', icon: HandCoins },
-    { to: '/visitors', label: 'Visitors', icon: Users },
+    DONATIONS_GROUP,
     { to: '/meals', label: 'Meals', icon: UtensilsCrossed },
     { to: '/schedules', label: 'Staff schedules', icon: CalendarClock },
     { to: '/users', label: 'User accounts', icon: UserCog },
@@ -34,15 +43,16 @@ const NAV = {
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
     CHILDREN_GROUP,
     { to: '/inventory', label: 'Inventory', icon: Boxes, badge: true },
-    { to: '/donations', label: 'Donations', icon: HandCoins },
-    { to: '/visitors', label: 'Visitors', icon: Users },
+    DONATIONS_GROUP,
     { to: '/meals', label: 'Meals', icon: UtensilsCrossed },
     { to: '/my-schedule', label: 'My schedule', icon: CalendarClock },
+    // Staff have no Audit log, so their Data protection link opens only that tab of the Audit log page.
+    { to: '/data-protection', label: 'Data protection', icon: ShieldCheck },
   ],
   Donor: [
     { to: '/', label: 'Dashboard', icon: HeartHandshake, end: true },
     { to: '/adopt', label: 'Adopt a Child', icon: FolderHeart },
-    { to: '/applications', label: 'My applications', icon: FileHeart },
+    { to: '/applications', label: 'My applications', icon: FileHeart, badge: 'requests' },
     { to: '/donate', label: 'Donate', icon: Gift },
     { to: '/donations/history', label: 'Donation history', icon: Receipt },
   ],
@@ -57,18 +67,22 @@ const linkClass = (isActive, nested = false) => `group flex items-center gap-3 r
   ${isActive ? 'bg-brand text-white' : 'hover:bg-navy-800 hover:text-white'}`;
 
 function NavItem({ item, nested = false }) {
-  const { collapsed, lowStock } = useApp();
+  const { collapsed, lowStock, openRequests } = useApp();
   const { to, label, icon: Icon, end, badge } = item;
+  // badge: true = low-stock count (Inventory), 'requests' = documents requested from a donor.
+  const count = badge === 'requests' ? openRequests : badge ? lowStock : 0;
+  const tone = badge === 'requests' ? 'bg-blue-400' : 'bg-amber-400';
+  const countLabel = badge === 'requests' ? `${count} unread application notification${count === 1 ? '' : 's'}` : `${count} items low on stock`;
   return (
     <NavLink to={to} end={end} title={collapsed ? label : undefined} className={({ isActive }) => linkClass(isActive, nested)}>
       <span className="relative">
         <Icon className={`${nested ? 'h-4 w-4' : 'h-5 w-5'} shrink-0`} aria-hidden />
-        {badge && lowStock > 0 && collapsed && <span className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-navy-900" />}
+        {count > 0 && collapsed && <span className={`absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full ${tone} ring-2 ring-navy-900`} />}
       </span>
-      {!collapsed && <span className="flex-1">{label}</span>}
-      {!collapsed && badge && lowStock > 0 && (
-        <span className="rounded-full bg-amber-400 px-2 py-0.5 text-xs font-semibold text-navy-900" aria-label={`${lowStock} items low on stock`}>
-          {lowStock}
+      {!collapsed && <span className="flex-1 truncate whitespace-nowrap">{label}</span>}
+      {!collapsed && count > 0 && (
+        <span className={`rounded-full ${tone} px-2 py-0.5 text-xs font-semibold text-navy-900`} aria-label={countLabel}>
+          {count}
         </span>
       )}
     </NavLink>
@@ -90,9 +104,9 @@ function NavGroup({ group }) {
   return (
     <div>
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
-        className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors hover:bg-navy-800 hover:text-white ${inGroup ? 'text-white' : ''}`}>
-        <Icon className="h-5 w-5 shrink-0" aria-hidden />
-        <span className="flex-1 text-left">{group.label}</span>
+        className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors hover:bg-navy-800 hover:text-white ${inGroup ? 'bg-navy-800 text-white' : ''}`}>
+        <Icon className={`h-5 w-5 shrink-0 ${inGroup ? 'text-brand' : ''}`} aria-hidden />
+        <span className="flex-1 truncate whitespace-nowrap text-left">{group.label}</span>
         <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
       </button>
       {open && <div className="ml-4 mt-1 space-y-1 border-l border-white/10 pl-2">{group.items.map((i) => <NavItem key={i.to} item={i} nested />)}</div>}
@@ -163,6 +177,7 @@ function Header() {
           className="w-full rounded-lg border border-slate-200 bg-page py-2 pl-9 pr-3 text-sm focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20" />
       </div>
       <div className="ml-auto flex items-center gap-3">
+        <NotificationBell />
         <span className="hidden text-sm text-slate-600 sm:inline">{user.full_name}</span>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${ROLE_TONE[user.role]}`}>{user.role}</span>
       </div>

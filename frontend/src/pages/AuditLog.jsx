@@ -1,142 +1,210 @@
-import { useEffect, useState } from 'react';
-import { ClipboardList, FileSpreadsheet, FileText } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ClipboardList, FileSpreadsheet, FileText, ShieldAlert } from 'lucide-react';
 import useApi from '../hooks/useApi';
-import { download, qs } from '../api/client';
+import { api, download, qs } from '../api/client';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, PageHeader, Spinner, Table } from '../components/ui';
+import Pagination from '../components/Pagination';
 import { formatDateTime } from '../lib/format';
+import DataProtection from './DataProtection';
+import AccessControlPanels from '../components/AccessControlPanels';
 
-const ENTITIES = ['', 'Child', 'Inventory', 'Donation', 'Visitor', 'Meal', 'Schedule', 'User', 'Settings', 'Reports'];
+const KEYS = ['category', 'type', 'ended', 'from', 'to', 'user_id', 'event', 'q'];
 
-function ActivityLog() {
-  const { query, toast } = useApp();
-  const [filters, setFilters] = useState({ entity: '', from: '', to: '' });
-  const [page, setPage] = useState(1);
-  const listQuery = qs({ ...filters, search: query, page, page_size: 50 });
-  const { data, loading, error, reload } = useApi(`/audit-logs${listQuery}`);
-  const [busy, setBusy] = useState(null);
-
-  useEffect(() => { setPage(1); }, [filters, query]);
-
-  const exportFile = async (kind) => {
-    setBusy(kind);
-    try {
-      if (kind === 'xlsx') await download(`/audit-logs/export${qs({ ...filters, search: query })}`, 'audit-log.xlsx');
-      else await download(`/reports/compliance${qs({ from: filters.from, to: filters.to })}`, 'compliance-report.pdf');
-    } catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
-  };
-
-  const rows = data?.rows || [];
-  const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
-  const tone = (a) => (a.startsWith('PHI') ? 'red' : a.startsWith('QR') ? 'blue' : a.startsWith('DELETE') ? 'amber' : 'slate');
-
+/** "2 active access sessions" above the filters; refreshed every 10 s, paused while the tab is hidden. */
+function ActiveSessionsNotice() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let id = null;
+    const load = () => api('/unlock/sessions/active', { headers: { 'X-Background': '1' } }).then((r) => setCount(r.data.length)).catch(() => {});
+    const start = () => { if (!id) id = setInterval(load, 10000); };
+    const stop = () => { clearInterval(id); id = null; };
+    const onVis = () => { if (document.hidden) stop(); else { load(); start(); } };
+    load(); if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVis);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
+  if (!count) return null;
   return (
-    <>
-      <PageHeader title="Audit log" description="Every sign-in, change, and health-record access, with who did it and from which device."
-        actions={<>
-          <Button variant="secondary" loading={busy === 'pdf'} onClick={() => exportFile('pdf')}><FileText className="h-4 w-4" /> Compliance report</Button>
-          <Button loading={busy === 'xlsx'} onClick={() => exportFile('xlsx')}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button>
-        </>} />
-
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <Field label="Record type">
-          <select className="input" value={filters.entity} onChange={(e) => setFilters({ ...filters, entity: e.target.value })}>
-            {ENTITIES.map((e) => <option key={e} value={e}>{e || 'All'}</option>)}
-          </select>
-        </Field>
-        <Field label="From"><input className="input" type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} /></Field>
-        <Field label="To"><input className="input" type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} /></Field>
-      </div>
-
-      <Card>
-        {loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (
-          query ? <NoMatches /> : <EmptyState icon={ClipboardList} title="No activity matches these filters" />
-        ) : (
-          <>
-            <Table>
-              <thead className="bg-slate-50"><tr>
-                <th className="th">When</th><th className="th">User</th><th className="th">Action</th><th className="th">Record</th><th className="th">IP address</th>
-              </tr></thead>
-              <tbody className="divide-y divide-slate-100">
-                {rows.map((l) => (
-                  <tr key={l.log_id}>
-                    <td className="td whitespace-nowrap">{formatDateTime(l.timestamp)}</td>
-                    <td className="td"><span className="font-medium text-navy-900">{l.full_name}</span><span className="block text-xs text-slate-400">{l.role}</span></td>
-                    <td className="td"><Badge tone={tone(l.action_performed)}>{l.action_performed}</Badge></td>
-                    <td className="td">{l.target_entity}</td>
-                    <td className="td font-mono text-xs">{l.ip_address || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-sm text-slate-500">
-              <span>{data.total.toLocaleString()} entries</span>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Button>
-                <span>Page {page} of {pages}</span>
-                <Button size="sm" variant="secondary" disabled={page >= pages} onClick={() => setPage(page + 1)}>Next</Button>
-              </div>
-            </div>
-          </>
-        )}
-      </Card>
-    </>
+    <p className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+      <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />
+      <span className="flex-1">{count} active access session{count === 1 ? '' : 's'}</span>
+      <Link to="/audit-log?tab=data-protection" className="font-medium text-brand hover:underline">Manage</Link>
+    </p>
   );
 }
 
-const EVENT_TONE = { TOKEN_ISSUED: 'blue', VIEW: 'green', UPDATE: 'navy', TOKEN_DENIED: 'red', TOKEN_EXPIRED: 'amber', TOKEN_INVALID: 'red', TOKEN_REVOKED: 'slate' };
-
-/** Every health-record access grant, denial, view, update and expiry. */
-function HealthAccessLog() {
-  const { query } = useApp();
-  const [range, setRange] = useState({ from: '', to: '' });
-  const { data, loading, error, reload } = useApi(`/audit-logs/health-access${qs({ ...range, q: query })}`);
+/**
+ * Activity log: one log over general activity, health access and the unlock flow. Filters are in the
+ * URL (values only), combined with AND and applied on the server; changing one resets to page 1.
+ */
+function ActivityLog() {
+  const { toast } = useApp();
+  const [params, setParams] = useSearchParams();
+  const f = useMemo(() => Object.fromEntries(KEYS.map((k) => [k, params.get(k) || ''])), [params]);
+  const page = Number(params.get('page') || 1);
+  const limit = Number(params.get('limit') || 20);
+  const rangeError = f.from && f.to && f.from > f.to ? 'From must be on or before To.' : null;
+  const options = useApi(`/audit-logs/options${qs({ from: rangeError ? undefined : f.from || undefined, to: rangeError ? undefined : f.to || undefined })}`);
+  const o = options.data?.data;
+  const query = Object.fromEntries(Object.entries(f).filter(([, v]) => v));
+  const { data, loading, error, reload } = useApi(rangeError ? null : `/audit-logs${qs({ ...query, page, limit })}`);
   const rows = data?.data || [];
+  const active = Object.keys(query).length > 0;
+  const [busy, setBusy] = useState(null);
+
+  const set = (patch) => setParams((p) => {
+    const n = new URLSearchParams(p);
+    for (const [k, v] of Object.entries(patch)) { if (v) n.set(k, v); else n.delete(k); }
+    n.delete('page');
+    return n;
+  });
+  const clear = () => setParams((p) => { const n = new URLSearchParams(); if (p.get('tab')) n.set('tab', p.get('tab')); return n; });
+  const events = (o?.events || []).filter((e) => !f.category || e.category === f.category);
+
+  const exportXlsx = async () => {
+    setBusy('xlsx');
+    try { await download(`/audit-logs/export${qs(query)}`, 'CareSphere-Audit-Log.xlsx'); toast('Audit log exported.'); } catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
+  };
+  const report = async () => {
+    setBusy('pdf');
+    try { await download(`/reports/compliance${qs(query)}`, 'CareSphere-Compliance-Report.pdf'); toast('Compliance report generated.'); } catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
+  };
+
   return (
     <>
-      <PageHeader title="Health data access log" description="Each 3-minute access grant, denied attempt, view, update and expiry for health records and case files." />
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <Field label="From"><input className="input" type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /></Field>
-        <Field label="To"><input className="input" type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></Field>
-      </div>
+      <PageHeader title="Activity log" description="Who did what, when, and to which record. Sensitive record access is marked. Entries can't be edited or deleted."
+        actions={<>
+          <Button variant="secondary" loading={busy === 'pdf'} onClick={report}><FileText className="h-4 w-4" /> Compliance report</Button>
+          <Button variant="secondary" loading={busy === 'xlsx'} onClick={exportXlsx}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button>
+        </>} />
+      <ActiveSessionsNotice />
+      <Card className="mb-4 p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Category">
+            <select className="input h-10 w-60" value={f.category} onChange={(e) => set({ category: e.target.value, ended: '', event: '' })}>
+              <option value="">All categories{o ? ` (${o.total})` : ''}</option>
+              {(o?.categories || []).map((c) => <option key={c.key} value={c.key}>{c.label} ({c.count})</option>)}
+            </select>
+          </Field>
+          <Field label="Record type">
+            <select className="input h-10 w-48" value={f.type} onChange={(e) => set({ type: e.target.value })}>
+              <option value="">All</option>{(o?.record_types || []).map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+          </Field>
+          {f.category === 'sensitive' && (
+            <Field label="How it ended">
+              <select className="input h-10 w-52" value={f.ended} onChange={(e) => set({ ended: e.target.value })}>
+                <option value="">All</option>{(o?.ended || []).map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+              </select>
+            </Field>
+          )}
+          <Field label="From" error={rangeError}><input className="input h-10 w-40" type="date" value={f.from} onChange={(e) => set({ from: e.target.value })} /></Field>
+          <Field label="To"><input className="input h-10 w-40" type="date" value={f.to} onChange={(e) => set({ to: e.target.value })} /></Field>
+          <Field label="User">
+            <select className="input h-10 w-52" value={f.user_id} onChange={(e) => set({ user_id: e.target.value })}>
+              <option value="">Everyone</option>{(o?.users || []).map((u) => <option key={u.user_id} value={u.user_id}>{u.full_name} ({u.role})</option>)}
+            </select>
+          </Field>
+          <Field label="Event">
+            <select className="input h-10 w-60" value={f.event} onChange={(e) => set({ event: e.target.value })}>
+              <option value="">All events</option>{events.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Search" hint="Reference number or user name">
+            <input className="input h-10 w-56" defaultValue={f.q} key={f.q} maxLength={100}
+              onKeyDown={(e) => { if (e.key === 'Enter') set({ q: e.currentTarget.value.trim() }); }}
+              onBlur={(e) => { if (e.currentTarget.value.trim() !== f.q) set({ q: e.currentTarget.value.trim() }); }} />
+          </Field>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3 text-sm text-slate-500" aria-live="polite">
+          <span>{data ? `${data.pagination.total} entr${data.pagination.total === 1 ? 'y' : 'ies'} shown` : ''}</span>
+          {active && <button type="button" className="ml-auto font-medium text-brand hover:underline" onClick={clear}>Clear filters</button>}
+        </div>
+      </Card>
       <Card>
         {loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (
-          query ? <NoMatches /> : <EmptyState icon={ClipboardList} title="No health data access recorded in this period" />
+          <EmptyState icon={ClipboardList} title={active ? 'No entries match these filters' : 'No entries yet'}
+            action={active ? <Button variant="secondary" onClick={clear}>Clear filters</Button> : undefined} />
         ) : (
           <Table>
             <thead className="bg-slate-50"><tr>
-              <th className="th">When</th><th className="th">User</th><th className="th">Child</th><th className="th">Event</th><th className="th">Detail</th><th className="th">IP address</th>
+              <th className="th">When</th><th className="th">User</th><th className="th">Action</th><th className="th">Record</th><th className="th">Device</th><th className="th">Detail</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100">
-              {rows.map((l) => (
-                <tr key={l.log_id}>
-                  <td className="td whitespace-nowrap text-xs">{formatDateTime(l.created_at)}</td>
-                  <td className="td">{l.user_name || '-'}{l.user_role && <span className="text-xs text-slate-500"> ({l.user_role})</span>}</td>
-                  <td className="td">{l.child_id || '-'}</td>
-                  <td className="td"><Badge tone={EVENT_TONE[l.event] || 'slate'}>{l.event.replace(/_/g, ' ')}</Badge></td>
-                  <td className="td max-w-xs text-xs text-slate-600">{l.detail || ''}</td>
-                  <td className="td text-xs text-slate-500">{l.ip_address || ''}</td>
+              {rows.map((r) => (
+                <tr key={r.key}>
+                  <td className="td whitespace-nowrap text-xs">{formatDateTime(r.at)}</td>
+                  <td className="td">{r.user_name || 'System'}{r.user_role && <span className="text-xs text-slate-500"> ({r.user_role})</span>}</td>
+                  <td className="td">
+                    {r.sensitive && <Badge tone="red">Sensitive</Badge>}{' '}
+                    <span title={r.code} className="text-sm text-navy-900">{r.label}</span>
+                  </td>
+                  <td className="td whitespace-nowrap font-mono text-xs">
+                    {r.record ? (r.record.link ? <Link to={r.record.link} className="text-brand hover:underline">{r.record.label}</Link> : r.record.label) : <span className="font-sans text-slate-400">-</span>}
+                  </td>
+                  <td className="td text-xs capitalize">{r.device || '-'}</td>
+                  <td className="td max-w-xs text-xs text-slate-500">{r.detail || ''}</td>
                 </tr>
               ))}
             </tbody>
           </Table>
         )}
+        <Pagination pagination={data?.pagination} label="entries"
+          onPageChange={(p) => setParams((x) => { const n = new URLSearchParams(x); n.set('page', String(p)); return n; })}
+          onLimitChange={(l) => setParams((x) => { const n = new URLSearchParams(x); n.set('limit', String(l)); n.delete('page'); return n; })} />
       </Card>
     </>
   );
 }
 
+/** Data protection (Admin tab): privacy requests, incidents and security events, then active access. */
+function DataProtectionTab() {
+  return (<><DataProtection /><AccessControlPanels /></>);
+}
+
+const TABS = [{ key: 'activity', label: 'Activity log' }, { key: 'data-protection', label: 'Data protection' }];
+/** Old tab names land on the Activity log filtered to Sensitive record access. */
+const OLD_SENSITIVE_TABS = ['adoption', 'health', 'protected-access', 'sensitive-record-access', 'health-data-access'];
+
+/** Audit log (Admin only): Activity log and Data protection. The tab and filters live in the URL. */
 export default function AuditLog() {
-  const [tab, setTab] = useState('activity');
+  const [params, setParams] = useSearchParams();
+  const rawTab = params.get('tab');
+  const tab = TABS.some((t) => t.key === rawTab) ? rawTab : 'activity';
+  const refs = useRef({});
+
+  useEffect(() => {
+    if (OLD_SENSITIVE_TABS.includes(rawTab)) { setParams({ tab: 'activity', category: 'sensitive' }, { replace: true }); return; }
+    if (rawTab !== tab) setParams((p) => { const n = new URLSearchParams(p); n.set('tab', tab); return n; }, { replace: true });
+  }, [rawTab, tab, setParams]);
+
+  const select = (key) => setParams({ tab: key });
+  const onKeyDown = (e) => {
+    const i = TABS.findIndex((t) => t.key === tab);
+    const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    const t = TABS[(next + TABS.length) % TABS.length];
+    select(t.key);
+    refs.current[t.key]?.focus();
+  };
+
   return (
     <>
-      <div className="mb-4 inline-flex rounded-lg bg-white p-1 ring-1 ring-slate-200" role="tablist">
-        {[['activity', 'Activity log'], ['health', 'Health data access']].map(([key, label]) => (
-          <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${tab === key ? 'bg-navy-900 text-white' : 'text-slate-600 hover:text-navy-900'}`}>{label}</button>
+      <div className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200" role="tablist" aria-label="Audit log sections" onKeyDown={onKeyDown}>
+        {TABS.map((t) => (
+          <button key={t.key} ref={(el) => { refs.current[t.key] = el; }} type="button" role="tab" id={`tab-${t.key}`} aria-controls={`panel-${t.key}`}
+            aria-selected={tab === t.key} tabIndex={tab === t.key ? 0 : -1} onClick={() => select(t.key)}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${tab === t.key ? 'bg-navy-900 text-white' : 'text-slate-600 hover:text-navy-900'}`}>
+            {t.label}
+          </button>
         ))}
       </div>
-      {tab === 'activity' ? <ActivityLog /> : <HealthAccessLog />}
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+        {tab === 'activity' ? <ActivityLog /> : <DataProtectionTab />}
+      </div>
     </>
   );
 }

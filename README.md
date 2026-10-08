@@ -18,7 +18,7 @@ caresphere/
 
 - **Node.js 18 or newer** (uses `node --watch` and native `crypto` AES-256-GCM)
 - **XAMPP** with MySQL/MariaDB running (default `root` with no password works; set a password for real deployments)
-- A modern browser (Chrome, Edge, Firefox). Camera QR scanning has extra requirements (see section 5).
+- A modern browser (Chrome, Edge, Firefox).
 
 ---
 
@@ -164,5 +164,5 @@ Run `npm run migrate` again in `backend/`. Migration `003_v2_updates.sql` adds t
 | `ECONNREFUSED 127.0.0.1:3306` | MySQL is not running in XAMPP, or `DB_PORT` is wrong |
 | `ER_ACCESS_DENIED_ERROR` | Check `DB_USER` / `DB_PASSWORD` |
 | Browser shows a CORS error | Add the exact origin (scheme + IP + port) to `CORS_ORIGINS` and restart the API |
-| Camera will not start (receipt verification) | Use HTTPS or `localhost`, or use *Scan a photo* / *Enter code* |
+| A receipt code is not found | Copy the code printed under the QR image exactly; spaces and line breaks are ignored |
 | "Token expired" right after scanning | Expiry is checked against the server's own clock (Node and MySQL on the same PC), so client clocks don't matter. Make sure MySQL and Node use the same system time, and type the Token ID within 60 seconds |

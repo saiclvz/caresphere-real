@@ -118,7 +118,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }) {
     (field || ref.current?.querySelector('button'))?.focus();
   }, [open]);
   if (!open) return null;
-  const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl' };
+  const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-6xl' };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-navy-900/60 p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
       <div ref={ref} role="dialog" aria-modal="true" aria-label={title}

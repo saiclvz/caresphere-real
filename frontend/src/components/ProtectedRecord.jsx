@@ -6,6 +6,7 @@ import { useApp } from '../context/AppContext';
 import useCountdown from '../hooks/useCountdown';
 import CountdownRing from './CountdownRing';
 import TokenVerifyModal from './TokenVerifyModal';
+import { clearGrant, readGrant, saveGrant, unlockHeaders } from '../lib/grants';
 import { Button, Card, ErrorNote, Field, Modal } from './ui';
 import { formatDateTime } from '../lib/format';
 
@@ -17,8 +18,10 @@ const CASE = [['background_care_info', 'Background and care information'], ['gua
 
 /**
  * Health record + confidential case files.
- * Unlocking gives a 180-second access token (Admin: password, Staff: typed Token ID).
- * The server enforces the limit; this timer only mirrors it and clears the data at zero.
+ * Admin: re-enter the password (unchanged). Staff: the shared unlock flow (purpose, confidentiality
+ * tick, QR to the phone, single-use Token ID). One child unlock opens this section and the child's
+ * adoption legal records together, for the unlock length set by Admin. The server enforces the
+ * limit; this timer only mirrors it and clears the data at zero.
  */
 export default function ProtectedRecord({ child }) {
   const { user } = useAuth();
@@ -26,7 +29,6 @@ export default function ProtectedRecord({ child }) {
   const isAdmin = user.role === 'Admin';
   const [access, setAccess] = useState(null); // { token, seconds, key }
   const [data, setData] = useState(null);
-  const [askPassword, setAskPassword] = useState(false);
   const [askToken, setAskToken] = useState(false);
   const [editing, setEditing] = useState(null); // 'health' | 'case'
   const tokenRef = useRef(null);
@@ -39,7 +41,13 @@ export default function ProtectedRecord({ child }) {
     setAccess(null); setData(null); setEditing(null);
     if (message) toast(message);
     if (token) api(`/children/${child.child_id}/health-access/revoke`, { method: 'POST', headers: { 'X-Health-Access': token } }).catch(() => {});
-  }, [child.child_id, toast]);
+    if (!isAdmin && readGrant('health', child.child_id)) {
+      // Staff "Lock now" also ends the child unlock session (legal records lock too).
+      api('/unlock/lock', { method: 'POST', headers: { ...unlockHeaders('health', child.child_id), 'X-Health-Access': token || '' },
+        body: { record_type: 'health', record_id: child.child_id } }).catch(() => {});
+      clearGrant('health', child.child_id);
+    }
+  }, [child.child_id, toast, isAdmin]);
 
   // Close access when leaving the page.
   useEffect(() => () => {
@@ -47,14 +55,34 @@ export default function ProtectedRecord({ child }) {
     if (token) api(`/children/${child.child_id}/health-access/revoke`, { method: 'POST', headers: { 'X-Health-Access': token } }).catch(() => {});
   }, [child.child_id]);
 
-  const remaining = useCountdown(access?.seconds, access?.key, () => lock('Health access expired after 3 minutes and the record was locked again.'));
+  const remaining = useCountdown(access?.seconds, access?.key, () => lock('Time is up. The record was locked again.'));
 
+  const openWithToken = useCallback(async (token) => {
+    tokenRef.current = token;
+    const rec = await api(`/children/${child.child_id}/protected`, { headers: { 'X-Health-Access': token } });
+    setData(rec.data);
+    setAccess({ token, seconds: rec.data.remaining_seconds, key: Date.now() });
+  }, [child.child_id]);
   const open = async (body) => {
     const res = await api(`/children/${child.child_id}/health-access`, { method: 'POST', body });
-    tokenRef.current = res.data.access_token;
-    const rec = await api(`/children/${child.child_id}/protected`, { headers: { 'X-Health-Access': res.data.access_token } });
-    setData(rec.data);
-    setAccess({ token: res.data.access_token, seconds: rec.data.remaining_seconds, key: Date.now() });
+    await openWithToken(res.data.access_token);
+  };
+  // Staff: the child may already be unlocked from the legal records panel, or get locked from there.
+  useEffect(() => {
+    if (isAdmin) return undefined;
+    const sync = (e) => {
+      if (e && (e.detail.kind !== 'health' || e.detail.id !== String(child.child_id))) return;
+      const g = readGrant('health', child.child_id);
+      if (g?.health_access_token && !tokenRef.current) openWithToken(g.health_access_token).catch(() => {});
+      if (!g && tokenRef.current) { setAccess(null); setData(null); setEditing(null); tokenRef.current = null; }
+    };
+    sync();
+    window.addEventListener('caresphere-unlock', sync);
+    return () => window.removeEventListener('caresphere-unlock', sync);
+  }, [child.child_id, isAdmin, openWithToken]);
+  const onUnlocked = async (result) => {
+    setAskToken(false);
+    saveGrant('health', child.child_id, result.grant, result.expires_at, { purpose: result.purpose, health_access_token: result.health_access_token });
   };
 
   const save = async (kind, body) => {
@@ -77,20 +105,20 @@ export default function ProtectedRecord({ child }) {
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-navy-900"><Lock className="h-5 w-5 text-white" /></div>
           <p className="mt-3 font-semibold text-navy-900">Health record and case files are locked</p>
           <p className="mt-1 max-w-sm text-sm text-slate-500">
-            {isAdmin ? 'Confirm your password to open them for 3 minutes.'
-              : 'Generate a token, scan it with your phone, and type the Token ID within 60 seconds. Access lasts 3 minutes.'}
+            {isAdmin ? 'Administrators have full access. Opening them is recorded.'
+              : 'State your purpose, scan the QR with your phone, and type the Token ID it shows. This also opens the child\'s adoption legal records.'}
           </p>
           <div className="phi-blur mt-4 w-full max-w-sm select-none space-y-2 text-left text-sm text-slate-400" aria-hidden>
             <p>Blood type ●●●</p><p>Allergies ●●●●●●●●</p><p>Background ●●●●●●●●●●●●●●</p>
           </div>
           {isAdmin
-            ? <Button className="mt-4" onClick={() => setAskPassword(true)}><KeyRound className="h-4 w-4" /> Verify with password</Button>
-            : <Button className="mt-4" onClick={() => setAskToken(true)}><ScanLine className="h-4 w-4" /> Verify token</Button>}
+            ? <Button className="mt-4" onClick={() => open({}).catch((err) => toast(err.message, 'error'))}><KeyRound className="h-4 w-4" /> Open (Admin full access)</Button>
+            : child.assigned_staff_id === user.user_id
+              ? <Button className="mt-4" onClick={() => setAskToken(true)}><ScanLine className="h-4 w-4" /> Unlock sensitive sections</Button>
+              : <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700" role="status">You're not assigned to this record. Ask an Admin to assign you.</p>}
         </div>
-        {isAdmin && <PasswordModal open={askPassword} onClose={() => setAskPassword(false)}
-          onSubmit={async (password) => { await open({ password }); setAskPassword(false); }} />}
-        {!isAdmin && <TokenVerifyModal open={askToken} onClose={() => setAskToken(false)} scope="child" targetId={child.child_id}
-          onVerify={async (tokenId) => { await open({ token_id: tokenId }); setAskToken(false); }} />}
+        {!isAdmin && <TokenVerifyModal open={askToken} onClose={() => setAskToken(false)} recordType="health" recordId={child.child_id}
+          recordLabel={`Child record ${child.child_id}`} onUnlocked={onUnlocked} />}
       </Card>
     );
   }
@@ -170,27 +198,5 @@ function EditForm({ fields, initial, onSave, onCancel }) {
         <Button loading={saving} onClick={submit}>Save</Button>
       </div>
     </div>
-  );
-}
-
-function PasswordModal({ open, onClose, onSubmit }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { if (open) { setPassword(''); setError(null); } }, [open]);
-  const submit = async () => {
-    if (!password) { setError(new Error('Enter your password.')); return; }
-    setBusy(true); setError(null);
-    try { await onSubmit(password); } catch (err) { setError(err); } finally { setBusy(false); }
-  };
-  return (
-    <Modal open={open} onClose={onClose} title="Confirm it's you" size="sm"
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={submit}>Open for 3 minutes</Button></>}>
-      <ErrorNote error={error} />
-      <Field label="Your password" hint="Re-authentication is required each time health records or case files are opened.">
-        <input className="input" type="password" autoComplete="current-password" value={password}
-          onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submit(); }} />
-      </Field>
-    </Modal>
   );
 }

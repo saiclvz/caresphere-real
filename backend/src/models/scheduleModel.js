@@ -1,8 +1,17 @@
 const { pool } = require('../config/db');
 
-const SELECT = `SELECT s.schedule_id, s.user_id, u.full_name, s.shift_date, s.start_time, s.end_time,
-                       s.assignment, s.created_at
-                  FROM tbl_staff_schedules s JOIN tbl_users u ON u.user_id = s.user_id`;
+/**
+ * Shifts with their area, note and "ends next day" flag. Flags for the week view: the staff account is
+ * deactivated, the account isn't Staff (older shifts could be given to Admins), or the area text was
+ * never matched to the area list.
+ */
+const SELECT = `SELECT s.schedule_id, s.user_id, u.full_name, s.shift_date, s.start_time, s.end_time, s.ends_next_day,
+                       s.assignment, s.area_id, a.name AS area_name, s.note, s.batch_id, s.created_at,
+                       (u.is_active = FALSE) AS staff_inactive, (r.role_name <> 'Staff') AS not_staff, (s.area_id IS NULL) AS area_unmapped
+                  FROM tbl_staff_schedules s JOIN tbl_users u ON u.user_id = s.user_id JOIN tbl_roles r ON r.role_id = u.role_id
+                  LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id`;
+const shape = (r) => ({ ...r, ends_next_day: !!r.ends_next_day, staff_inactive: !!r.staff_inactive, not_staff: !!r.not_staff, area_unmapped: !!r.area_unmapped,
+  area_label: r.area_name || r.assignment });
 
 module.exports = {
   async list({ from, to, userId }) {
@@ -11,34 +20,21 @@ module.exports = {
     if (userId) { sql += ' AND s.user_id = ?'; params.push(userId); }
     sql += ' ORDER BY s.shift_date, s.start_time, u.full_name';
     const [rows] = await pool.query(sql, params);
-    return rows;
+    return rows.map(shape);
   },
   async findById(id) {
     const [rows] = await pool.query(`${SELECT} WHERE s.schedule_id = ?`, [id]);
-    return rows[0] || null;
+    return rows[0] ? shape(rows[0]) : null;
   },
-  async hasOverlap({ user_id, shift_date, start_time, end_time, excludeId }) {
+  /** Which kinds of records each staff member is assigned (for small icons on shift cards; counts only). */
+  async assignedAreas(userIds) {
+    if (!userIds.length) return {};
     const [rows] = await pool.query(
-      `SELECT 1 FROM tbl_staff_schedules
-        WHERE user_id = ? AND shift_date = ? AND start_time < ? AND end_time > ?
-          ${excludeId ? 'AND schedule_id <> ?' : ''} LIMIT 1`,
-      excludeId ? [user_id, shift_date, end_time, start_time, excludeId] : [user_id, shift_date, end_time, start_time]);
-    return rows.length > 0;
-  },
-  async create(s) {
-    const [res] = await pool.query(
-      `INSERT INTO tbl_staff_schedules (user_id, shift_date, start_time, end_time, assignment, created_by)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [s.user_id, s.shift_date, s.start_time, s.end_time, s.assignment, s.created_by]);
-    return res.insertId;
-  },
-  async update(id, s) {
-    await pool.query(
-      `UPDATE tbl_staff_schedules SET user_id = ?, shift_date = ?, start_time = ?, end_time = ?, assignment = ?
-        WHERE schedule_id = ?`,
-      [s.user_id, s.shift_date, s.start_time, s.end_time, s.assignment, id]);
-  },
-  async remove(id) {
-    await pool.query('DELETE FROM tbl_staff_schedules WHERE schedule_id = ?', [id]);
+      `SELECT user_id, SUM(kind = 'health') AS health, SUM(kind = 'adoption') AS adoption, SUM(kind = 'transition') AS transition FROM (
+         SELECT assigned_staff_id AS user_id, 'health' AS kind FROM tbl_children WHERE assigned_staff_id IN (?) AND status = 'Active'
+         UNION ALL SELECT assigned_staff_id, 'adoption' FROM tbl_adoption_applications WHERE assigned_staff_id IN (?) AND status NOT IN ('Draft', 'Closed', 'Declined', 'Withdrawn')
+         UNION ALL SELECT assigned_staff_id, 'transition' FROM tbl_transition_reviews WHERE assigned_staff_id IN (?) AND review_status <> 'Completed'
+       ) x GROUP BY user_id`, [userIds, userIds, userIds]);
+    return Object.fromEntries(rows.map((r) => [r.user_id, { health: Number(r.health) > 0, adoption: Number(r.adoption) > 0, transition: Number(r.transition) > 0 }]));
   },
 };

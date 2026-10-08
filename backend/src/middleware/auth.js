@@ -2,6 +2,10 @@ const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 const { pool } = require('../config/db');
 const HttpError = require('../utils/HttpError');
+const { logSecurityEvent } = require('../utils/audit');
+
+// Idle timeout (RA 10175): a session with no activity for this long is signed out.
+const IDLE_MINUTES = Math.max(5, Number(process.env.SESSION_IDLE_MINUTES) || 30);
 
 /** Verifies the Bearer JWT, checks the denylist, and loads the live user record. */
 const sessionError = (message) => Object.assign(new HttpError(401, message), { session: true });
@@ -39,6 +43,23 @@ async function authenticate(req, res, next) {
       throw sessionError('Administrator accounts must sign in with two-step verification. Sign in again.');
     }
 
+    // Idle timeout. Background polling (header X-Background: 1) does not count as activity.
+    const [[activity]] = await pool.query(
+      'SELECT (last_seen < NOW() - INTERVAL ? MINUTE) AS idle, (last_seen < NOW() - INTERVAL 60 SECOND) AS stale FROM tbl_session_activity WHERE jti = ?',
+      [IDLE_MINUTES, decoded.jti]);
+    if (activity?.idle) {
+      await pool.query('INSERT IGNORE INTO tbl_revoked_tokens (jti, expires_at) VALUES (?, FROM_UNIXTIME(?))', [decoded.jti, decoded.exp]);
+      // Signing out (here, for inactivity) locks sensitive sections again, as on Sign out.
+      await pool.query('DELETE FROM tbl_protected_grants WHERE user_id = ?', [user.user_id]);
+      await require('../services/unlockService').endForUser(user.user_id);
+      throw sessionError(`You were signed out after ${IDLE_MINUTES} minutes without activity. Sign in again.`);
+    }
+    if (req.headers['x-background'] !== '1' && (!activity || activity.stale)) {
+      await pool.query(
+        'INSERT INTO tbl_session_activity (jti, user_id, last_seen) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE last_seen = NOW()',
+        [decoded.jti, user.user_id]);
+    }
+
     // Role is read from the database, not trusted from the token, so role
     // changes and deactivations take effect immediately.
     req.user = {
@@ -47,7 +68,7 @@ async function authenticate(req, res, next) {
       email: user.email,
       role: user.role_name,
     };
-    req.auth = { jti: decoded.jti, exp: decoded.exp };
+    req.auth = { jti: decoded.jti, exp: decoded.exp, iat: decoded.iat };
     next();
   } catch (err) {
     next(err);
@@ -58,6 +79,7 @@ async function authenticate(req, res, next) {
 const authorize = (...roles) => (req, res, next) => {
   if (!req.user) return next(sessionError('Sign in to continue.'));
   if (!roles.includes(req.user.role)) {
+    logSecurityEvent(req, 'UNAUTHORIZED_ACCESS', { detail: `${req.method} ${req.originalUrl}`.slice(0, 300) });
     return next(new HttpError(403, 'Your role does not have access to this resource.'));
   }
   next();

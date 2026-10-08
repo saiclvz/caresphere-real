@@ -3,7 +3,33 @@ const env = require('../config/env');
 const User = require('../models/userModel');
 const HttpError = require('../utils/HttpError');
 const { requireFields, isEmail, oneOf, toBool } = require('../utils/validate');
-const { logActivity } = require('../utils/audit');
+const { logActivity, logActivityWith } = require('../utils/audit');
+const { withTransaction } = require('../config/db');
+const Notify = require('../services/notifications');
+
+/**
+ * Activating or deactivating an account, its audit entry and notifications in one transaction:
+ * other Admins (info), the donor themself, and, for a Staff account, Admins are told how many
+ * records lost their active assigned staff member.
+ */
+async function changeActive(req, user, active) {
+  await withTransaction(async (conn) => {
+    await User.setActive(user.user_id, active, conn);
+    await logActivityWith(conn, req, active ? 'REACTIVATE_USER' : 'DEACTIVATE_USER', `User #${user.user_id} (${user.email})`);
+    await Notify.toAdmins(conn, 'admin_account_changed', { params: { role: user.role, change: active ? 'reactivated' : 'deactivated', id: user.user_id }, exceptUserId: req.user.user_id });
+    if (user.role === 'Donor') await Notify.emit(conn, active ? 'account_reactivated' : 'account_deactivated', { userId: user.user_id });
+    if (user.role === 'Staff' && !active) {
+      const [[c]] = await conn.query(
+        `SELECT (SELECT COUNT(*) FROM tbl_adoption_applications WHERE assigned_staff_id = ? AND status NOT IN ('Draft', 'Closed', 'Declined', 'Withdrawn'))
+              + (SELECT COUNT(*) FROM tbl_transition_reviews WHERE assigned_staff_id = ? AND review_status <> 'Completed')
+              + (SELECT COUNT(*) FROM tbl_children WHERE assigned_staff_id = ? AND status = 'Active') AS n`, [user.user_id, user.user_id, user.user_id]);
+      if (Number(c.n)) {
+        await Notify.toAdmins(conn, 'admin_unassigned', { params: { count: Number(c.n), where: '/adoptions' }, groupKey: `unassigned:user:${user.user_id}`, mode: 'set' });
+      }
+    }
+  });
+}
+const { problem: passwordProblem } = require('../utils/passwordPolicy');
 const mfa = require('../services/mfaService');
 
 const ROLES = ['Admin', 'Staff', 'Donor'];
@@ -30,19 +56,31 @@ exports.create = async (req, res) => {
   const fullName = String(req.body.full_name).trim();
   if (!isEmail(email) || email.length > 100) throw new HttpError(400, 'Enter a valid email address.');
   if (fullName.length < 2 || fullName.length > 100) throw new HttpError(400, 'Full name must be 2-100 characters.');
-  if (String(req.body.password).length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
+  const weak = passwordProblem(String(req.body.password), { email, name: fullName });
+  if (weak) throw new HttpError(400, weak);
+  if (!req.body.confirm_password) throw new HttpError(400, 'Confirm password is required.');
+  if (String(req.body.confirm_password) !== String(req.body.password)) throw new HttpError(400, 'Passwords do not match.');
   const role = cleanRole(req.body.role);
   if (await User.findByEmailWithHash(email)) throw new HttpError(409, 'An account with this email already exists.');
 
-  const id = await User.create({
-    full_name: fullName,
-    email,
-    password_hash: await bcrypt.hash(String(req.body.password), env.bcryptRounds),
-    role_id: await User.roleId(role),
+  const hash = await bcrypt.hash(String(req.body.password), env.bcryptRounds);
+  const roleId = await User.roleId(role);
+  const id = await withTransaction(async (conn) => {
+    const newId = await User.create({ full_name: fullName, email, password_hash: hash, role_id: roleId }, conn);
+    await logActivityWith(conn, req, `CREATE_USER (${role})`, `User #${newId}`);
+    await Notify.toAdmins(conn, 'admin_account_changed', { params: { role, change: 'created', id: newId }, exceptUserId: req.user.user_id });
+    return newId;
   });
-  await logActivity(req, `CREATE_USER (${role})`, `User #${id}`);
   res.status(201).json({ success: true, data: await User.findById(id) });
 };
+
+/** Rules for turning an account off. Throws 409 with a clear message. */
+async function assertCanDeactivate(req, user) {
+  if (user.user_id === req.user.user_id) throw new HttpError(409, 'You cannot deactivate your own account.');
+  if (user.role === 'Admin' && user.is_active && (await User.countActiveAdmins()) <= 1) {
+    throw new HttpError(409, 'This is the last active administrator. Activate or create another administrator first.');
+  }
+}
 
 exports.update = async (req, res) => {
   const id = Number(req.params.id);
@@ -61,23 +99,56 @@ exports.update = async (req, res) => {
     fields.email = v;
   }
   const demoting = req.body.role !== undefined && req.body.role !== 'Admin' && user.role === 'Admin';
-  const deactivating = req.body.is_active !== undefined && !toBool(req.body.is_active) && user.role === 'Admin';
-  if ((demoting || deactivating) && (await User.countActiveAdmins()) <= 1) {
+  if (demoting && id === req.user.user_id) throw new HttpError(409, 'You cannot remove your own administrator access.');
+  if (demoting && user.is_active && (await User.countActiveAdmins()) <= 1) {
     throw new HttpError(409, 'At least one active administrator must remain.');
   }
-  if (id === req.user.user_id && (demoting || deactivating)) {
-    throw new HttpError(409, 'You cannot remove your own administrator access.');
-  }
   if (req.body.role !== undefined) fields.role_id = await User.roleId(cleanRole(req.body.role));
-  if (req.body.is_active !== undefined) fields.is_active = toBool(req.body.is_active);
+  // Active status changes go through the same rules as the Deactivate/Reactivate action.
+  const nextActive = req.body.is_active !== undefined ? toBool(req.body.is_active) : !!user.is_active;
+  const activeChanged = nextActive !== !!user.is_active;
+  if (activeChanged && !nextActive) await assertCanDeactivate(req, user);
   if (req.body.password) {
-    if (String(req.body.password).length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
+    const weak = passwordProblem(String(req.body.password), { email: fields.email || user.email, name: fields.full_name || user.full_name });
+    if (weak) throw new HttpError(400, weak);
+    if (!req.body.confirm_password) throw new HttpError(400, 'Confirm new password is required.');
+    if (String(req.body.confirm_password) !== String(req.body.password)) throw new HttpError(400, 'Passwords do not match.');
     fields.password_hash = await bcrypt.hash(String(req.body.password), env.bcryptRounds);
   }
+  // Two-step verification is only for Admins: changing an Admin to another role clears it.
+  const leavingAdmin = req.body.role !== undefined && cleanRole(req.body.role) !== 'Admin' && user.role === 'Admin';
 
-  await User.update(id, fields);
-  await logActivity(req, `UPDATE_USER (${Object.keys(fields).filter((k) => k !== 'password_hash').join(', ') || 'password'})`, `User #${id}`);
+  if (Object.keys(fields).length) {
+    await User.update(id, fields);
+    if (leavingAdmin) {
+      await mfa.reset(id);
+      await logActivity(req, 'MFA_CLEARED (no longer an administrator)', `User #${id}`);
+    }
+    await logActivity(req, `UPDATE_USER (${Object.keys(fields).filter((k) => k !== 'password_hash').join(', ') || 'password'})`, `User #${id}`);
+  }
+  if (activeChanged) await changeActive(req, user, nextActive);
   res.json({ success: true, data: await User.findById(id) });
+};
+
+/**
+ * PUT /api/users/:id/active { is_active } (Admin) - Deactivate or Reactivate.
+ * Deactivated users can't sign in and their sessions end. Their data and history stay.
+ */
+exports.setActive = async (req, res) => {
+  const id = Number(req.params.id);
+  const user = await User.findById(id);
+  if (!user) throw new HttpError(404, 'User not found.');
+  if (req.body?.is_active === undefined) throw new HttpError(400, 'is_active is required.');
+  const active = toBool(req.body.is_active);
+  if (active === !!user.is_active) {
+    return res.json({ success: true, data: user, message: `${user.full_name} is already ${active ? 'active' : 'deactivated'}.` });
+  }
+  if (!active) await assertCanDeactivate(req, user);
+  await changeActive(req, user, active);
+  res.json({
+    success: true, data: await User.findById(id),
+    message: active ? `${user.full_name} can sign in again.` : `${user.full_name} was deactivated and signed out.`,
+  });
 };
 
 /**
@@ -90,6 +161,8 @@ exports.resetMfa = async (req, res) => {
   if (id === req.user.user_id) throw new HttpError(409, 'You cannot reset your own two-step verification. Ask another administrator.');
   const target = await User.findById(id);
   if (!target) throw new HttpError(404, 'User not found.');
+  // Two-step verification is required only for Admins, so only Admin accounts can be reset.
+  if (target.role !== 'Admin') throw new HttpError(409, 'Two-step verification applies only to administrator accounts.');
   if (!target.mfa_enabled) throw new HttpError(409, 'This account has no two-step verification set up.');
 
   const used = await mfa.verifyStepUp(req.user.user_id, req.body?.code);
@@ -101,17 +174,4 @@ exports.resetMfa = async (req, res) => {
   await mfa.reset(id);
   await logActivity(req, 'MFA_RESET', `User #${id}`);
   res.json({ success: true, message: `Two-step verification was reset for ${target.full_name}. They will set it up again at their next sign-in.` });
-};
-
-exports.remove = async (req, res) => {
-  const id = Number(req.params.id);
-  if (id === req.user.user_id) throw new HttpError(409, 'You cannot delete your own account.');
-  const user = await User.findById(id);
-  if (!user) throw new HttpError(404, 'User not found.');
-  if (user.role === 'Admin' && (await User.countActiveAdmins()) <= 1) {
-    throw new HttpError(409, 'At least one active administrator must remain.');
-  }
-  await User.remove(id); // FK errors -> 409 "deactivate instead" via error middleware
-  await logActivity(req, 'DELETE_USER', `User #${id}`);
-  res.json({ success: true, message: 'User deleted.' });
 };

@@ -1,3 +1,4 @@
+import DueSoon from '../components/adoption/DueSoon';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AlertTriangle, Baby, Boxes, HandCoins, UserCheck, UtensilsCrossed } from 'lucide-react';
@@ -26,12 +27,21 @@ export default function Dashboard() {
         <StatTile icon={Baby} label="Children in care" value={s.active_children} />
         <StatTile icon={Boxes} label="Items low on stock" value={s.low_stock} tone={s.low_stock ? 'amber' : 'green'} />
         <StatTile icon={UserCheck} label={`Visitors on site (${s.visitors_today} today)`} value={s.visitors_on_site} tone="slate" />
-        <StatTile icon={HandCoins} label="Donations this month" value={formatMoney(s.donations_this_month)} tone="green" />
+        <Card className="flex items-center gap-4 p-5">
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><HandCoins className="h-5 w-5" aria-hidden /></div>
+          <div className="min-w-0">
+            <p className="text-2xl font-semibold tabular-nums text-navy-900">{formatMoney(d.donations.received_total)}</p>
+            <p className="text-sm text-slate-500">Received from {d.donations.count} donation{d.donations.count === 1 ? '' : 's'}</p>
+            <Link to="/donations" className="text-sm font-medium text-brand hover:underline">View donations</Link>
+          </div>
+        </Card>
       </div>
+
+      <div className="mt-6"><DueSoon /></div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <Card className="p-5 xl:col-span-2">
-          <h2 className="font-semibold text-navy-900">Donations, last 6 months</h2>
+          <h2 className="font-semibold text-navy-900">Donations received, last 6 months</h2>
           <div className="mt-4 h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={d.donation_trend}>

@@ -7,11 +7,21 @@ import { useApp } from '../context/AppContext';
 import { Badge, Button, Card, EmptyState, ErrorNote, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
 import { formatDateTime, formatMoney } from '../lib/format';
 
-const STATUS_TONE = { Pending: 'amber', Received: 'green', Cancelled: 'slate' };
+const STATUS_TONE = { Pending: 'amber', Received: 'green', Cancelled: 'slate', 'Pending verification': 'amber', Rejected: 'red', Paid: 'green', Confirmed: 'green' };
+const ATTEMPT_TONE = { pending: 'amber', failed: 'red', cancelled: 'slate', expired: 'slate' };
 
 export default function DonorHistory() {
   const { query, toast } = useApp();
   const { data, loading, error, reload } = useApi(`/donor/history${qs({ q: query })}`);
+  // Payment records: show Paid / Confirmed / Rejected on donations, and list attempts that created no donation.
+  const pays = useApi('/donor/payments');
+  const payByDonation = Object.fromEntries((pays.data?.data || []).filter((p) => p.donation_id).map((p) => [p.donation_id, p]));
+  const attempts = (pays.data?.data || []).filter((p) => !p.donation_id);
+  const statusOf = (d) => {
+    const p = payByDonation[d.donation_id];
+    if (!p) return d.status;
+    return { paid: 'Paid', confirmed: 'Confirmed', rejected: 'Rejected', pending_verification: 'Pending verification' }[p.status] || d.status;
+  };
   const [busy, setBusy] = useState(null);
   const rows = data?.data || [];
 
@@ -25,7 +35,7 @@ export default function DonorHistory() {
   return (
     <>
       <PageHeader title="Donation history"
-        description="Donations you submit show as Pending until the home confirms they were received. A signed receipt is available after that."
+        description="E-wallet donations show as Paid once PayMongo confirms them. Bank transfers show as Pending verification until the staff confirm them. A signed receipt is available after that."
         actions={<Link to="/donate"><Button><Gift className="h-4 w-4" /> Donate</Button></Link>} />
       <Card>
         {loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (
@@ -43,16 +53,17 @@ export default function DonorHistory() {
                   <td className="td whitespace-nowrap">{formatDateTime(d.created_at)}</td>
                   <td className="td whitespace-nowrap font-semibold text-navy-900">{formatMoney(d.amount)}</td>
                   <td className="td">{d.payment_method}{d.item_description && <p className="text-xs text-slate-500">{d.item_description}</p>}</td>
-                  <td className="td"><Badge tone={STATUS_TONE[d.status]}>{d.status}</Badge></td>
+                  <td className="td"><Badge tone={STATUS_TONE[statusOf(d)]}>{statusOf(d)}</Badge>
+                    {payByDonation[d.donation_id]?.rejection_reason && <p className="mt-1 max-w-[14rem] text-xs text-red-700">Reason: {payByDonation[d.donation_id].rejection_reason}</p>}</td>
                   <td className="td">{d.supported_children || <span className="text-slate-400">General support</span>}</td>
-                  <td className="td max-w-xs text-sm">{d.reason_for_donation || <span className="text-slate-400">-</span>}</td>
+                  <td className="td max-w-xs text-sm">{d.reason_for_donation || d.reason_category || <span className="text-slate-400">-</span>}</td>
                   <td className="td max-w-xs text-sm">{d.allocation_notes || <span className="text-slate-400">Not recorded yet</span>}</td>
                   <td className="td text-right">
                     {d.status === 'Received' ? (
                       <Button size="sm" variant="secondary" loading={busy === d.donation_id} onClick={() => getReceipt(d.donation_id)}>
                         <Download className="h-3.5 w-3.5" /> Receipt
                       </Button>
-                    ) : <span className="text-xs text-slate-400">{d.status === 'Pending' ? 'Awaiting confirmation' : ''}</span>}
+                    ) : <span className="text-xs text-slate-400">{['Pending', 'Pending verification'].includes(d.status) ? 'Awaiting confirmation' : ''}</span>}
                   </td>
                 </tr>
               ))}
@@ -60,6 +71,25 @@ export default function DonorHistory() {
           </Table>
         )}
       </Card>
+      {attempts.length > 0 && (
+        <Card className="mt-6">
+          <h2 className="px-4 pt-4 font-semibold text-navy-900">Online payments that didn't complete</h2>
+          <p className="px-4 text-xs text-slate-500">No money was taken for these and no donation was recorded.</p>
+          <Table>
+            <thead className="bg-slate-50"><tr><th className="th">Date</th><th className="th">Amount</th><th className="th">Method</th><th className="th">Status</th></tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {attempts.map((p) => (
+                <tr key={p.payment_id}>
+                  <td className="td whitespace-nowrap">{formatDateTime(p.created_at)}</td>
+                  <td className="td whitespace-nowrap font-semibold text-navy-900">{formatMoney(p.amount)}</td>
+                  <td className="td">{p.method_name}</td>
+                  <td className="td"><Badge tone={ATTEMPT_TONE[p.status]}>{p.status_label}</Badge></td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Card>
+      )}
     </>
   );
 }

@@ -1,4 +1,6 @@
-const { pool } = require('../config/db');
+const { pageInfo } = require('../utils/pagination');
+const { newPublicRef } = require('../utils/publicRef');
+const { pool, withTransaction } = require('../config/db');
 const env = require('../config/env');
 const { encrypt, decrypt } = require('../utils/crypto');
 const { likeParam } = require('../utils/validate');
@@ -7,11 +9,12 @@ const { likeParam } = require('../utils/validate');
 const AGE = 'TIMESTAMPDIFF(YEAR, c.dob, CURDATE())';
 
 const LIST_COLS = `c.child_id, c.first_name, c.last_name, c.full_name, c.gender, c.dob, c.admission_date,
-  c.status, c.urgent_needs, c.public_bio, c.is_public, c.updated_at,
+  c.public_ref, c.assigned_staff_id, (SELECT full_name FROM tbl_users WHERE user_id = c.assigned_staff_id) AS assigned_staff_name, c.status, c.urgent_needs, c.public_bio, c.is_public, c.available_for_adoption, c.placement_status,
+  c.cdclaa_number, c.cdclaa_date, c.cdclaa_verified_at, c.updated_at,
   (c.profile_photo_path IS NOT NULL) AS has_photo,
   ${AGE} AS age,
   (${AGE} >= ${Number(env.transitionAge)} AND c.status = 'Active') AS transition_flag,
-  tr.review_status AS transition_status`;
+  tr.review_status AS transition_status, tr.review_id AS transition_review_id`;
 
 // Encrypted at rest (AES-256-GCM, PHI key); only returned with a health-access token.
 const PHI_FIELDS = ['blood_type', 'allergies', 'vaccinations', 'prescriptions', 'doctor_notes'];
@@ -20,7 +23,8 @@ const CASE_FIELDS = ['background_care_info', 'guardian_family_info'];
 function withPhotoUrl(row) {
   if (!row) return row;
   const v = row.updated_at ? new Date(row.updated_at).getTime() || 0 : 0;
-  return { ...row, has_photo: !!row.has_photo, is_public: !!row.is_public, transition_flag: !!row.transition_flag,
+  return { ...row, has_photo: !!row.has_photo, is_public: !!row.is_public, available_for_adoption: !!row.available_for_adoption,
+    transition_flag: !!row.transition_flag,
     profile_photo_url: row.has_photo ? `/children/${row.child_id}/photo?v=${v}` : null };
 }
 
@@ -29,7 +33,11 @@ module.exports = {
   CASE_FIELDS,
 
   /** Default order: youngest first (ascending age). */
-  async list({ status, search, flagged } = {}) {
+  /**
+   * Children list (youngest first). With `paging` ({ page, limit } from utils/pagination),
+   * returns { rows, pagination }; without it, returns every matching row.
+   */
+  async list({ status, search, flagged, paging } = {}) {
     const where = [];
     const params = [];
     if (status) { where.push('c.status = ?'); params.push(status); }
@@ -39,12 +47,20 @@ module.exports = {
       const p = likeParam(search);
       params.push(p, p, p, p);
     }
-    const [rows] = await pool.query(
-      `SELECT ${LIST_COLS}
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const select = `SELECT ${LIST_COLS}
          FROM tbl_children c LEFT JOIN tbl_transition_reviews tr ON tr.child_id = c.child_id
-        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-        ORDER BY c.dob DESC, c.child_id`, params);
-    return rows.map(withPhotoUrl);
+        ${whereSql}
+        ORDER BY c.dob DESC, c.child_id`;
+    if (!paging) {
+      const [rows] = await pool.query(select, params);
+      return rows.map(withPhotoUrl);
+    }
+    const [[{ n }]] = await pool.query(`SELECT COUNT(*) AS n FROM tbl_children c ${whereSql}`, params);
+    const info = pageInfo(paging, Number(n));
+    const [rows] = await pool.query(`${select} LIMIT ? OFFSET ?`, [...params, info.limit, info.offset]);
+    const { offset, ...pagination } = info;
+    return { rows: rows.map(withPhotoUrl), pagination };
   },
 
   async findById(id) {
@@ -57,7 +73,7 @@ module.exports = {
   },
 
   async photoPath(id) {
-    const [rows] = await pool.query('SELECT profile_photo_path, is_public, status FROM tbl_children WHERE child_id = ?', [id]);
+    const [rows] = await pool.query('SELECT profile_photo_path, is_public, available_for_adoption, status FROM tbl_children WHERE child_id = ?', [id]);
     return rows[0] || null;
   },
 
@@ -74,11 +90,11 @@ module.exports = {
 
   async insert(conn, c) {
     await conn.query(
-      `INSERT INTO tbl_children (child_id, first_name, last_name, gender, dob, admission_date, status,
-         urgent_needs, public_bio, is_public, background_care_info, guardian_family_info, profile_photo_path, qr_token)
-       VALUES (?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?, ?, ?, ?)`,
-      [c.child_id, c.first_name, c.last_name, c.gender, c.dob, c.admission_date, c.urgent_needs, c.public_bio,
-        c.is_public ? 1 : 0, encrypt(c.background_care_info, env.phiKey), encrypt(c.guardian_family_info, env.phiKey),
+      `INSERT INTO tbl_children (child_id, public_ref, first_name, last_name, gender, dob, admission_date, status,
+         urgent_needs, public_bio, is_public, available_for_adoption, background_care_info, guardian_family_info, profile_photo_path, qr_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [c.child_id, newPublicRef(), c.first_name, c.last_name, c.gender, c.dob, c.admission_date, c.urgent_needs, c.public_bio,
+        c.is_public ? 1 : 0, c.available_for_adoption ? 1 : 0, encrypt(c.background_care_info, env.phiKey), encrypt(c.guardian_family_info, env.phiKey),
         c.profile_photo_path || null, c.qr_token]);
   },
 
@@ -91,14 +107,32 @@ module.exports = {
       [...keys.map((k) => data[k]), id]);
   },
 
+  /**
+   * Deletes a child. The "whole child record" protected entry is created automatically the first
+   * time staff open the child's page; when no token was ever issued for it, it goes with the child.
+   */
   async remove(id) {
-    await pool.query('DELETE FROM tbl_children WHERE child_id = ?', [id]);
+    await withTransaction(async (conn) => {
+      await conn.query(
+        `DELETE g FROM tbl_protected_grants g JOIN tbl_protected_records r ON r.record_id = g.record_id
+          WHERE r.child_id = ? AND r.record_type = 'child_record'`, [id]);
+      await conn.query(
+        `DELETE r FROM tbl_protected_records r LEFT JOIN tbl_protected_tokens t ON t.record_id = r.record_id
+          WHERE r.child_id = ? AND r.record_type = 'child_record' AND t.token_id IS NULL`, [id]);
+      await conn.query('DELETE FROM tbl_children WHERE child_id = ?', [id]);
+    });
   },
 
+  /** Records that must be kept: discharge, adoption, CDCLAA, sealed records, releases, or tokens issued for the child. */
   async hasProtectedHistory(id) {
     const [[row]] = await pool.query(
       `SELECT (SELECT COUNT(*) FROM tbl_child_discharge_history WHERE child_id = ?) +
-              (SELECT COUNT(*) FROM tbl_adoption_applications WHERE child_id = ?) AS n`, [id, id]);
+              (SELECT COUNT(*) FROM tbl_adoption_applications WHERE matched_child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_children WHERE child_id = ? AND cdclaa_number IS NOT NULL) +
+              (SELECT COUNT(*) FROM tbl_sealed_records WHERE child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_information_releases WHERE child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_protected_tokens t JOIN tbl_protected_records r ON r.record_id = t.record_id WHERE r.child_id = ?) AS n`,
+      [id, id, id, id, id, id]);
     return Number(row.n) > 0;
   },
 
@@ -155,75 +189,94 @@ module.exports = {
     return rows;
   },
 
-  /** Adoption status history for one child, derived from applications and their reviews. */
+  /** Adoption history for one child: applications matched to the child and their status changes (staff view). */
   async adoptionHistory(id) {
     const [rows] = await pool.query(
-      `SELECT a.application_id, a.reference_no, a.status, a.legal_name, a.submitted_at, a.completed_at,
-              rv.status_from, rv.status_to, rv.created_at AS changed_at, u.full_name AS changed_by
+      `SELECT a.application_id, a.reference_no, a.status, ad.legal_name, a.submitted_at, a.finalized_at,
+              h.from_status, h.to_status, h.created_at AS changed_at, u.full_name AS changed_by
          FROM tbl_adoption_applications a
-         LEFT JOIN tbl_adoption_reviews rv ON rv.application_id = a.application_id AND rv.status_to IS NOT NULL
-         LEFT JOIN tbl_users u ON u.user_id = rv.reviewer_id
-        WHERE a.child_id = ? ORDER BY a.submitted_at DESC, rv.created_at`, [id]);
+         LEFT JOIN tbl_applicant_details ad ON ad.application_id = a.application_id
+         LEFT JOIN tbl_application_status_history h ON h.application_id = a.application_id AND h.to_status IS NOT NULL
+         LEFT JOIN tbl_users u ON u.user_id = h.changed_by
+        WHERE a.matched_child_id = ? AND a.status <> 'Draft' ORDER BY a.submitted_at DESC, h.created_at, h.history_id`, [id]);
     const apps = new Map();
     for (const r of rows) {
       if (!apps.has(r.application_id)) {
         apps.set(r.application_id, { application_id: r.application_id, reference_no: r.reference_no, status: r.status,
-          applicant: r.legal_name, submitted_at: r.submitted_at, completed_at: r.completed_at, changes: [] });
+          applicant: r.legal_name, submitted_at: r.submitted_at, finalized_at: r.finalized_at, completed_at: r.finalized_at, changes: [] });
       }
-      if (r.status_to) apps.get(r.application_id).changes.push({ from: r.status_from, to: r.status_to, at: r.changed_at, by: r.changed_by });
+      if (r.to_status) apps.get(r.application_id).changes.push({ from: r.from_status, to: r.to_status, at: r.changed_at, by: r.changed_by });
     }
     return [...apps.values()];
   },
 
   // ---------------- Transition Review (18+) ----------------
   /** Flags every Active child who has turned 18. Never changes status or deletes. */
+  /**
+   * Adds Active children who turned 18 to Transition Review and, in the same transaction, tells every
+   * Admin (case number only; one grouped notification when several are added together).
+   */
   async syncTransitionFlags() {
-    const [result] = await pool.query(
-      `INSERT IGNORE INTO tbl_transition_reviews (child_id, review_status)
-       SELECT c.child_id, 'For Review' FROM tbl_children c
-        WHERE c.status = 'Active' AND ${AGE} >= ?`, [env.transitionAge]);
-    return result.affectedRows;
+    return withTransaction(async (conn) => {
+      const [due] = await conn.query(
+        `SELECT c.child_id FROM tbl_children c LEFT JOIN tbl_transition_reviews tr ON tr.child_id = c.child_id
+          WHERE c.status = 'Active' AND ${AGE} >= ? AND tr.review_id IS NULL FOR UPDATE`, [env.transitionAge]);
+      if (!due.length) return 0;
+      await conn.query("INSERT IGNORE INTO tbl_transition_reviews (child_id, review_status) VALUES ?", [due.map((d) => [d.child_id, 'For Review'])]);
+      const Notify = require('../services/notifications');
+      await Notify.toAdmins(conn, 'admin_child_turned_18', {
+        params: { count: due.length, ref: due[0].child_id }, groupKey: `turned_18:${due.map((d) => d.child_id).join(',').slice(0, 120)}`,
+      });
+      return due.length;
+    });
   },
 
   // ---------------- Public (sanitised) profiles ----------------
   /**
    * Donors and adoption applicants only ever see: a privacy name (first name +
    * last initial), age, gender, photo, public bio and needs, and only for
-   * children an administrator has marked as public.
+   * children an administrator has marked as public (donations), or that staff have
+   * marked as available for adoption (Adopt a Child).
    */
-  async publicList({ search, forAdoption = false } = {}) {
-    const where = ["c.status = 'Active'", 'c.is_public = TRUE'];
+  async publicList({ search, forAdoption = false, paging } = {}) {
+    const where = ["c.status = 'Active'"];
     const params = [];
-    if (forAdoption) where.push(`${AGE} < ${Number(env.transitionAge)}`);
+    // Adopt a Child: Available, verified CDCLAA, not already placed.
+    if (forAdoption) where.push('c.available_for_adoption = TRUE', 'c.cdclaa_verified_at IS NOT NULL', "c.placement_status = 'None'", `${AGE} < ${Number(env.transitionAge)}`);
+    else where.push('c.is_public = TRUE');
     if (search) {
       where.push('(c.first_name LIKE ? OR c.public_bio LIKE ? OR c.urgent_needs LIKE ?)');
       const p = likeParam(search);
       params.push(p, p, p);
+    }
+    let pagination = null;
+    let limitSql = '';
+    const limitParams = [];
+    if (paging) {
+      const [[{ n }]] = await pool.query(`SELECT COUNT(*) AS n FROM tbl_children c WHERE ${where.join(' AND ')}`, params);
+      const { offset, ...info } = pageInfo(paging, Number(n));
+      pagination = info;
+      limitSql = 'LIMIT ? OFFSET ?';
+      limitParams.push(info.limit, offset);
     }
     const [rows] = await pool.query(
       `SELECT c.child_id, c.first_name, LEFT(c.last_name, 1) AS last_initial, c.gender, c.public_bio, c.urgent_needs,
               c.updated_at, (c.profile_photo_path IS NOT NULL) AS has_photo,
               ${AGE} AS age, TIMESTAMPDIFF(MONTH, c.dob, CURDATE()) AS age_months
          FROM tbl_children c WHERE ${where.join(' AND ')}
-        ORDER BY c.dob DESC`, params);
-    return rows.map((r) => ({
+        ORDER BY c.dob DESC, c.child_id ${limitSql}`, [...params, ...limitParams]);
+    const mapped = rows.map((r) => ({
       child_id: r.child_id,
       display_name: `${r.first_name} ${r.last_initial}.`,
       gender: r.gender,
       age: r.age,
       age_label: r.age >= 1 ? `${r.age} yr${r.age === 1 ? '' : 's'}` : `${r.age_months} mo`,
-      public_bio: r.public_bio,
-      urgent_needs: r.urgent_needs,
-      photo_url: r.has_photo ? `/public-children/${r.child_id}/photo?v=${new Date(r.updated_at).getTime() || 0}` : null,
+      // Adopt a Child (RA 7610 / RA 11930): no photo or other identifying details for donors.
+      public_bio: forAdoption ? null : r.public_bio,
+      urgent_needs: forAdoption ? null : r.urgent_needs,
+      photo_url: !forAdoption && r.has_photo ? `/public-children/${r.child_id}/photo?v=${new Date(r.updated_at).getTime() || 0}` : null,
     }));
+    return paging ? { rows: mapped, pagination } : mapped;
   },
 
-  async publicEligible(ids, { forAdoption = false } = {}) {
-    if (!ids.length) return [];
-    const [rows] = await pool.query(
-      `SELECT c.child_id FROM tbl_children c
-        WHERE c.child_id IN (?) AND c.status = 'Active' AND c.is_public = TRUE
-          ${forAdoption ? `AND ${AGE} < ${Number(env.transitionAge)}` : ''}`, [ids]);
-    return rows.map((r) => r.child_id);
-  },
 };

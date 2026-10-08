@@ -12,7 +12,9 @@
     "reset-mfa": "node scripts/resetMfa.js",
     "gen-keys": "node scripts/generateKeys.js"
   },
-  "engines": { "node": ">=18.0.0" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -22,6 +24,7 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.11.3",
+    "pdf-lib": "^1.17.1",
     "pdfkit": "^0.15.0",
     "qrcode": "^1.5.4"
   }

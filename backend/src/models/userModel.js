@@ -26,8 +26,8 @@ module.exports = {
     const [rows] = await pool.query('SELECT role_id FROM tbl_roles WHERE role_name = ?', [roleName]);
     return rows[0]?.role_id || null;
   },
-  async create({ full_name, email, password_hash, role_id }) {
-    const [res] = await pool.query(
+  async create({ full_name, email, password_hash, role_id }, conn = pool) {
+    const [res] = await conn.query(
       'INSERT INTO tbl_users (full_name, email, password_hash, role_id) VALUES (?, ?, ?, ?)',
       [full_name, email, password_hash, role_id]);
     return res.insertId;
@@ -38,8 +38,18 @@ module.exports = {
     await pool.query(`UPDATE tbl_users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE user_id = ?`,
       [...keys.map((k) => fields[k]), id]);
   },
-  async remove(id) {
-    await pool.query('DELETE FROM tbl_users WHERE user_id = ?', [id]);
+  /**
+   * Activates or deactivates an account. Deactivating also ends every existing session
+   * (tokens issued before now stop working) and cancels any pending MFA sign-in.
+   * Data and history are kept.
+   */
+  async setActive(id, active, conn = pool) {
+    if (active) {
+      await conn.query('UPDATE tbl_users SET is_active = TRUE WHERE user_id = ?', [id]);
+      return;
+    }
+    await conn.query('UPDATE tbl_users SET is_active = FALSE, tokens_valid_after = NOW() WHERE user_id = ?', [id]);
+    await conn.query('UPDATE tbl_mfa_challenges SET consumed_at = NOW() WHERE user_id = ? AND consumed_at IS NULL', [id]);
   },
   async countActiveAdmins() {
     const [rows] = await pool.query(

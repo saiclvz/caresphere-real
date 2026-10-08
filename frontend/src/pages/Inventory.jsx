@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Boxes, Minus, Pencil, Plus, Trash2 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Boxes, Pencil, Plus, Trash2 } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api, qs } from '../api/client';
 import { useApp } from '../context/AppContext';
@@ -72,17 +73,13 @@ export default function Inventory() {
   const [editing, setEditing] = useState(null); // null | 'new' | item
   const [deleting, setDeleting] = useState(null);
   const [busy, setBusy] = useState(null);
-  const rows = data?.data || [];
+  // ?item=ID (linked from a visitor donation) shows just that item until cleared.
+  const [params, setParams] = useSearchParams();
+  const focusId = Number(params.get('item')) || null;
+  const allRows = data?.data || [];
+  const rows = focusId ? allRows.filter((i) => i.item_id === focusId) : allRows;
 
   const afterChange = async (message) => { await reload(); refreshLowStock(); if (message) toast(message); };
-
-  const adjust = async (item, delta) => {
-    const quantity = item.quantity + delta;
-    if (quantity < 0) return;
-    setBusy(item.item_id);
-    try { await api(`/inventory/${item.item_id}`, { method: 'PUT', body: { quantity } }); await afterChange(); }
-    catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
-  };
 
   const remove = async () => {
     setBusy('delete');
@@ -94,6 +91,12 @@ export default function Inventory() {
     <>
       <PageHeader title="Inventory" description="Supplies on hand. Items at or below their low-stock level are flagged and shown to donors."
         actions={<Button onClick={() => setEditing('new')}><Plus className="h-4 w-4" /> Add item</Button>} />
+      {focusId && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+          <span>Showing the item from a visitor donation.</span>
+          <Button size="sm" variant="secondary" onClick={() => setParams({})}>Show all items</Button>
+        </div>
+      )}
       <label className="mb-4 inline-flex items-center gap-2 text-sm text-slate-600">
         <input type="checkbox" className="h-4 w-4 accent-brand" checked={lowOnly} onChange={(e) => setLowOnly(e.target.checked)} /> Show low stock only
       </label>
@@ -113,11 +116,8 @@ export default function Inventory() {
                     <div className="mt-0.5 flex gap-1">{i.is_low_stock ? <Badge tone="amber">Low stock</Badge> : null}{i.is_needed_by_donors ? <Badge tone="blue">Donor request</Badge> : null}</div></td>
                   <td className="td">{i.category}</td>
                   <td className="td">
-                    <div className="flex items-center gap-1.5">
-                      <Button size="sm" variant="ghost" aria-label={`Decrease ${i.item_name}`} disabled={busy === i.item_id || i.quantity === 0} onClick={() => adjust(i, -1)}><Minus className="h-3.5 w-3.5" /></Button>
-                      <span className="w-10 text-center font-semibold tabular-nums text-navy-900">{i.quantity}</span>
-                      <Button size="sm" variant="ghost" aria-label={`Increase ${i.item_name}`} disabled={busy === i.item_id} onClick={() => adjust(i, 1)}><Plus className="h-3.5 w-3.5" /></Button>
-                    </div>
+                    {/* Change stock with Edit (recorded in the stock history) or through in-kind donations. */}
+                    <span className="font-semibold tabular-nums text-navy-900">{i.quantity}</span>
                   </td>
                   <td className="td">{i.min_threshold}</td>
                   <td className="td text-xs text-slate-500">{formatDateTime(i.updated_at)}{i.last_updated_by_name ? <><br />{i.last_updated_by_name}</> : null}</td>

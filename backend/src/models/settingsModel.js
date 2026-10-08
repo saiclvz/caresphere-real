@@ -1,6 +1,8 @@
 const { pool } = require('../config/db');
 
-const ALLOWED = ['org_name', 'org_address', 'org_contact', 'receipt_footer', 'default_min_threshold'];
+// dpo_*: Data Protection Officer contact (RA 10173), shown in the privacy notice.
+const ALLOWED = ['org_name', 'org_address', 'org_contact', 'receipt_footer', 'default_min_threshold', 'dpo_name', 'dpo_email', 'dpo_phone',
+  'access_log_retention_months', 'staff_download_doc_types', 'default_allocation_text', 'notification_retention_days'];
 
 module.exports = {
   ALLOWED,

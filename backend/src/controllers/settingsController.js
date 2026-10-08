@@ -5,8 +5,10 @@ const { logActivity } = require('../utils/audit');
 
 exports.get = async (req, res) => {
   const all = await Settings.getAll();
-  // Non-admins only need the organisation name for the UI.
-  res.json({ success: true, data: req.user.role === 'Admin' ? all : { org_name: all.org_name } });
+  // Non-admins get only what the UI shows them: the organisation name and the Data Protection
+  // Officer contact (shown in the applicant's privacy notice).
+  res.json({ success: true, data: req.user.role === 'Admin' ? all
+    : { org_name: all.org_name, dpo_name: all.dpo_name, dpo_email: all.dpo_email, dpo_phone: all.dpo_phone } });
 };
 
 exports.update = async (req, res) => {
@@ -18,6 +20,16 @@ exports.update = async (req, res) => {
       throw new HttpError(400, 'Default minimum threshold must be a whole number.');
     }
     if (k === 'org_name' && !String(v).trim()) throw new HttpError(400, 'Organisation name is required.');
+    if (k === 'default_allocation_text' && (!String(v).trim() || String(v).length > 300)) throw new HttpError(400, 'Default allocation must be 1 to 300 characters.');
+    if (k === 'notification_retention_days' && !(/^\d{2,4}$/.test(String(v)) && Number(v) >= 30 && Number(v) <= 3650)) throw new HttpError(400, 'Notification retention must be 30 to 3650 days.');
+    if (k === 'access_log_retention_months' && !(/^\d{1,3}$/.test(String(v)) && Number(v) >= 12 && Number(v) <= 240)) {
+      throw new HttpError(400, 'Access log retention must be 12 to 240 months.');
+    }
+    if (k === 'staff_download_doc_types') {
+      const { DOCUMENTS, STAGE_DOCUMENTS } = require('../config/adoptionForm');
+      const bad = String(v).split(',').map((x) => x.trim()).filter(Boolean).filter((x) => !DOCUMENTS[x] && !STAGE_DOCUMENTS[x]);
+      if (bad.length) throw new HttpError(400, `Unknown document types: ${bad.join(', ')}.`);
+    }
   }
   await withTransaction(async (conn) => {
     for (const [k, v] of updates) await Settings.set(k, String(v).trim(), req.user.user_id, conn);

@@ -26,5 +26,3 @@
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* html5-qrcode renders its own markup; keep the video inside our frame */
-#qr-reader video { border-radius: 12px; width: 100% !important; object-fit: cover; }

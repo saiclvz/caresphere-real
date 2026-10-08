@@ -1,50 +1,52 @@
 const ExcelJS = require('exceljs');
 const { pool } = require('../config/db');
-const Log = require('../models/logModel');
 const Settings = require('../models/settingsModel');
 const pdf = require('../services/pdfService');
-const { toInt, requireDate, localToday, likeParam } = require('../utils/validate');
+const { requireDate, localToday } = require('../utils/validate');
+const { readPagination } = require('../utils/pagination');
 const { logActivity } = require('../utils/audit');
+const A = require('../services/auditLog');
+const C = require('../config/auditCategories');
 
-function filters(q) {
-  return {
-    userId: q.user_id ? toInt(q.user_id, 'user_id', { min: 1 }) : undefined,
-    entity: q.entity ? String(q.entity).slice(0, 50) : undefined,
-    action: q.action ? String(q.action).slice(0, 50) : undefined,
-    from: q.from ? requireDate(q.from, 'from') : undefined,
-    to: q.to ? requireDate(q.to, 'to') : undefined,
-    search: (q.search || q.q) ? String(q.search || q.q).slice(0, 100) : undefined,
-  };
-}
-
+/**
+ * GET /api/audit-logs?category=&type=&ended=&from=&to=&user_id=&event=&q=&page=&limit= (Admin)
+ * One log over the activity, health-access and unlock tables; filtered, sorted (newest first) and
+ * paged on the server. Rows carry friendly labels and reference numbers only.
+ */
 exports.list = async (req, res) => {
-  const page = req.query.page ? toInt(req.query.page, 'page', { min: 1 }) : 1;
-  const pageSize = req.query.page_size ? toInt(req.query.page_size, 'page_size', { min: 10, max: 200 }) : 50;
-  res.json({ success: true, ...(await Log.list(filters(req.query), { page, pageSize })) });
+  const paging = readPagination(req.query) || { page: 1, limit: 20 };
+  const result = await A.list(req.query, paging);
+  res.json({ success: true, data: result.rows, pagination: result.pagination });
 };
 
-/** GET /api/audit-logs/export - .xlsx via exceljs */
+/** GET /api/audit-logs/options?from=&to= (Admin) - dropdown contents, with category counts for the date range. */
+exports.options = async (req, res) => {
+  const [counts, users] = await Promise.all([A.categoryCounts(req.query), A.users()]);
+  res.json({ success: true, data: {
+    categories: C.CATEGORIES.map((c) => ({ ...c, count: counts[c.key] || 0 })), total: counts.all,
+    record_types: C.RECORD_TYPES, ended: C.ENDED.map(({ key, label }) => ({ key, label })),
+    events: C.EVENTS.map(({ key, label, category }) => ({ key, label, category })), users,
+  } });
+};
+
+/** GET /api/audit-logs/export (Admin) - the filtered entries as Excel: category, friendly action, raw code, reference only. */
 exports.exportXlsx = async (req, res) => {
-  const rows = await Log.all(filters(req.query));
+  const rows = await A.all(req.query);
+  const label = Object.fromEntries(C.CATEGORIES.map((c) => [c.key, c.label]));
   const wb = new ExcelJS.Workbook();
   wb.creator = 'CareSphere';
   wb.created = new Date();
   const ws = wb.addWorksheet('Audit log', { views: [{ state: 'frozen', ySplit: 1 }] });
   ws.columns = [
-    { header: 'Log ID', key: 'log_id', width: 10 },
-    { header: 'Timestamp', key: 'timestamp', width: 21 },
-    { header: 'User', key: 'full_name', width: 26 },
-    { header: 'Role', key: 'role', width: 10 },
-    { header: 'Action', key: 'action_performed', width: 48 },
-    { header: 'Target', key: 'target_entity', width: 26 },
-    { header: 'IP address', key: 'ip_address', width: 18 },
+    { header: 'When', key: 'at', width: 21 }, { header: 'Category', key: 'category', width: 24 }, { header: 'User', key: 'user_name', width: 24 },
+    { header: 'Role', key: 'user_role', width: 10 }, { header: 'Action', key: 'label', width: 44 }, { header: 'Event code', key: 'code', width: 40 },
+    { header: 'Record', key: 'record', width: 20 }, { header: 'Device', key: 'device', width: 10 }, { header: 'Detail', key: 'detail', width: 44 },
   ];
   ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
-  rows.forEach((r) => ws.addRow(r));
-  ws.autoFilter = { from: 'A1', to: 'G1' };
-
-  await logActivity(req, `EXPORT_AUDIT_LOG (${rows.length} rows)`, 'Audit log');
+  rows.forEach((r) => ws.addRow({ ...r, category: label[r.category] || r.category, record: r.record?.label || '' }));
+  ws.autoFilter = { from: 'A1', to: 'I1' };
+  await logActivity(req, `EXPORT_AUDIT_LOG (${rows.length} rows; ${A.describeFilters(req.query)})`, 'Audit log');
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="CareSphere-Audit-Log-${localToday()}.xlsx"`);
   await wb.xlsx.write(res);
@@ -69,8 +71,11 @@ exports.complianceReport = async (req, res) => {
             SUM(event = 'TOKEN_DENIED') AS denied, SUM(event = 'TOKEN_EXPIRED') AS expired
        FROM tbl_health_data_access_logs WHERE DATE(created_at) BETWEEN ? AND ?`, p);
   const adoptions = await one(
-    `SELECT COUNT(*) AS submitted, SUM(status = 'Completed') AS completed, SUM(status IN ('Submitted','Under Review','Additional Documents Required','Approved')) AS open
-       FROM tbl_adoption_applications WHERE DATE(submitted_at) BETWEEN ? AND ?`, p);
+    `SELECT COUNT(*) AS submitted,
+            (SELECT COUNT(*) FROM tbl_adoption_applications WHERE DATE(finalized_at) BETWEEN ? AND ?) AS completed,
+            SUM(status IN (?)) AS open
+       FROM tbl_adoption_applications WHERE submitted_at IS NOT NULL AND DATE(submitted_at) BETWEEN ? AND ?`,
+    [...p, require('../config/adoptionWorkflow').ACTIVE.filter((x) => x !== 'Draft'), ...p]);
   const discharges = await one('SELECT COUNT(*) AS count FROM tbl_child_discharge_history WHERE discharge_date BETWEEN ? AND ?', p);
   const inventory = await one(
     `SELECT COUNT(*) AS total, SUM(quantity <= min_threshold) AS low FROM tbl_inventory`);
@@ -86,6 +91,14 @@ exports.complianceReport = async (req, res) => {
        FROM tbl_visitors WHERE DATE(check_in_time) BETWEEN ? AND ?`, p);
   const meals = await one('SELECT COUNT(*) AS count FROM tbl_meals WHERE scheduled_date BETWEEN ? AND ?', p);
 
+  // The audit section follows the Activity log filters (period = From/To, or this month).
+  const auditQuery = { ...req.query, from, to };
+  const counts = await A.categoryCounts(auditQuery);
+  const filtered = await A.list(auditQuery, { page: 1, limit: 10 });
+  const audit = {
+    filters: A.describeFilters(auditQuery), total: filtered.pagination.total,
+    by_category: C.CATEGORIES.map((c) => ({ label: c.label, count: counts[c.key] || 0 })),
+  };
   const n = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Number(v) || 0]));
   const data = {
     from, to,
@@ -93,31 +106,12 @@ exports.complianceReport = async (req, res) => {
     generated_by: req.user.full_name,
     children: n(children), phi: n(phi), adoptions: n(adoptions), discharges: n(discharges),
     inventory: { ...n(inventory), low_items: lowItems },
-    donations: n(donations), visitors: n(visitors), meals: n(meals),
+    donations: n(donations), visitors: n(visitors), meals: n(meals), audit,
   };
 
-  await logActivity(req, `GENERATE_COMPLIANCE_REPORT (${from} to ${to})`, 'Reports');
+  await logActivity(req, `GENERATE_COMPLIANCE_REPORT (${A.describeFilters(auditQuery)})`, 'Reports');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="CareSphere-Compliance-${from}-to-${to}.pdf"`);
   pdf.complianceReport(res, data, await Settings.getAll());
 };
 
-/** GET /api/audit-logs/health-access?q=&from=&to= (Admin) - every grant, denial, view, update and expiry */
-exports.healthAccess = async (req, res) => {
-  const where = [];
-  const params = [];
-  if (req.query.from) { where.push('DATE(l.created_at) >= ?'); params.push(requireDate(req.query.from, 'from')); }
-  if (req.query.to) { where.push('DATE(l.created_at) <= ?'); params.push(requireDate(req.query.to, 'to')); }
-  if (req.query.q) {
-    where.push('(u.full_name LIKE ? OR l.child_id LIKE ? OR l.event LIKE ? OR l.detail LIKE ?)');
-    const p = likeParam(req.query.q);
-    params.push(p, p, p, p);
-  }
-  const [rows] = await pool.query(
-    `SELECT l.log_id, l.child_id, l.event, l.detail, l.ip_address, l.created_at, u.full_name AS user_name, r.role_name AS user_role
-       FROM tbl_health_data_access_logs l
-       LEFT JOIN tbl_users u ON u.user_id = l.user_id LEFT JOIN tbl_roles r ON r.role_id = u.role_id
-      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY l.created_at DESC, l.log_id DESC LIMIT 1000`, params);
-  res.json({ success: true, data: rows });
-};

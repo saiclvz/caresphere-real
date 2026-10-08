@@ -1,3 +1,4 @@
+import { clearAllGrants } from '../lib/grants';
 const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '') + '/api';
 const TOKEN_KEY = 'caresphere.session';
 
@@ -43,7 +44,7 @@ export async function api(path, { method = 'GET', body, headers = {}, raw = fals
     const data = await res.clone().json().catch(() => ({}));
     // Only an expired or revoked sign-in logs the user out. A wrong Token ID,
     // wrong password or expired health access is a normal 401 handled by the page.
-    if (data.session) unauthorizedHandler();
+    if (data.session) { clearAllGrants(); unauthorizedHandler(); }
   }
 
   if (raw) {
@@ -58,6 +59,11 @@ export async function api(path, { method = 'GET', body, headers = {}, raw = fals
   // A non-JSON 5xx comes from the dev proxy, not the API: the backend is not reachable.
   if (!res.ok && res.status >= 500 && !data) {
     throw new ApiError('Cannot reach the CareSphere API. Check that the backend terminal is running (npm run dev) with no errors.', res.status);
+  }
+  // A non-JSON 401/403 never comes from CareSphere: something in between (for example a VS Code dev
+  // tunnel asking for its own sign-in) refused the request.
+  if ((res.status === 401 || res.status === 403) && !data) {
+    throw new ApiError('The request was stopped before it reached CareSphere (for example by a dev tunnel sign-in). Open CareSphere at its LAN address instead.', res.status);
   }
   if (!res.ok) throw new ApiError(data?.message || `Request failed (${res.status})`, res.status, data?.details);
   return data;

@@ -12,7 +12,7 @@ export default function MySchedule() {
 
   return (
     <>
-      <PageHeader title="My schedule" description="Your shifts for the next four weeks." />
+      <PageHeader title="My schedule" description="Your shifts for the next four weeks. You get a notification when one is added, changed or removed." />
       {error && <ErrorNote error={error} onRetry={reload} />}
       <Card>
         {loading && !data ? <Spinner /> : shifts.length === 0 ? (
@@ -31,8 +31,9 @@ export default function MySchedule() {
                   <div className="flex-1 space-y-2">
                     {list.map((s) => (
                       <div key={s.schedule_id}>
-                        <p className="text-sm font-medium text-navy-900">{formatTime(s.start_time)} – {formatTime(s.end_time)}</p>
-                        <p className="text-sm text-slate-500">{s.assignment}</p>
+                        <p className="text-sm font-medium text-navy-900">{formatTime(s.start_time)} – {formatTime(s.end_time)}{s.ends_next_day ? ' (next day)' : ''}</p>
+                        <p className="text-sm text-slate-500">{s.area_label}</p>
+                        {s.note && <p className="text-xs text-slate-500">{s.note}</p>}
                       </div>
                     ))}
                   </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, FileHeart, GraduationCap, ImagePlus, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, GraduationCap, ImagePlus, Pencil, Trash2 } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -11,7 +11,12 @@ import ChildForm from './ChildForm';
 import { STATUS_TONE } from './Children';
 import { Badge, Button, Card, ConfirmModal, ErrorNote, Spinner } from '../components/ui';
 import { formatDate, formatDateTime } from '../lib/format';
-import { MB, checkFile, readFile } from '../lib/files';
+import { MB, checkFile } from '../lib/files';
+import PhotoCropDialog from '../components/PhotoCropDialog';
+import ChildLegalPanel from '../components/adoption/ChildLegalPanel';
+import ChildCaseWorker from '../components/ChildCaseWorker';
+import LockedSection from '../components/LockedSection';
+import AdoptionHistorySection from '../components/adoption/AdoptionHistorySection';
 
 function Info({ label, children }) {
   return (
@@ -32,6 +37,7 @@ export default function ChildDetail() {
   const [editing, setEditing] = useState(false);
   const [confirm, setConfirm] = useState(null); // 'delete' | 'photo'
   const [busy, setBusy] = useState(false);
+  const [cropFile, setCropFile] = useState(null); // picked photo waiting in the crop step
 
   if (loading && !data) return <Spinner />;
   if (error) return <ErrorNote error={error} onRetry={reload} />;
@@ -43,13 +49,16 @@ export default function ChildDetail() {
     if (!file) return;
     const problem = checkFile(file, { types: ['image/jpeg', 'image/png'], maxBytes: 5 * MB });
     if (problem) { toast(`Profile photo: ${problem}`, 'error'); return; }
-    setBusy(true);
-    try {
-      const f = await readFile(file);
-      await api(`/children/${child.child_id}/photo`, { method: 'POST', body: { photo: { name: f.name, data: f.data } } });
-      await reload();
-      toast('Photo updated.');
-    } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+    setCropFile(file); // crop first; only the cropped image is uploaded
+  };
+
+  // Called by the crop dialog. Errors are shown in the dialog so the user can retry or cancel.
+  const saveCropped = async (out) => {
+    await api(`/children/${child.child_id}/photo`, { method: 'POST', body: { photo: { name: out.name, data: out.data } } });
+    URL.revokeObjectURL(out.preview);
+    setCropFile(null);
+    await reload();
+    toast('Photo updated.');
   };
 
   const doConfirm = async () => {
@@ -81,8 +90,9 @@ export default function ChildDetail() {
             <p className="text-sm text-slate-500">{child.child_id}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Badge tone={STATUS_TONE[child.status]}>{child.status}</Badge>
-              {child.transition_flag && <Badge tone="amber"><GraduationCap className="h-3 w-3" /> Transition Review (18+){child.transition_status ? `: ${child.transition_status}` : ''}</Badge>}
-              {child.is_public && <Badge tone="blue">Shown on portals</Badge>}
+              {child.transition_flag && <Badge tone="amber"><GraduationCap className="h-3 w-3" /> Transition Review (18+){!child.transition_locked && child.transition_status ? `: ${child.transition_status}` : ''}</Badge>}
+              {child.is_public && <Badge tone="blue">Shown on donor portal</Badge>}
+              {child.available_for_adoption && <Badge tone="green">Available for adoption</Badge>}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -111,13 +121,17 @@ export default function ChildDetail() {
             </dl>
           </Card>
 
-          {child.transition_flag && (
+          {child.transition_flag && child.transition_locked && (
+            <LockedSection title="Transition Review (18+)" area="transition"
+              to={child.transition_review_id ? `/transition-reviews/${child.transition_review_id}` : '/transitions'} />
+          )}
+          {child.transition_flag && !child.transition_locked && (
             <Card className="border-amber-200 p-5">
               <h2 className="flex items-center gap-2 font-semibold text-navy-900"><GraduationCap className="h-4 w-4 text-amber-600" /> Transition Review (18+)</h2>
               <p className="mt-1 text-sm text-slate-600">
                 {child.first_name} has turned 18. The record stays active while a transition plan is prepared. Status: <strong>{child.transition_status || 'For Review'}</strong>.
               </p>
-              <Link to="/transitions" className="mt-3 inline-block text-sm font-medium text-brand hover:underline">Open Transition Review</Link>
+              <Link to={child.transition_review_id ? `/transition-reviews/${child.transition_review_id}` : '/transitions'} className="mt-3 inline-block text-sm font-medium text-brand hover:underline">Open Transition Review</Link>
             </Card>
           )}
 
@@ -137,27 +151,9 @@ export default function ChildDetail() {
             )}
           </Card>
 
-          <Card className="p-5">
-            <h2 className="mb-3 flex items-center gap-2 font-semibold text-navy-900"><FileHeart className="h-4 w-4" /> Adoption status history</h2>
-            {child.adoption_status_history.length === 0 ? <p className="text-sm text-slate-500">No adoption applications.</p> : (
-              <ul className="space-y-3">
-                {child.adoption_status_history.map((a) => (
-                  <li key={a.application_id} className="rounded-lg border border-slate-200 p-3 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <Link to={`/adoptions/${a.application_id}`} className="font-medium text-brand hover:underline">{a.reference_no}</Link>
-                      <Badge>{a.status}</Badge>
-                    </div>
-                    <p className="text-xs text-slate-500">{a.applicant} · submitted {formatDate(a.submitted_at)}</p>
-                    {a.changes.length > 0 && (
-                      <ol className="mt-2 space-y-0.5 text-xs text-slate-600">
-                        {a.changes.map((ch, i) => <li key={i}>{formatDateTime(ch.at)}: {ch.from} → {ch.to}{ch.by ? ` (${ch.by})` : ''}</li>)}
-                      </ol>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
+          <AdoptionHistorySection childId={child.child_id} />
+          {isAdmin && <ChildCaseWorker child={child} onSaved={reload} />}
+          {child.status === 'Active' && <ChildLegalPanel childId={child.child_id} onChanged={reload} />}
         </div>
 
         <div className="lg:col-span-3">
@@ -169,6 +165,7 @@ export default function ChildDetail() {
         <ChildForm initial={child} onClose={() => setEditing(false)}
           onSaved={() => { setEditing(false); reload(); toast('Changes saved.'); }} />
       )}
+      {cropFile && <PhotoCropDialog file={cropFile} onCancel={() => setCropFile(null)} onConfirm={saveCropped} />}
       <ConfirmModal open={!!confirm} onClose={() => setConfirm(null)} loading={busy} onConfirm={doConfirm}
         title={confirm === 'delete' ? 'Delete child record?' : 'Remove photo?'}
         confirmLabel={confirm === 'delete' ? 'Delete' : 'Remove'}

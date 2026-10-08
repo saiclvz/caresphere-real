@@ -26,7 +26,7 @@ async function logEvent(req, childId, event, detail = null) {
   }
 }
 
-async function issue(req, childId, method) {
+async function issue(req, childId, method, ttlSeconds = env.healthAccessTtlSeconds) {
   const token = crypto.randomBytes(32).toString('base64url');
   // One active grant per user per child: issuing a new one revokes the old.
   await pool.query(
@@ -35,9 +35,9 @@ async function issue(req, childId, method) {
   await pool.query(
     `INSERT INTO tbl_health_access_tokens (token_hash, user_id, child_id, method, issued_at, expires_at)
      VALUES (?, ?, ?, ?, NOW(), NOW() + INTERVAL ? SECOND)`,
-    [sha256(token), req.user.user_id, childId, method, env.healthAccessTtlSeconds]);
-  await logEvent(req, childId, 'TOKEN_ISSUED', `${method}, ${env.healthAccessTtlSeconds}s`);
-  return { access_token: token, remaining_seconds: env.healthAccessTtlSeconds, ttl_seconds: env.healthAccessTtlSeconds };
+    [sha256(token), req.user.user_id, childId, method, ttlSeconds]);
+  await logEvent(req, childId, 'TOKEN_ISSUED', `${method}, ${ttlSeconds}s`);
+  return { access_token: token, remaining_seconds: ttlSeconds, ttl_seconds: ttlSeconds };
 }
 
 /** Express middleware: requires a valid X-Health-Access token for req.params.id. */
@@ -64,7 +64,7 @@ async function requireHealthAccess(req, res, next) {
     if (Number(grant.remaining) <= 0) {
       await pool.query('UPDATE tbl_health_access_tokens SET revoked = TRUE WHERE token_id = ?', [grant.token_id]);
       await logEvent(req, childId, 'TOKEN_EXPIRED');
-      throw new HttpError(401, 'Health access expired after 3 minutes. Verify your access again.');
+      throw new HttpError(401, 'Health access expired. Unlock the record again.');
     }
     req.healthAccess = { token_id: grant.token_id, remaining_seconds: Number(grant.remaining) };
     next();
