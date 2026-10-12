@@ -1,27 +1,32 @@
 /**
  * Visit deletion when the visit has a donation. The Visitors page never creates donations
- * itself: donations are recorded through donationService.recordDonation.
+ * itself: donations are recorded through donationService.recordDonation. Donations are never
+ * deleted: "void" voids the donation (with a reason; its stock is reversed) and unlinks it.
  */
 const { withTransaction } = require('../config/db');
 const HttpError = require('../utils/HttpError');
-const { removeDonation } = require('./donationService');
+const { moveStock } = require('./donationService');
 
 /**
- * Deletes a visit. If a donation is linked to it, `choice` decides: 'keep' leaves the
- * donation on the Donations page (unlinked), 'remove' deletes it and reverses its stock.
+ * Deletes a visit. If a donation is linked to it, `choice` decides: 'keep' leaves the donation on the
+ * Donations page (unlinked); 'void' voids it (Admin, with a reason) and unlinks it. Both keep the donation row.
  */
-async function deleteVisit(visitorId, choice, userId) {
+async function deleteVisit(req, visitorId, choice, voidBody = {}) {
+  const LC = require('./donationLifecycle');
   return withTransaction(async (conn) => {
     const [[v]] = await conn.query('SELECT visitor_id FROM tbl_visitors WHERE visitor_id = ? FOR UPDATE', [visitorId]);
     if (!v) throw new HttpError(404, 'Visitor record not found.');
-    const [[d]] = await conn.query('SELECT donation_id FROM tbl_donations WHERE visit_id = ? FOR UPDATE', [visitorId]);
+    const [[d0]] = await conn.query('SELECT donation_id FROM tbl_donations WHERE visit_id = ? FOR UPDATE', [visitorId]);
     let reversed = [];
-    if (d) {
-      if (choice === 'remove') reversed = await removeDonation(conn, d.donation_id, userId);
-      else await conn.query('UPDATE tbl_donations SET visit_id = NULL WHERE donation_id = ?', [d.donation_id]);
+    if (d0) {
+      if (choice === 'void') {
+        const d = await LC.lockDonation(conn, d0.donation_id);
+        if (d.status !== 'Voided') reversed = await LC.voidDonation(conn, req, { ...d, amount: Number(d.amount), in_kind: d.payment_method === 'In-kind' }, voidBody, moveStock);
+      }
+      await conn.query('UPDATE tbl_donations SET visit_id = NULL, last_activity_at = NOW() WHERE donation_id = ?', [d0.donation_id]);
     }
     await conn.query('DELETE FROM tbl_visitors WHERE visitor_id = ?', [visitorId]);
-    return { donationId: d?.donation_id || null, reversed };
+    return { donationId: d0?.donation_id || null, reversed };
   });
 }
 

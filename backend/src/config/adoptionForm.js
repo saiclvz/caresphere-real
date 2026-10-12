@@ -25,9 +25,20 @@ const OPTIONS = {
   employment_status: ['Employed', 'Self-employed', 'Overseas worker', 'Retired', 'Not employed'],
   income_source: ['Pension', 'Remittance', 'Savings', 'Spouse income'],
   housing: ['Owned', 'Rented', 'Living with relatives', 'Other'],
-  id_type: ["Passport", "Driver's license", 'UMID', 'PhilSys National ID', 'Postal ID', "Voter's ID", 'PRC ID', 'Other'],
+  id_type: ["Passport", "Driver's license", 'UMID', 'PhilSys National ID', 'Postal ID', "Voter's ID", 'PRC ID', 'PhilHealth ID', 'Other'],
   citizenship: ['Filipino', 'Foreign national', 'Dual citizen'],
   yes_no: ['No', 'Yes'],
+  pref_age_range: ['0 to 2 years', '3 to 5 years', '6 to 9 years', '10 to 13 years', '14 to 17 years', 'Any age'],
+  pref_special_needs: ['No', 'Yes, mild or manageable needs', 'Yes, including significant needs'],
+  pref_siblings: ['No', 'Yes, two siblings', 'Yes, three or more siblings'],
+  pref_space: ['A room of their own', 'A shared room'],
+};
+
+/** Field groups shown as one box on the form. */
+const FIELD_GROUPS = {
+  address: { label: 'Address' },
+  adoptee: { label: 'About the child' },
+  preferences: { label: 'Preferences (optional)', note: 'For matching guidance only. They never decide a match alone, and only your social worker and the home\'s administrators see them.' },
 };
 const NOT_REGULAR = ['Stepparent', 'Relative', 'Relative_own_child', 'Adult'];
 
@@ -69,9 +80,12 @@ const FIELDS = {
   children_10_plus: { page: 2, label: 'Do you have marital or adopted children aged 10 or older?', type: 'select', required: true, options: OPTIONS.yes_no },
   nonmarital_children_10_plus: { page: 2, label: 'Do non-marital children aged 10 or older live with you (or are under your parental authority)?', type: 'select', required: true, options: OPTIONS.yes_no },
   has_adopted_before: { page: 2, label: 'Have you adopted a child before?', type: 'select', required: true, options: OPTIONS.yes_no },
-  adoptee_dob: { page: 2, label: "Date of birth of the child or person you want to adopt", type: 'date', required: true,
+  // "About the child": the child is already known in these categories (no matching).
+  adoptee_name: { page: 2, label: 'Full name of the child or person you want to adopt', type: 'text', required: true, max: 150, group: 'adoptee',
     when: { field: 'application_type', in: NOT_REGULAR } },
-  adoptee_relationship: { page: 2, label: 'Your relationship to them', type: 'text', required: true, max: 100,
+  adoptee_dob: { page: 2, label: "Date of birth of the child or person you want to adopt", type: 'date', required: true, group: 'adoptee',
+    when: { field: 'application_type', in: NOT_REGULAR } },
+  adoptee_relationship: { page: 2, label: 'Your relationship to them', type: 'text', required: true, max: 100, group: 'adoptee',
     when: { field: 'application_type', in: NOT_REGULAR } },
 
   // ---- page 3: identity documents (the ID type; the files are in DOCUMENTS)
@@ -88,7 +102,17 @@ const FIELDS = {
     when: { field: 'application_type', in: ['Regular', 'Stepparent', 'Relative', 'Adult'] } },
 
   // ---- page 8: reason for adoption
-  reason_for_adoption: { page: 8, label: 'Reason for adoption', type: 'textarea', required: true, max: 5000 },
+  reason_for_adoption: { page: 8, label: 'Reason for adoption', type: 'textarea', required: true, min: 50, max: 5000 },
+  // Preferences (optional, Regular adoption): guidance for matching only. They never decide a match alone and
+  // are seen only by the assigned social worker and administrators.
+  pref_age_range: { page: 8, label: 'Preferred age range of the child', type: 'select', required: false, options: OPTIONS.pref_age_range, group: 'preferences',
+    when: { field: 'application_type', in: ['Regular'] } },
+  pref_special_needs: { page: 8, label: 'Open to a child with health or special needs?', type: 'select', required: false, options: OPTIONS.pref_special_needs, group: 'preferences',
+    when: { field: 'application_type', in: ['Regular'] } },
+  pref_siblings: { page: 8, label: 'Open to adopting brothers or sisters together?', type: 'select', required: false, options: OPTIONS.pref_siblings, group: 'preferences',
+    when: { field: 'application_type', in: ['Regular'] } },
+  pref_space: { page: 8, label: 'Space for the child at home', type: 'select', required: false, options: OPTIONS.pref_space, group: 'preferences',
+    when: { field: 'application_type', in: ['Regular'] } },
 };
 
 /**
@@ -98,7 +122,9 @@ const FIELDS = {
  */
 const DOCUMENTS = {
   // page 3: identity and civil status
-  valid_id: { page: 3, label: 'Valid government-issued ID', required: true, multiple: false },
+  valid_id: { page: 3, label: 'Valid government-issued ID (front)', required: true, multiple: false, id_side: 'front' },
+  // Required for card IDs, optional for passports: enforced at submit from the ID type rules (tbl_id_type_rules).
+  valid_id_back: { page: 3, label: 'Valid government-issued ID (back)', required: false, multiple: false, id_side: 'back' },
   birth_certificate: { page: 3, label: 'PSA/SECPA birth certificate', required: true, multiple: true, hint: 'For every applicant.' },
   marriage_certificate: { page: 3, label: 'PSA/SECPA marriage certificate', required: true, multiple: false, when: { field: 'civil_status', in: ['Married'] } },
   cenomar: { page: 3, label: 'Certificate of No Marriage (CENOMAR), PSA/SECPA', required: true, multiple: false, when: { field: 'civil_status', in: ['Single'] } },
@@ -201,11 +227,11 @@ const PAGES = [
  * Regular goes through matching and trial custody; the others (the child is already known) skip them.
  */
 const APPLICATION_TYPES = {
-  Regular: { label: 'Regular (unrelated child)', track: 'Regular', hint: 'Adopting a child in the care of the home who is not related to you.' },
-  Stepparent: { label: "Stepparent (your spouse's child)", track: 'Relative', hint: "Adopting your spouse's child. Matching and trial custody are skipped." },
-  Relative: { label: 'Relative', track: 'Relative', hint: 'Adopting a relative within the fourth degree. Matching and trial custody are skipped.' },
-  Relative_own_child: { label: 'Your own non-marital child', track: 'Relative', hint: 'Adopting your own child born outside marriage. Matching and trial custody are skipped.' },
-  Adult: { label: 'Adult (18 or older)', track: 'Relative', hint: 'Adopting an adult you treated as your own child before they turned 18.' },
+  Regular: { label: 'Regular (unrelated child)', short: 'Regular', relationship: 'Unrelated', track: 'Regular', hint: 'Adopting a child in the care of the home who is not related to you.' },
+  Stepparent: { label: "Stepparent (your spouse's child)", short: 'Stepparent', relationship: "Spouse's child", track: 'Relative', hint: "Adopting your spouse's child. Matching and trial custody are skipped." },
+  Relative: { label: 'Relative', short: 'Relative', track: 'Relative', hint: 'Adopting a relative within the fourth degree. Matching and trial custody are skipped.' },
+  Relative_own_child: { label: 'Your own non-marital child', short: 'Own child', relationship: 'Own non-marital child', track: 'Relative', hint: 'Adopting your own child born outside marriage. Matching and trial custody are skipped.' },
+  Adult: { label: 'Adult (18 or older)', short: 'Adult', track: 'Relative', hint: 'Adopting an adult you treated as your own child before they turned 18.' },
 };
 const trackOf = (type) => APPLICATION_TYPES[type]?.track || 'Regular';
 
@@ -232,20 +258,31 @@ const CONSENT_TEXT = 'I declare that the information I have provided is true and
  * protected = record type for the Protected record QR and token rules (view needs a token for Staff).
  */
 const STAGE_DOCUMENTS = {
-  forum_certificate: { label: 'Adoption forum certificate', uploaders: ['Donor', 'Admin'], multiple: false },
-  case_study_report: { label: 'Social Case Study Report', uploaders: ['Staff', 'Admin'], multiple: false, protected: 'case_study' },
-  monitoring_report: { label: 'Monthly monitoring report', uploaders: ['Staff', 'Admin'], multiple: true, protected: 'monitoring_report' },
-  publication_proof: { label: 'Proof of publication', uploaders: ['Staff', 'Admin'], multiple: false },
+  forum_certificate: { label: 'Adoption forum certificate', uploaders: ['Donor', 'Admin'], multiple: false, group: 'applicant' },
+  case_study_report: { label: 'Social Case Study Report', uploaders: ['Staff', 'Admin'], multiple: false, protected: 'case_study', group: 'child' },
+  monitoring_report: { label: 'Monthly monitoring report', uploaders: ['Staff', 'Admin'], multiple: true, protected: 'monitoring_report', group: 'post_placement' },
+  publication_proof: { label: 'Proof of publication', uploaders: ['Staff', 'Admin'], multiple: false, group: 'legal' },
   // The matched child's documents (Regular adoptions). Required before "Petition filed"; the psychological
   // evaluation only when the child is 5 or older.
-  child_birth_certificate: { label: "Child's PSA/SECPA birth certificate or foundling certificate", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: true },
-  child_medical_evaluation: { label: "Child's medical evaluation and history", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: true },
-  child_psychological_evaluation: { label: "Child's psychological evaluation (5 years or older)", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: 'age5' },
-  child_photos: { label: "Recent photos of the child", uploaders: ['Staff', 'Admin'], multiple: true, tracks: ['Regular'], petition: true },
-  child_consent: { label: "Child's written consent (10 years or older)", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: 'age10' },
-  order_of_adoption: { label: 'Order of Adoption', uploaders: ['Admin'], multiple: false, protected: 'order_of_adoption' },
-  certificate_of_finality: { label: 'Certificate of Finality', uploaders: ['Admin'], multiple: false, protected: 'certificate_of_finality' },
+  child_birth_certificate: { label: "Child's PSA/SECPA birth certificate or foundling certificate", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: true, group: 'child' },
+  child_medical_evaluation: { label: "Child's medical evaluation and history", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: true, group: 'child' },
+  child_psychological_evaluation: { label: "Child's psychological evaluation (5 years or older)", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: 'age5', group: 'child' },
+  child_photos: { label: "Recent photos of the child", uploaders: ['Staff', 'Admin'], multiple: true, tracks: ['Regular'], petition: true, group: 'child' },
+  child_consent: { label: "Child's written consent (10 years or older)", uploaders: ['Staff', 'Admin'], multiple: false, tracks: ['Regular'], petition: 'age10', group: 'child' },
+  order_of_adoption: { label: 'Order of Adoption', uploaders: ['Admin'], multiple: false, protected: 'order_of_adoption', group: 'legal' },
+  certificate_of_finality: { label: 'Certificate of Finality', uploaders: ['Admin'], multiple: false, protected: 'certificate_of_finality', group: 'legal' },
 };
+
+/**
+ * Groups on the staff Documents tab. Every application document (DOCUMENTS) is an applicant document;
+ * the stage documents say their group above. Post-placement documents are listed once trial custody starts.
+ */
+const DOCUMENT_GROUPS = [
+  { key: 'applicant', label: 'Applicant documents', hint: 'Submitted by the applicant.' },
+  { key: 'child', label: 'Child documents', hint: 'Uploaded by the home.' },
+  { key: 'legal', label: 'Case and legal documents', hint: 'Uploaded by the home.' },
+  { key: 'post_placement', label: 'Post-placement', hint: 'From the start of trial custody.' },
+];
 
 const FILE_RULES = { types: ['application/pdf', 'image/png', 'image/jpeg'], extensions: ['pdf', 'png', 'jpg'], maxBytes: 10 * 1024 * 1024, maxFilesPerType: 10 };
 
@@ -288,6 +325,11 @@ function isVisible(def, data) {
  */
 function requirementOf(def, data) {
   if (!isVisible(def, data)) return 'Not applicable';
+  // The back of the ID follows the ID type rule (Settings > ID types): required for cards, optional for a passport.
+  if (def.id_side === 'back') {
+    const rule = data?.id_type ? require('../services/idTypes').cachedRule(data.id_type) : null;
+    return !data?.id_type || !rule || rule.needsBack ? 'Required' : 'Optional';
+  }
   if (!def.required) return 'Optional';
   const conds = def.when ? (Array.isArray(def.when) ? def.when : [def.when]) : [];
   return conds.some((c) => c.field !== 'application_type') ? 'Conditional' : 'Required';
@@ -311,24 +353,21 @@ function isRequired(def, data) {
 /** Everything the browser needs to build the form. */
 function formConfig() {
   return {
-    pages: PAGES, fields: FIELDS, documents: DOCUMENTS, options: OPTIONS,
+    pages: PAGES, fields: FIELDS, field_groups: FIELD_GROUPS, documents: DOCUMENTS, options: OPTIONS,
     address: { ncr: NCR, provinces: PROVINCES, city_lists: CITY_LISTS, other_city: OTHER_CITY },
     consent_text: CONSENT_TEXT, consent_version: CONSENT_VERSION, privacy_notice: PRIVACY_NOTICE,
-    application_types: APPLICATION_TYPES, stage_documents: STAGE_DOCUMENTS, file_rules: FILE_RULES, document_statuses: DOCUMENT_STATUSES,
+    application_types: APPLICATION_TYPES, stage_documents: STAGE_DOCUMENTS, document_groups: DOCUMENT_GROUPS, file_rules: FILE_RULES, document_statuses: DOCUMENT_STATUSES,
   };
 }
 
 /**
- * Document types no longer requested (removed by decision; not NACC requirements). Files already
- * uploaded under them are kept and still shown to staff with these labels; new uploads are refused.
+ * Retired document types (removed by decision). They appear nowhere: files uploaded under them are
+ * archived by migration 028 (hidden from every screen and API, no view or download) until Admin disposes
+ * of them in Data protection. Requests for them are not shown or counted. New uploads are refused.
  */
-const RETIRED_DOCUMENTS = {
-  divorce_or_death_certificate: 'Divorce decree or death certificate (replaced by the NACC civil-status documents)',
-  child_abuse_clearance: 'Child abuse clearance (no longer required)',
-  fingerprint_clearance: 'Fingerprint clearance record (no longer required)',
-};
+const RETIRED_DOC_TYPES = ['divorce_or_death_certificate', 'child_abuse_clearance', 'fingerprint_clearance'];
 
 module.exports = {
-  RETIRED_DOCUMENTS, FIELDS, DOCUMENTS, STAGE_DOCUMENTS, PAGES, OPTIONS, CONSENT_TEXT, CONSENT_VERSION, PRIVACY_NOTICE, APPLICATION_TYPES, FILE_RULES,
+  RETIRED_DOC_TYPES, FIELDS, DOCUMENTS, STAGE_DOCUMENTS, DOCUMENT_GROUPS, PAGES, OPTIONS, CONSENT_TEXT, CONSENT_VERSION, PRIVACY_NOTICE, APPLICATION_TYPES, FILE_RULES,
   OTHER_CITY, isVisible, isRequired, formConfig, answersFor, requirementOf, expiresOn, trackOf, DOCUMENT_STATUSES, NOT_REGULAR,
 };

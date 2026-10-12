@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, CheckCircle2, Info, Save } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, Info, Lock, Save } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
@@ -9,8 +9,9 @@ import { readFile } from '../lib/files';
 import { DocumentField, FormField, StatusChip } from './adoption/FieldControls';
 import PrivacyNotice from './adoption/PrivacyNotice';
 import {
-  applicationPath, displayValue, fieldStatus, isVisible, missingItems, pageDocuments, pageFields, validatePage,
+  applicationPath, completedPages, displayValue, docRequired, errorLabel, fieldStatus, ID_SIDE_DOCS, missingItems, pageCheck, pageDocuments, pageFields, reachablePage,
 } from './adoption/formLogic';
+import IdCapture from '../components/adoption/IdCapture';
 import './adoption/adoption.css';
 
 const AUTOSAVE_MS = 1200;
@@ -86,10 +87,12 @@ function ReviewPage({ config, form, app, onEdit, consent, setConsent, submitErro
       {config.pages.filter((p) => p.n <= 8).map((p) => {
         const fields = pageFields(config, p.n, form);
         const docs = pageDocuments(config, p.n, form);
+        const left = Object.keys(pageCheck(config, p.n, form, app.documents)).length;
         return (
           <section key={p.n} className="cs-card p-4" aria-labelledby={`review-${p.n}`}>
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h3 id={`review-${p.n}`} className="cs-title">{p.n}. {p.title}</h3>
+              <h3 id={`review-${p.n}`} className="cs-title flex items-center gap-2">{p.n}. {p.title} <StatusChip status={left ? 'Missing' : 'Done'} />
+                {left > 0 && <span className="cs-muted text-xs font-normal">{left} item{left === 1 ? '' : 's'} to complete</span>}</h3>
               <button type="button" className="cs-link text-sm" onClick={() => onEdit(p.n)}>Edit<span className="sr-only"> {p.title}</span></button>
             </div>
             <dl>
@@ -104,7 +107,7 @@ function ReviewPage({ config, form, app, onEdit, consent, setConsent, submitErro
               ))}
               {docs.map(([key, def]) => {
                 const files = app.documents.filter((d) => d.doc_type === key && d.status !== 'Replaced');
-                const status = files.length ? 'Done' : def.required ? 'Missing' : 'Optional';
+                const status = files.length ? 'Done' : docRequired(config, key, def, form) ? 'Missing' : 'Optional';
                 return (
                   <div key={key} className="flex flex-wrap items-start justify-between gap-2 border-t py-2 cs-divider">
                     <dt className="min-w-0 flex-1 text-sm">
@@ -178,19 +181,26 @@ export default function AdoptionForm() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
   const [submitted, setSubmitted] = useState(null);
+  const [summary, setSummary] = useState([]); // keys of the items missing on this page, after Next
+  const [serverDone, setServerDone] = useState(null); // pages the server accepted as complete
+  const summaryRef = useRef(null);
+  const appRef = useRef(null);
   const timer = useRef(null);
   const formRef = useRef(null);
   const pageRef = useRef(1);
   const topRef = useRef(null);
   formRef.current = form;
   pageRef.current = page;
+  appRef.current = app;
 
   useEffect(() => {
     let alive = true;
     api(`/adoptions/${id}`).then((res) => {
       if (!alive) return;
       if (res.data.status !== 'Draft') { navigate(`/applications/${id}`, { replace: true }); return; }
-      setApp(res.data); setForm({ ...res.data.form, application_type: res.data.application_type }); setPage(Math.min(9, Math.max(1, res.data.current_page || 1)));
+      setApp(res.data); setForm({ ...res.data.form, application_type: res.data.application_type });
+      setServerDone(res.data.completed_pages || null);
+      setPage(Math.min(res.data.reachable_page || 9, Math.max(1, res.data.current_page || 1)));
     }).catch((err) => alive && setLoadError(err));
     return () => { alive = false; };
   }, [id, navigate]);
@@ -202,9 +212,11 @@ export default function AdoptionForm() {
     try {
       const res = await api(`/adoptions/${id}`, { method: 'PUT', body: { data: formRef.current, current_page: currentPage ?? pageRef.current, validate_page: vp } });
       setSaveState('saved');
+      if (res.data?.completed_pages) setServerDone(res.data.completed_pages);
       return res.data;
     } catch (err) {
-      setSaveState('error');
+      // 422 = saved, but this page still has required items missing (Next only).
+      setSaveState(err.status === 422 ? 'saved' : 'error');
       throw err;
     }
   }, [id]);
@@ -214,13 +226,13 @@ export default function AdoptionForm() {
     const next = { ...formRef.current, ...patch };
     formRef.current = next;
     setForm(next);
-    // Errors on this page clear as soon as the field is fixed (or hidden). Other pages' errors stay.
+    // Errors clear as soon as the item is fixed or hidden (the page recalculates on every change).
     setErrors((prev) => {
       if (!Object.keys(prev).length) return prev;
-      const fresh = validatePage(config, pageRef.current, next);
+      const fresh = pageCheck(config, pageRef.current, next, appRef.current?.documents || []);
       const out = {};
       for (const [k, msg] of Object.entries(prev)) {
-        const onThisPage = config.fields[k]?.page === pageRef.current;
+        const onThisPage = k.startsWith('doc:') ? config.documents[k.slice(4)]?.page === pageRef.current : config.fields[k]?.page === pageRef.current;
         if (!onThisPage) out[k] = msg;
         else if (fresh[k]) out[k] = fresh[k];
       }
@@ -230,29 +242,63 @@ export default function AdoptionForm() {
     timer.current = setTimeout(() => { save().catch(() => {}); }, AUTOSAVE_MS);
   };
 
-  const goTo = async (n) => {
-    if (n < 1 || n > 9) return;
+  /** Shows the missing items: inline errors, the summary at the top (announced), focus on the first one. */
+  const showMissing = (errs) => {
+    setErrors((prev) => ({ ...prev, ...errs }));
+    setSummary(Object.keys(errs));
+    requestAnimationFrame(() => {
+      const first = Object.keys(errs)[0];
+      const el = document.getElementById(`f-${first}`);
+      if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); } else summaryRef.current?.focus();
+    });
+  };
+
+  const open = async (n) => {
     try { await save({ currentPage: n }); } catch { /* the indicator shows it; answers stay in the browser */ }
     setPage(n);
+    setSummary([]);
     setSubmitError(null);
     topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  /** Next: browser check plus the server's check for this page. Uploads never block Next. */
+  /**
+   * Next: every visible required item on this page must be complete (fields and uploads). The browser
+   * checks first; the server checks again and refuses (422) with the missing items. Never skips pages.
+   */
   const next = async () => {
-    const clientErrors = validatePage(config, page, form);
-    let serverErrors = {};
-    try {
-      const res = await save({ validatePage: page });
-      serverErrors = res.validation?.errors || {};
-    } catch { /* keep the browser check */ }
-    const all = { ...serverErrors, ...clientErrors };
-    if (Object.keys(all).length) {
-      setErrors((prev) => ({ ...prev, ...all }));
-      document.getElementById(`f-${Object.keys(all)[0]}`)?.focus();
+    const clientErrors = pageCheck(config, page, formRef.current, app.documents);
+    if (Object.keys(clientErrors).length) {
+      save().catch(() => {}); // keep what was typed
+      showMissing(clientErrors);
       return;
     }
-    goTo(page + 1);
+    try {
+      const res = await save({ validatePage: page, currentPage: page + 1 });
+      setServerDone(res.completed_pages || null);
+    } catch (err) {
+      const errs = err.details?.validation?.errors;
+      if (errs && Object.keys(errs).length) { setServerDone(err.details.completed_pages || null); showMissing(errs); return; }
+      toast(err.message, 'error');
+      return;
+    }
+    setPage(page + 1);
+    setSummary([]);
+    setSubmitError(null);
+    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  /** The stepper: earlier pages always open; a later page only when every page before it is complete. */
+  const goTo = async (n) => {
+    if (n < 1 || n > 9 || n === page) return;
+    if (n < page) { open(n); return; }
+    const done = completedPages(config, formRef.current, app.documents);
+    if (n > reachablePage(done)) {
+      // Explain what is missing on the current page (or the first incomplete page before it).
+      if (!done.includes(page)) { showMissing(pageCheck(config, page, formRef.current, app.documents)); return; }
+      toast(`Finish page ${reachablePage(done)} first.`, 'error');
+      return;
+    }
+    open(n);
   };
 
   const changeType = async (type) => {
@@ -273,6 +319,7 @@ export default function AdoptionForm() {
     const f = await readFile(file);
     const res = await api(`/adoptions/${id}/documents`, { method: 'POST', body: { doc_type: docType, file: { name: f.name, data: f.data }, issued_date: issuedDate } });
     setApp(res.data);
+    setErrors((prev) => { if (!prev[`doc:${docType}`]) return prev; const n = { ...prev }; delete n[`doc:${docType}`]; return n; });
   };
   const removeFile = async (doc) => {
     try {
@@ -304,15 +351,26 @@ export default function AdoptionForm() {
 
   const current = config.pages.find((p) => p.n === page);
   const fields = pageFields(config, page, form);
-  const docs = pageDocuments(config, page, form);
+  const idSides = pageDocuments(config, page, form).filter(([k]) => ID_SIDE_DOCS.includes(k));
+  const docs = pageDocuments(config, page, form).filter(([k]) => !ID_SIDE_DOCS.includes(k));
   const missing = missingItems(config, form, app.documents);
-  const addressStart = fields.findIndex(([, d]) => d.group === 'address');
-  const before = addressStart === -1 ? fields : fields.slice(0, addressStart);
-  const address = fields.filter(([, d]) => d.group === 'address');
-  const after = addressStart === -1 ? [] : fields.slice(addressStart).filter(([, d]) => d.group !== 'address');
+  // Completion is recalculated on every change (hidden items never count); the server's state is used too.
+  const done = completedPages(config, form, app.documents);
+  const reachable = reachablePage(done);
+  const groups = config.field_groups || { address: { label: 'Address' } };
+  // Fields in order; a group's fields are shown together in one box where the group's first field is.
+  const blocks = [];
+  for (const entry of fields) {
+    const g = entry[1].group;
+    const last = blocks[blocks.length - 1];
+    if (g && last?.group === g) last.items.push(entry);
+    else if (g && blocks.some((b) => b.group === g)) blocks.find((b) => b.group === g).items.push(entry);
+    else blocks.push({ group: g || null, items: [entry] });
+  }
   const renderField = ([key, def]) => (
     <FormField key={key} name={key} def={def} form={form} onChange={update} error={errors[key]} config={config} />
   );
+  const summaryKeys = summary.filter((k) => errors[k]);
 
   return (
     <div className="cs-theme cs-page" ref={topRef}>
@@ -344,17 +402,24 @@ export default function AdoptionForm() {
           <div className="px-1 pb-1 lg:hidden">
             <label htmlFor="step-select" className="sr-only">Go to page</label>
             <select id="step-select" className="cs-input" value={page} onChange={(e) => goTo(Number(e.target.value))}>
-              {config.pages.map((p) => <option key={p.n} value={p.n}>{p.n}. {p.title}</option>)}
+              {config.pages.map((p) => <option key={p.n} value={p.n}>{p.n}. {p.title}{p.n > reachable && p.n !== page ? ' (locked)' : p.n <= 8 && done.includes(p.n) ? ' (done)' : ''}</option>)}
             </select>
           </div>
           <ol className="hidden space-y-0.5 lg:block">
-            {config.pages.map((p) => (
-              <li key={p.n}>
-                <button type="button" className="cs-step" aria-current={p.n === page ? 'step' : undefined} onClick={() => goTo(p.n)}>
-                  <span className="cs-step-num">{p.n}</span><span>{p.title}</span>
-                </button>
-              </li>
-            ))}
+            {config.pages.map((p) => {
+              const locked = p.n > reachable && p.n !== page;
+              const isDone = p.n <= 8 && done.includes(p.n) && !locked;
+              return (
+                <li key={p.n}>
+                  <button type="button" className={`cs-step ${isDone ? 'is-done' : ''} ${locked ? 'is-locked' : ''}`} aria-current={p.n === page ? 'step' : undefined}
+                    aria-disabled={locked ? 'true' : undefined} onClick={() => goTo(p.n)}>
+                    <span className="cs-step-num">{isDone && p.n !== page ? <Check className="h-3.5 w-3.5" aria-hidden /> : locked ? <Lock className="h-3 w-3" aria-hidden /> : p.n}</span>
+                    <span>{p.title}</span>
+                    <span className="sr-only">{isDone ? ' (complete)' : locked ? ' (locked until the earlier pages are complete)' : ''}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ol>
         </nav>
 
@@ -367,26 +432,41 @@ export default function AdoptionForm() {
             {current.info && (
               <div className="cs-notice cs-notice-info flex gap-3"><Info className="h-5 w-5 shrink-0" aria-hidden /><p>{current.info}</p></div>
             )}
+            <div aria-live="assertive" aria-atomic="true">
+              {page < 9 && summaryKeys.length > 0 && (
+                <div ref={summaryRef} tabIndex={-1} className="cs-notice cs-notice-error" role="alert">
+                  <p className="font-semibold">{summaryKeys.length} required item{summaryKeys.length === 1 ? '' : 's'} left on this page</p>
+                  <ul className="mt-1 list-disc pl-5 text-sm">
+                    {summaryKeys.map((k) => (
+                      <li key={k}><a href={`#f-${k}`} className="cs-link" onClick={(e) => { e.preventDefault(); const el = document.getElementById(`f-${k}`); el?.scrollIntoView({ behavior: 'smooth', block: 'center' }); el?.focus({ preventScroll: true }); }}>
+                        {errorLabel(config, k)}</a>: {errors[k]}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
 
             {page === 9 ? (
               <ReviewPage config={config} form={form} app={app} onEdit={goTo} consent={consent} setConsent={setConsent} submitError={submitError} missing={missing} />
             ) : (
               <>
-                {before.map(renderField)}
-                {address.length > 0 && (
-                  <fieldset className="cs-card cs-surface-2 space-y-4 p-4">
-                    <legend className="cs-title px-1 text-sm">Address</legend>
-                    <div className="grid gap-4 sm:grid-cols-2">{address.map(renderField)}</div>
+                {blocks.map((b, i) => (b.group ? (
+                  <fieldset key={b.group} className="cs-card cs-surface-2 space-y-4 p-4">
+                    <legend className="cs-title px-1 text-sm">{groups[b.group]?.label || b.group}</legend>
+                    {groups[b.group]?.note && <p className="cs-hint">{groups[b.group].note}</p>}
+                    <div className={`grid gap-4 ${b.group === 'address' ? 'sm:grid-cols-2' : ''}`}>{b.items.map(renderField)}</div>
                   </fieldset>
+                ) : <div key={`f${i}`} className="space-y-4">{b.items.map(renderField)}</div>))}
+                {idSides.length > 0 && (
+                  <IdCapture appId={id} config={config} form={form} documents={app.documents} onUpload={upload} onRemove={removeFile} errors={errors} />
                 )}
-                {after.map(renderField)}
                 {docs.length > 0 && (
                   <div className="space-y-3">
                     {docs.map(([key, def]) => (
-                      <DocumentField key={key} docType={key} def={def} required={def.required && isVisible(def, form)} rules={config.file_rules}
+                      <DocumentField key={key} docType={key} def={def} required={docRequired(config, key, def, form)} rules={config.file_rules} requiredError={errors[`doc:${key}`]}
                         files={app.documents.filter((d) => d.doc_type === key && d.status !== 'Replaced')} onUpload={upload} onRemove={removeFile} />
                     ))}
-                    <p className="cs-hint">Missing required files won't stop you from moving on, but they are needed before you submit.</p>
+                    <p className="cs-hint">Required files must be uploaded before you can continue. The home checks them later; that check never stops you from moving on.</p>
                   </div>
                 )}
               </>
@@ -394,7 +474,7 @@ export default function AdoptionForm() {
           </section>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <button type="button" className="cs-btn" onClick={() => goTo(page - 1)} disabled={page === 1}>
+            <button type="button" className="cs-btn" onClick={() => open(page - 1)} disabled={page === 1}>
               <ArrowLeft className="h-4 w-4" aria-hidden /> Back
             </button>
             <div className="flex flex-wrap gap-2">

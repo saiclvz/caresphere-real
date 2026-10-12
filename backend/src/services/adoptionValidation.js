@@ -5,7 +5,7 @@
  *  - validatePage(): the "Next" check for one page (required, formats), visible fields only.
  *  - validateSubmission(): every page plus required documents, before Submit is accepted.
  */
-const { FIELDS, DOCUMENTS, PAGES, OTHER_CITY, RETIRED_DOCUMENTS, isVisible, isRequired, answersFor, requirementOf, expiresOn } = require('../config/adoptionForm');
+const { FIELDS, DOCUMENTS, PAGES, OTHER_CITY, isVisible, isRequired, answersFor, requirementOf, expiresOn } = require('../config/adoptionForm');
 const { PROVINCES, CITY_LISTS } = require('../config/phAddress');
 const { isEmail, ageOn, localToday } = require('../utils/validate');
 
@@ -127,7 +127,9 @@ function checkField(key, def, data) {
     case 'select': return def.options.includes(v) ? null : `Choose a ${label.toLowerCase()} from the list.`;
     case 'province': return PROVINCES.includes(v) ? null : 'Choose a province from the list.';
     case 'idnumber': {
-      const rule = ID_TYPES[data.id_type];
+      // The Admin-editable rule (tbl_id_type_rules) wins over the built-in list once it has been loaded.
+      const live = require('./idTypes').cachedRule(data.id_type);
+      const rule = live ? { format: live.numberRegex, example: live.example } : ID_TYPES[data.id_type];
       if (!/^[A-Z0-9-]{4,40}$/.test(str(v))) return 'Enter the ID number exactly as printed (letters, numbers and dashes).';
       if (rule?.format && !rule.format.test(str(v))) return `This doesn't look like a ${data.id_type} number${rule.example ? ` (for example ${rule.example})` : ''}. Check the number and the ID type.`;
       return null;
@@ -140,7 +142,9 @@ function checkField(key, def, data) {
       if (key === 'adoptee_dob' && data.application_type === 'Adult' && ageOn(v) < 18) return 'For an adult adoption, the person must be 18 or older.';
       return null;
     }
-    default: return null;
+    default:
+      if (def.min && str(v).length < def.min) return `${label} needs at least ${def.min} characters (you have ${str(v).length}).`;
+      return null;
   }
 }
 
@@ -161,7 +165,7 @@ function missingDocuments(form, documents, applicationType) {
   const data = answersFor(form, applicationType);
   const have = new Set(documents.filter((d) => d.status !== 'Replaced' && d.verification_status !== 'Rejected').map((d) => d.doc_type));
   return Object.entries(DOCUMENTS)
-    .filter(([key, def]) => def.required && isVisible(def, data) && !have.has(key))
+    .filter(([key, def]) => ['Required', 'Conditional'].includes(requirementOf(def, data)) && !have.has(key))
     .map(([key, def]) => ({ doc_type: key, label: def.label, page: def.page }));
 }
 
@@ -183,7 +187,10 @@ function documentChecklist(form, applicationType, documents, { isLegacy = false 
     return { ...d, expires_on: exp, expired: Boolean(exp && exp < now) };
   };
   const items = Object.entries(DOCUMENTS).map(([key, def]) => {
-    const requirement = isLegacy && def.required ? 'Optional' : requirementOf(def, data);
+    let requirement = isLegacy && (def.required || def.id_side === 'back') ? 'Optional' : requirementOf(def, data);
+    // Applications whose ID front was already verified by a person before the back slot existed are not blocked by it.
+    if (def.id_side === 'back' && requirement === 'Required' && current.some((d) => d.doc_type === 'valid_id' && d.verification_status === 'Verified')
+      && !current.some((d) => d.doc_type === key)) requirement = 'Optional';
     const files = current.filter((d) => d.doc_type === key).map((d) => withExpiry(d, def));
     const usable = files.filter((f) => f.verification_status !== 'Rejected');
     const waiting = usable.find((f) => ['Requires correction', 'Submitted', 'Under validation', 'Manual verification required'].includes(f.verification_status));
@@ -203,14 +210,37 @@ function documentChecklist(form, applicationType, documents, { isLegacy = false 
       done: !needed || status === 'Verified',
     };
   }).filter((i) => i.requirement !== 'Not applicable' || i.files.length);
-  // Files under removed document types stay visible to staff.
-  const retired = current.filter((d) => RETIRED_DOCUMENTS[d.doc_type]);
   const blocking = items.filter((i) => !i.done).map((i) => ({ doc_type: i.doc_type, label: i.label, status: i.status }));
   return {
-    items, retired: retired.map((d) => ({ ...d, label: RETIRED_DOCUMENTS[d.doc_type] })),
+    items,
     summary: { required: items.filter((i) => i.required).length, verified: items.filter((i) => i.required && i.status === 'Verified').length, complete: blocking.length === 0, blocking },
   };
 }
+
+/**
+ * Everything required on one page (1 to 8): the visible fields (validatePage) and the visible required
+ * uploads. An upload counts once a file is stored (it passed the type, size and content checks); the home's
+ * verification comes later and never blocks. Returns { field_or_doc_key: message }; doc keys are "doc:<type>".
+ */
+function pageCheck(page, form, applicationType, documents) {
+  const errors = page >= 1 && page <= 8 ? validatePage(page, form, applicationType) : {};
+  const data = answersFor(form, applicationType);
+  const have = new Set(documents.filter((d) => d.status !== 'Replaced').map((d) => d.doc_type));
+  for (const [key, def] of Object.entries(DOCUMENTS)) {
+    if (def.page !== page) continue;
+    if (!['Required', 'Conditional'].includes(requirementOf(def, data))) continue;
+    if (!have.has(key)) errors[`doc:${key}`] = `Upload is required: ${def.label}`;
+  }
+  return errors;
+}
+
+/** Pages 1 to 8 whose required items are all complete (the server's per-page completion state). */
+function completedPages(form, applicationType, documents) {
+  return PAGES.filter((p) => p.n <= 8).map((p) => p.n).filter((n) => !Object.keys(pageCheck(n, form, applicationType, documents)).length);
+}
+
+/** The furthest page the applicant may open: the first incomplete page (9 when 1 to 8 are complete). */
+const reachablePage = (completed) => { for (let n = 1; n <= 8; n += 1) if (!completed.includes(n)) return n; return 9; };
 
 /** Full check before Submit: every page's fields, required documents and consent. */
 function validateSubmission(data, documents, consent, applicationType) {
@@ -224,4 +254,4 @@ function validateSubmission(data, documents, consent, applicationType) {
   return { ok: !Object.keys(pages).length && !missing.length && !consentError, pages, missing_documents: missing, consent: consentError };
 }
 
-module.exports = { clean, validatePage, missingDocuments, validateSubmission, documentChecklist };
+module.exports = { clean, validatePage, pageCheck, completedPages, reachablePage, missingDocuments, validateSubmission, documentChecklist };

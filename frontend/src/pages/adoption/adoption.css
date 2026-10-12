@@ -106,6 +106,7 @@
 
 /* File field */
 .cs-theme .cs-file { border: 1px dashed var(--cs-border-strong); border-radius: 12px; padding: 0.75rem; background: var(--cs-surface); }
+.cs-theme .cs-file.cs-file-error { border-color: var(--cs-danger); }
 .cs-theme .cs-file.has-file { border-style: solid; border-color: var(--cs-success); background: var(--cs-success-soft); }
 
 /* Stepper */
@@ -116,6 +117,9 @@
 .cs-theme .cs-step-num { display: inline-flex; width: 1.5rem; height: 1.5rem; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 999px;
   font-size: 0.75rem; font-weight: 700; border: 1px solid var(--cs-border-strong); color: var(--cs-muted); background: var(--cs-surface); }
 .cs-theme .cs-step[aria-current="step"] .cs-step-num { background: var(--cs-primary); border-color: var(--cs-primary); color: var(--cs-on-primary); }
+.cs-theme .cs-step.is-done .cs-step-num { background: var(--cs-success-soft); border-color: var(--cs-success); color: var(--cs-success); }
+.cs-theme .cs-step.is-locked { color: var(--cs-muted); opacity: 0.7; cursor: not-allowed; }
+.cs-theme .cs-step.is-locked:hover { background: transparent; color: var(--cs-muted); }
 .cs-theme .cs-progress { height: 6px; border-radius: 999px; background: var(--cs-border); overflow: hidden; }
 .cs-theme .cs-progress > span { display: block; height: 100%; background: var(--cs-primary); }
 

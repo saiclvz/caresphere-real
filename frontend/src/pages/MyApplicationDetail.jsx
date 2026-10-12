@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { AlertTriangle, CalendarClock, FileText, Heart, Pencil, Printer } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
-import { openFileInNewTab } from '../lib/openFile';
+import DocumentViewer from '../components/DocumentViewer';
 import { useApp } from '../context/AppContext';
 import { Modal, Spinner } from '../components/ui';
 import { readFile } from '../lib/files';
@@ -11,8 +11,9 @@ import { formatDate, formatDateTime } from '../lib/format';
 import { DocumentField } from './adoption/FieldControls';
 import PhaseTracker from './adoption/PhaseTracker';
 import VerificationList from '../components/adoption/VerificationList';
+import IdCapture from '../components/adoption/IdCapture';
 import PrivacyRequests from './adoption/PrivacyRequests';
-import { AFTER_ORDER } from './adoption/formLogic';
+import { AFTER_ORDER, isActiveStatus } from './adoption/formLogic';
 import './adoption/adoption.css';
 
 export const THANK_YOU = 'Thank you for opening your heart and home. The Order of Adoption has been issued, and the CareSphere team will contact you about the remaining steps.';
@@ -24,7 +25,6 @@ export function StatusBadge({ status, label }) {
 }
 
 /** Opens one of the applicant's own files in a new tab (the server checks ownership and logs the view). */
-const openDocument = (applicationId, doc) => openFileInNewTab(`/adoptions/${applicationId}/documents/${doc.document_id}`);
 
 /**
  * Submission slip: the reference to keep. The printed slip shows only the home name, the
@@ -58,6 +58,7 @@ export default function MyApplicationDetail() {
   const [error, setError] = useState(null);
   const [withdrawing, setWithdrawing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [viewing, setViewing] = useState(null); // document shown in the protected viewer
 
   const load = useCallback(() => api(`/adoptions/${id}`).then((r) => setApp(r.data)).catch(setError), [id]);
   useEffect(() => { load(); }, [load]);
@@ -72,7 +73,7 @@ export default function MyApplicationDetail() {
 
   const openRequests = app.requests.filter((r) => r.status === 'Open');
   const upcoming = app.interviews.filter((i) => new Date(String(i.scheduled_at).replace(' ', 'T')) >= new Date(Date.now() - 86400000));
-  const docLabel = (t) => config.documents[t]?.label || config.retired_documents?.[t] || t;
+  const docLabel = (t) => config.documents[t]?.label || config.stage_documents?.[t]?.label || 'Document';
 
   const uploadRequested = async (docType, file, issuedDate) => {
     const f = await readFile(file);
@@ -80,6 +81,16 @@ export default function MyApplicationDetail() {
     setApp(res.data);
     refreshRequests?.();
     toast(docType === 'forum_certificate' ? 'Forum certificate sent to the home.' : 'Document sent to the home.');
+  };
+
+  // After submitting, the applicant can retake the ID photos until the ID is verified.
+  const idRow = (app.verifications || []).find((v) => v.kind === 'government_id');
+  const canRetakeId = app.status !== 'Draft' && isActiveStatus(app.status) && idRow && idRow.status !== 'Verified';
+  const uploadIdSide = async (docType, file) => {
+    const f = await readFile(file);
+    const res = await api(`/adoptions/${app.application_id}/documents`, { method: 'POST', body: { doc_type: docType, file: { name: f.name, data: f.data } } });
+    setApp(res.data);
+    toast('ID photo uploaded. It is being scanned.');
   };
 
   const withdraw = async () => {
@@ -93,6 +104,7 @@ export default function MyApplicationDetail() {
 
   return (
     <div className="cs-theme cs-page space-y-4">
+      <DocumentViewer open={Boolean(viewing)} title={viewing?.title} path={viewing?.path} onClose={() => setViewing(null)} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link to="/applications" className="cs-link text-sm">My applications</Link>
@@ -106,6 +118,8 @@ export default function MyApplicationDetail() {
       </div>
 
       <PhaseTracker app={app} />
+
+      {app.match_notice && <div className="cs-notice cs-notice-info" role="status">{app.match_notice}</div>}
 
       {AFTER_ORDER.includes(app.status) && (
         <div className="cs-notice cs-notice-success flex gap-3"><Heart className="h-5 w-5 shrink-0" style={{ color: 'var(--cs-success)' }} aria-hidden /><p>{THANK_YOU}</p></div>
@@ -139,6 +153,11 @@ export default function MyApplicationDetail() {
       )}
 
       <VerificationList app={app} config={config} mode="donor" onUpdated={setApp} />
+      {canRetakeId && (
+        <div className="cs-card p-4">
+          <IdCapture appId={app.application_id} config={config} form={app.form || {}} documents={app.documents} onUpload={uploadIdSide} onRemove={() => {}} canRemove={false} />
+        </div>
+      )}
       {app.can_upload_forum_certificate && config.stage_documents?.forum_certificate && (
         <section className="cs-card space-y-2 p-4" aria-labelledby="forum-title">
           <h2 id="forum-title" className="cs-title">Adoption forum certificate</h2>
@@ -190,7 +209,7 @@ export default function MyApplicationDetail() {
                   <li key={d.document_id} className="flex flex-wrap items-center gap-2 text-sm">
                     <FileText className="h-4 w-4 shrink-0 cs-muted" aria-hidden />
                     <span className="cs-muted">{docLabel(d.doc_type)}:</span>
-                    <button type="button" className="cs-link min-w-0 truncate" onClick={() => openDocument(app.application_id, d).catch((e) => toast(e.message, 'error'))}>{d.original_name}</button>
+                    <button type="button" className="cs-link min-w-0 truncate" onClick={() => setViewing({ title: d.original_name, path: `/adoptions/${app.application_id}/documents/${d.document_id}` })}>{d.original_name}</button>
                   </li>
                 ))}
               </ul>

@@ -106,7 +106,9 @@ function checkField(key, def, data, config) {
       if (v > todayIso()) return `${label} cannot be in the future.`;
       if (def.minAge && ageOn(v) < def.minAge) return `Applicants must be at least ${def.minAge} years old.`;
       return null;
-    default: return null;
+    default:
+      if (def.min && str(v).length < def.min) return `${label} needs at least ${def.min} characters (you have ${str(v).length}).`;
+      return null;
   }
 }
 
@@ -118,7 +120,7 @@ export const pageFields = (config, page, data) => Object.entries(config.fields)
 export const pageDocuments = (config, page, data) => Object.entries(config.documents)
   .filter(([, def]) => def.page === page && isVisible(def, data));
 
-/** The "Next" check: { field: message } for the page's visible fields. Uploads never block Next. */
+/** The page's visible fields: { field: message }. pageCheck adds the required uploads. */
 export function validatePage(config, page, data) {
   const errors = {};
   for (const [key, def] of pageFields(config, page, data)) {
@@ -149,6 +151,18 @@ export function displayValue(config, key, def, data) {
 }
 
 /** Every visible required item still missing, across the 8 answer pages. */
+/** Whether a document is required. The back of the ID follows the ID type rule (optional for a passport). */
+export function docRequired(config, key, def, data) {
+  if (key === 'valid_id_back') {
+    const rule = (config.verification?.id_type_rules || []).find((r) => r.key === data.id_type);
+    return rule ? Boolean(rule.needs_back) : true;
+  }
+  return Boolean(def.required);
+}
+
+/** The two ID photo slots, shown together by the ID capture panel instead of as plain file fields. */
+export const ID_SIDE_DOCS = ['valid_id', 'valid_id_back'];
+
 export function missingItems(config, data, documents) {
   const items = [];
   for (const p of config.pages.filter((x) => x.n <= 8)) {
@@ -156,7 +170,7 @@ export function missingItems(config, data, documents) {
       if (fieldStatus(config, key, def, data) === 'Missing') items.push({ page: p.n, key, label: def.label });
     }
     for (const [key, def] of pageDocuments(config, p.n, data)) {
-      if (def.required && !documents.some((d) => d.doc_type === key && d.status !== 'Replaced')) items.push({ page: p.n, key, label: def.label, document: true });
+      if (docRequired(config, key, def, data) && !documents.some((d) => d.doc_type === key && d.status !== 'Replaced')) items.push({ page: p.n, key, label: def.label, document: true });
     }
   }
   return items;
@@ -176,3 +190,28 @@ export const AFTER_ORDER = ['Order of Adoption issued', 'Civil registry updated'
 
 /** Where a donor's application opens: drafts continue in the form, others show the detail page. */
 export const applicationPath = (a) => (a.status === 'Draft' ? `/applications/${a.application_id}/edit` : `/applications/${a.application_id}`);
+
+/**
+ * Everything required on one page (same rules as the server's pageCheck): visible fields plus visible
+ * required uploads ("doc:<type>"). An upload counts once the file is uploaded; the home's review is later.
+ */
+export function pageCheck(config, page, data, documents) {
+  const errors = page >= 1 && page <= 8 ? validatePage(config, page, data) : {};
+  for (const [key, def] of pageDocuments(config, page, data)) {
+    if (!docRequired(config, key, def, data)) continue;
+    if (!documents.some((d) => d.doc_type === key && d.status !== 'Replaced')) errors[`doc:${key}`] = `Upload is required: ${def.label}`;
+  }
+  return errors;
+}
+
+/** Pages 1 to 8 that are complete, and the furthest page the applicant may open. */
+export function completedPages(config, data, documents) {
+  return config.pages.filter((p) => p.n <= 8).map((p) => p.n).filter((n) => !Object.keys(pageCheck(config, n, data, documents)).length);
+}
+export const reachablePage = (completed) => { for (let n = 1; n <= 8; n += 1) if (!completed.includes(n)) return n; return 9; };
+
+/** A readable label for an error key (fields and "doc:" uploads), for the summary at the top of the page. */
+export function errorLabel(config, key) {
+  if (key.startsWith('doc:')) return config.documents[key.slice(4)]?.label || 'Upload';
+  return config.fields[key]?.label || key;
+}

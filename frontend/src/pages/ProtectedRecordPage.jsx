@@ -6,27 +6,17 @@ import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { Button, Card, ErrorNote, Field, Spinner } from '../components/ui';
 import { formatDateTime } from '../lib/format';
+import { DocumentPages } from '../components/DocumentViewer';
 
-/** Loads the record file with the grant header (never in the URL) and shows it inline. */
+/**
+ * Shows the record in the protected viewer (rendered pages, no browser PDF viewer, no file URL), with the
+ * grant header (never in the URL). Download stays a separate button, only when the server allows it.
+ */
 function RecordViewer({ publicId, record, grant, expiresAt }) {
   const { toast } = useApp();
-  const [url, setUrl] = useState(null);
   const [verified, setVerified] = useState(null);
-  const [error, setError] = useState(null);
   const [left, setLeft] = useState(null);
   const headers = grant ? { 'X-Protected-Access': grant } : {};
-
-  useEffect(() => {
-    let alive = true;
-    let objectUrl;
-    api(`/protected/${publicId}/view`, { raw: true, headers })
-      .then(async (res) => {
-        objectUrl = URL.createObjectURL(await res.blob());
-        if (alive) { setUrl(objectUrl); setVerified(res.headers.get('X-File-Verified')); }
-      })
-      .catch((err) => alive && setError(err));
-    return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [publicId, grant]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!expiresAt) return undefined;
@@ -48,8 +38,6 @@ function RecordViewer({ publicId, record, grant, expiresAt }) {
     } catch (err) { toast(err.message, 'error'); }
   };
 
-  if (error) return <ErrorNote error={error} />;
-  if (!url) return <Spinner label="Opening the record" />;
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -61,7 +49,7 @@ function RecordViewer({ publicId, record, grant, expiresAt }) {
           <Button size="sm" variant="secondary" onClick={download}><Download className="h-4 w-4" /> Download (watermarked)</Button>
         )}
       </div>
-      <iframe title={record.label} src={url} className="h-[75vh] w-full rounded-lg border border-slate-200 bg-white" />
+      <DocumentPages path={`/protected/${publicId}/view`} headers={headers} title={record.label} onResponse={(res) => setVerified(res.headers.get('X-File-Verified'))} />
     </div>
   );
 }

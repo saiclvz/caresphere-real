@@ -139,9 +139,10 @@ module.exports = {
               (SELECT COUNT(*) FROM tbl_adoption_applications WHERE matched_child_id = ?) +
               (SELECT COUNT(*) FROM tbl_children WHERE child_id = ? AND cdclaa_number IS NOT NULL) +
               (SELECT COUNT(*) FROM tbl_sealed_records WHERE child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_transition_events e JOIN tbl_transition_reviews tr ON tr.review_id = e.review_id WHERE tr.child_id = ?) +
               (SELECT COUNT(*) FROM tbl_information_releases WHERE child_id = ?) +
               (SELECT COUNT(*) FROM tbl_protected_tokens t JOIN tbl_protected_records r ON r.record_id = t.record_id WHERE r.child_id = ?) AS n`,
-      [id, id, id, id, id, id]);
+      [id, id, id, id, id, id, id]);
     return Number(row.n) > 0;
   },
 
@@ -201,17 +202,17 @@ module.exports = {
   /** Adoption history for one child: applications matched to the child and their status changes (staff view). */
   async adoptionHistory(id) {
     const [rows] = await pool.query(
-      `SELECT a.application_id, a.reference_no, a.status, ad.legal_name, a.submitted_at, a.finalized_at,
+      `SELECT a.application_id, a.reference_no, a.status, a.application_type, ad.legal_name, a.submitted_at, a.finalized_at,
               h.from_status, h.to_status, h.created_at AS changed_at, u.full_name AS changed_by
          FROM tbl_adoption_applications a
          LEFT JOIN tbl_applicant_details ad ON ad.application_id = a.application_id
          LEFT JOIN tbl_application_status_history h ON h.application_id = a.application_id AND h.to_status IS NOT NULL
          LEFT JOIN tbl_users u ON u.user_id = h.changed_by
-        WHERE a.matched_child_id = ? AND a.status <> 'Draft' ORDER BY a.submitted_at DESC, h.created_at, h.history_id`, [id]);
+        WHERE ? IN (a.matched_child_id, a.target_child_id, a.link_child_id) AND a.status <> 'Draft' ORDER BY a.submitted_at DESC, h.created_at, h.history_id`, [id]);
     const apps = new Map();
     for (const r of rows) {
       if (!apps.has(r.application_id)) {
-        apps.set(r.application_id, { application_id: r.application_id, reference_no: r.reference_no, status: r.status,
+        apps.set(r.application_id, { application_id: r.application_id, reference_no: r.reference_no, status: r.status, application_type: r.application_type,
           applicant: r.legal_name, submitted_at: r.submitted_at, finalized_at: r.finalized_at, completed_at: r.finalized_at, changes: [] });
       }
       if (r.to_status) apps.get(r.application_id).changes.push({ from: r.from_status, to: r.to_status, at: r.changed_at, by: r.changed_by });
@@ -231,8 +232,17 @@ module.exports = {
         `SELECT c.child_id FROM tbl_children c LEFT JOIN tbl_transition_reviews tr ON tr.child_id = c.child_id
           WHERE c.status = 'Active' AND ${AGE} >= ? AND tr.review_id IS NULL FOR UPDATE`, [env.transitionAge]);
       if (!due.length) return 0;
-      await conn.query("INSERT IGNORE INTO tbl_transition_reviews (child_id, review_status) VALUES ?", [due.map((d) => [d.child_id, 'For Review'])]);
+      // The review goes to the child's assigned case worker when that account is active (Admin can change it).
+      await conn.query(
+        `INSERT IGNORE INTO tbl_transition_reviews (child_id, review_status, assigned_staff_id, assigned_at)
+         SELECT c.child_id, 'For Review', IF(u.is_active, c.assigned_staff_id, NULL), IF(u.is_active, NOW(), NULL)
+           FROM tbl_children c LEFT JOIN tbl_users u ON u.user_id = c.assigned_staff_id WHERE c.child_id IN (?)`, [due.map((d) => d.child_id)]);
+      const [created] = await conn.query('SELECT review_id, child_id, assigned_staff_id FROM tbl_transition_reviews WHERE child_id IN (?)', [due.map((d) => d.child_id)]);
       const Notify = require('../services/notifications');
+      for (const r of created) {
+        await conn.query("INSERT INTO tbl_transition_events (review_id, stage_key, action, summary, to_value) VALUES (?, 'identify', 'review_created', 'Turned 18: transition review created (not discharged)', 'For Review')", [r.review_id]);
+        if (r.assigned_staff_id) await Notify.emit(conn, 'assigned', { userId: r.assigned_staff_id, entityType: 'transition_review', entityId: r.review_id, params: { id: r.review_id, ref: r.child_id, kind: 'transition_review' }, groupKey: `tr_created:${r.review_id}` });
+      }
       await Notify.toAdmins(conn, 'admin_child_turned_18', {
         params: { count: due.length, ref: due[0].child_id }, groupKey: `turned_18:${due.map((d) => d.child_id).join(',').slice(0, 120)}`,
       });

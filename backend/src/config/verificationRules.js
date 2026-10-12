@@ -3,8 +3,8 @@
  *
  * There is no official verification service connected to CareSphere (PhilSys authentication needs
  * accreditation; the NBI, PNP and courts offer no API for a private system). So the automatic checks
- * below only catch obvious problems. A person must verify every ID and clearance before it counts, and
- * nothing is ever marked verified automatically.
+ * below only catch obvious problems. A person must verify every ID and clearance before it counts. Only an
+ * authorized provider (config/verificationProviders.js) can verify automatically ("Verified – real and valid").
  *
  * format: a pattern for the ID number as printed (spaces ignored), or null when the format varies too much
  * to check safely. expires: whether the ID has an expiry date. Have your adviser confirm these patterns.
@@ -22,10 +22,12 @@ const ID_TYPES = {
     keywords: ['PROFESSIONAL REGULATION COMMISSION'] },
   'Postal ID': { format: null, example: null, expires: true, keywords: ['POSTAL IDENTITY CARD', 'PHLPOST', 'PHILIPPINE POSTAL'] },
   "Voter's ID": { format: null, example: null, expires: false, keywords: ['COMMISSION ON ELECTIONS', 'COMELEC', "VOTER'S"] },
+  'PhilHealth ID': { format: /^\d{2}-?\d{9}-?\d$/, example: '12-345678901-2 (PhilHealth Identification Number)', expires: false,
+    keywords: ['PHILHEALTH', 'PHILIPPINE HEALTH INSURANCE'] },
 };
 
 /** Text on other IDs, so an upload of the wrong card can be noticed (these are not accepted ID types). */
-const OTHER_ID_KEYWORDS = { 'PhilHealth ID': ['PHILHEALTH', 'PHILIPPINE HEALTH INSURANCE'], 'TIN ID': ['BUREAU OF INTERNAL REVENUE'], 'Student ID': ['STUDENT'] };
+const OTHER_ID_KEYWORDS = { 'TIN ID': ['BUREAU OF INTERNAL REVENUE'], 'Student ID': ['STUDENT'] };
 
 /** Photo-editing software names that, found in an ID image's metadata, flag it for review (never "fake"). */
 const EDITING_SOFTWARE = ['Adobe Photoshop', 'Photoshop', 'GIMP', 'Canva', 'PicsArt', 'Snapseed', 'Pixlr', 'Lightroom', 'Affinity Photo', 'Paint.NET', 'Fotor'];
@@ -46,8 +48,17 @@ const VERIFY_METHODS = [
 
 /** Statuses. Only a person's review can set Verified. */
 const ID_STATUSES = ['Pending verification', 'Manual verification required', 'Verified', 'Invalid ID', 'Expired', 'Information mismatch',
-  'Invalid ID number', 'ID type mismatch', 'Unrecognized ID', 'Unable to verify', 'Flagged for review', 'Requires correction'];
+  'Invalid ID number', 'ID type mismatch', 'Unrecognized ID', 'Unable to verify', 'Verification failed', 'Flagged for review', 'Requires correction'];
+/**
+ * Review actions offered to Admin/Staff. Reject needs one of the reasons and a written explanation;
+ * Request correction needs a note for the applicant. Statuses stay as stored; labels are for display.
+ */
+const ID_REJECT_REASONS = ['Invalid ID', 'Invalid ID number', 'Expired', 'Information mismatch', 'ID type mismatch', 'Unrecognized ID', 'Unable to verify'];
+const CLEARANCE_REJECT_REASONS = ['Not verified', 'Invalid', 'Expired', 'Verification failed'];
+/** Statuses a person may only override to Verified with a written explanation of how it was resolved. */
+const NEEDS_RESOLUTION_NOTE = ['ID type mismatch', 'Information mismatch', 'Flagged for review', 'Invalid ID number', 'Unable to verify', 'Verification failed'];
+
 const CLEARANCE_STATUSES = ['Pending verification', 'Manual verification required', 'Verified', 'Not verified', 'Expired', 'Invalid',
   'Verification failed', 'Requires correction', 'Flagged for review'];
 
-module.exports = { OTHER_ID_KEYWORDS, EDITING_SOFTWARE, OCR_MIN_CONFIDENCE, ID_TYPES, CLEARANCE_KINDS, CLEARANCE_VALID_MONTHS, VERIFY_METHODS, ID_STATUSES, CLEARANCE_STATUSES };
+module.exports = { ID_REJECT_REASONS, CLEARANCE_REJECT_REASONS, NEEDS_RESOLUTION_NOTE, OTHER_ID_KEYWORDS, EDITING_SOFTWARE, OCR_MIN_CONFIDENCE, ID_TYPES, CLEARANCE_KINDS, CLEARANCE_VALID_MONTHS, VERIFY_METHODS, ID_STATUSES, CLEARANCE_STATUSES };

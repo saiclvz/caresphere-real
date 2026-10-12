@@ -1,11 +1,10 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, Copy, FileHeart, GraduationCap, HeartPulse, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Moon, Pencil, Plus, Trash2, Undo2 } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
 import { Button, Card, ConfirmModal, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner } from '../components/ui';
 import { addDays, formatTime, isoDate, matches, startOfWeek } from '../lib/format';
-import RecordAccess from '../components/schedules/RecordAccess';
 
 const dayLabel = (d) => d.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' });
 let rowSeq = 0;
@@ -158,41 +157,190 @@ function useBatchRunner(endpoint, onDone) {
   return { preview, setPreview, error, busy, run };
 }
 
+/** Add shift presets. Night ends the next day (detected from the times, not a checkbox). */
+const SHIFT_PRESETS = [
+  { key: 'morning', label: 'Morning', start: '07:00', end: '15:00' },
+  { key: 'afternoon', label: 'Afternoon', start: '15:00', end: '23:00' },
+  { key: 'night', label: 'Night', start: '23:00', end: '07:00' },
+];
+/** What happens when the person already has a shift at that time (the API's on_conflict values). */
+const CONFLICT_OPTIONS = [
+  { value: 'skip', label: 'Keep their existing shift', hint: 'This new shift is not created for that person and day.' },
+  { value: 'replace', label: 'Replace it with this one', hint: 'The existing shift is removed (Undo brings it back).' },
+  { value: 'keep_both', label: 'Keep both', hint: 'Both shifts stay; you confirm the overlap before saving.' },
+];
+const initials = (name) => String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+const ring = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2';
+const chip = (on) => `${ring} rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${on ? 'border-brand bg-brand text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-brand hover:bg-brand-soft'}`;
+const linkBtn = `${ring} rounded px-1.5 py-0.5 text-xs font-medium text-brand hover:bg-brand-soft disabled:text-slate-300`;
+const mins = (t) => { const [h, m] = String(t || '0:0').split(':').map(Number); return h * 60 + m; };
+
+function SectionTitle({ id, children, actions }) {
+  return (
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <h3 id={id} className="text-xs font-semibold uppercase tracking-wide text-slate-500">{children}</h3>
+      {actions && <div className="flex gap-1">{actions}</div>}
+    </div>
+  );
+}
+
 /** Add shift: several staff and several days at once (preview, then one undoable batch). */
 function BulkAddModal({ days, staff, areas, initialDate, onClose, onDone }) {
-  const [f, setF] = useState({ user_ids: [], dates: initialDate ? [initialDate] : [], start_time: '07:00', end_time: '15:00', ends_next_day: false, area_id: '', note: '', on_conflict: 'skip' });
+  const [f, setF] = useState({ user_ids: [], dates: initialDate ? [initialDate] : [], start_time: '07:00', end_time: '15:00', area_id: '', note: '', on_conflict: 'skip' });
+  const [preset, setPreset] = useState('morning');
+  const [more, setMore] = useState(false);
   const r = useBatchRunner('/schedules/bulk', onDone);
-  const toggle = (k, v) => { setF((x) => ({ ...x, [k]: x[k].includes(v) ? x[k].filter((y) => y !== v) : [...x[k], v] })); r.setPreview(null); };
-  const set = (k) => (e) => { setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }); r.setPreview(null); };
-  const body = { ...f, area_id: Number(f.area_id) || null };
+  const change = (patch) => { setF((x) => ({ ...x, ...patch })); r.setPreview(null); };
+  const toggle = (k, v) => change({ [k]: f[k].includes(v) ? f[k].filter((y) => y !== v) : [...f[k], v] });
+  const isoDays = days.map((d) => isoDate(d));
+  const weekdays = days.filter((d) => d.getDay() >= 1 && d.getDay() <= 5).map((d) => isoDate(d));
+
+  // Overnight is detected: an end time at or before the start time ends the next day.
+  const sameTime = f.start_time === f.end_time;
+  const overnight = !sameTime && mins(f.end_time) <= mins(f.start_time);
+  const area = areas.find((a) => String(a.area_id) === String(f.area_id));
+  const missing = [!f.user_ids.length && 'staff', !f.dates.length && 'days', !area && 'area'].filter(Boolean);
+  const timesOk = Boolean(f.start_time && f.end_time) && !sameTime;
+  const ready = !missing.length && timesOk;
+  const count = f.user_ids.length * f.dates.length;
+  const toCreate = r.preview?.planned ? r.preview.create : count;
+  const body = { user_ids: f.user_ids, dates: f.dates, start_time: f.start_time, end_time: f.end_time, ends_next_day: overnight,
+    area_id: Number(f.area_id) || null, note: f.note, on_conflict: f.on_conflict };
+
+  const months = [...new Set(days.map((d) => d.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })))].join(' – ');
+  const summary = missing.length ? `Choose: ${missing.join(', ')}`
+    : !timesOk ? 'Start and end times must differ'
+      : `${count} shift${count === 1 ? '' : 's'} · ${formatTime(f.start_time)}–${formatTime(f.end_time)}${overnight ? ' (next day)' : ''} · ${area.name}`;
+
+  const footer = (
+    <>
+      <p className={`mr-auto text-sm ${ready ? 'text-navy-900' : 'text-slate-500'}`} aria-live="polite">{summary}</p>
+      <Button variant="secondary" className={ring} onClick={onClose}>Cancel</Button>
+      <Button variant="secondary" className={ring} disabled={!ready} loading={r.busy && !r.preview} onClick={() => r.run(body, false)}>Preview</Button>
+      <Button className={ring} disabled={!ready || (r.preview?.planned && toCreate === 0)} loading={r.busy && Boolean(r.preview)} onClick={() => r.run(body, true)}>
+        {!ready ? 'Create' : r.preview?.needsConfirm ? `Create ${toCreate} anyway` : `Create ${toCreate}`}
+      </Button>
+    </>
+  );
+
   return (
-    <Modal open onClose={onClose} size="lg" title="Add shift"
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button variant="secondary" loading={r.busy && !r.preview} onClick={() => r.run(body, false)}>Preview</Button>
-        <Button disabled={!r.preview} loading={r.busy && Boolean(r.preview)} onClick={() => r.run(body, true)}>{r.preview?.needsConfirm ? 'Create anyway' : 'Create shifts'}</Button></>}>
+    <Modal open onClose={onClose} size="wide" title="Add shift" footer={footer} initialFocus="first">
       <div className="space-y-4">
-        <ErrorNote error={r.error} />
-        <fieldset><legend className="mb-1 text-sm font-medium text-navy-800">Staff (one or more)</legend>
-          <div className="grid max-h-40 gap-1 overflow-y-auto rounded-lg border border-slate-200 p-2 sm:grid-cols-2">
-            {staff.map((p) => <label key={p.user_id} className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4 accent-brand" checked={f.user_ids.includes(p.user_id)} onChange={() => toggle('user_ids', p.user_id)} /> {p.full_name}</label>)}
+        {r.error && <ErrorNote error={r.error} />}
+        <div className="grid gap-5 md:grid-cols-2">
+          {/* Left: who */}
+          <section aria-labelledby="add-who">
+            <SectionTitle id="add-who" actions={<>
+              <button type="button" className={linkBtn} disabled={!staff.length || f.user_ids.length === staff.length} onClick={() => change({ user_ids: staff.map((p) => p.user_id) })}>Select all</button>
+              <button type="button" className={linkBtn} disabled={!f.user_ids.length} onClick={() => change({ user_ids: [] })}>Clear</button>
+            </>}>Who · {f.user_ids.length} selected</SectionTitle>
+            {staff.length === 0 ? <p className="text-sm text-slate-500">No active Staff accounts. Create them under User accounts.</p> : (
+              <ul className="space-y-1 md:max-h-[19rem] md:overflow-y-auto md:pr-1" aria-label="Staff">
+                {staff.map((p) => {
+                  const on = f.user_ids.includes(p.user_id);
+                  return (
+                    <li key={p.user_id}>
+                      <button type="button" role="checkbox" aria-checked={on} onClick={() => toggle('user_ids', p.user_id)}
+                        className={`${ring} flex w-full items-center gap-3 rounded-xl border px-3 py-1.5 text-left text-sm transition-colors ${on ? 'border-brand bg-brand-soft' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                        <span aria-hidden className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${on ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600'}`}>
+                          {on ? <Check className="h-4 w-4" /> : initials(p.full_name)}
+                        </span>
+                        <span className={`min-w-0 truncate ${on ? 'font-medium text-navy-900' : 'text-slate-700'}`}>{p.full_name}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          {/* Right: days, shift, area */}
+          <div className="space-y-4">
+            <section aria-labelledby="add-days">
+              <SectionTitle id="add-days" actions={<>
+                <button type="button" className={linkBtn} disabled={!weekdays.length} onClick={() => change({ dates: weekdays })}>Mon–Fri</button>
+                <button type="button" className={linkBtn} onClick={() => change({ dates: isoDays })}>All</button>
+                <button type="button" className={linkBtn} disabled={!f.dates.length} onClick={() => change({ dates: [] })}>Clear</button>
+              </>}>Days · {months}</SectionTitle>
+              <div className="grid grid-cols-7 gap-1" role="group" aria-labelledby="add-days">
+                {days.map((d) => {
+                  const iso = isoDate(d);
+                  const on = f.dates.includes(iso);
+                  return (
+                    <button key={iso} type="button" aria-pressed={on} aria-label={d.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric' })} onClick={() => toggle('dates', iso)}
+                      className={`${ring} flex flex-col items-center rounded-lg border py-1.5 text-xs transition-colors ${on ? 'border-brand bg-brand text-white' : 'border-slate-300 bg-white text-slate-600 hover:border-brand hover:bg-brand-soft'}`}>
+                      <span className="font-medium">{d.toLocaleDateString('en-PH', { weekday: 'short' })}</span>
+                      <span className={`text-base font-semibold leading-tight ${on ? 'text-white' : 'text-navy-900'}`}>{d.getDate()}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section aria-labelledby="add-shift">
+              <SectionTitle id="add-shift">Shift</SectionTitle>
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" role="radiogroup" aria-labelledby="add-shift">
+                {SHIFT_PRESETS.map((p) => (
+                  <button key={p.key} type="button" role="radio" aria-checked={preset === p.key} className={chip(preset === p.key)}
+                    onClick={() => { setPreset(p.key); change({ start_time: p.start, end_time: p.end }); }}>
+                    <span className="block">{p.label}</span>
+                    <span className={`block text-[11px] font-normal ${preset === p.key ? 'text-white/90' : 'text-slate-500'}`}>{p.start}–{p.end}</span>
+                  </button>
+                ))}
+                <button type="button" role="radio" aria-checked={preset === 'custom'} className={chip(preset === 'custom')} onClick={() => setPreset('custom')}>
+                  <span className="block">Custom</span><span className={`block text-[11px] font-normal ${preset === 'custom' ? 'text-white/90' : 'text-slate-500'}`}>Set times</span>
+                </button>
+              </div>
+              {preset === 'custom' && (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <Field label="Start"><input className="input" type="time" value={f.start_time} onChange={(e) => change({ start_time: e.target.value })} /></Field>
+                  <Field label="End"><input className="input" type="time" value={f.end_time} onChange={(e) => change({ end_time: e.target.value })} /></Field>
+                </div>
+              )}
+              {overnight && <p className="mt-1.5 text-xs text-slate-600"><Moon className="mr-1 inline h-3.5 w-3.5 align-[-2px]" aria-hidden />Overnight: ends the next day.</p>}
+              {sameTime && <p className="mt-1.5 text-xs text-red-700" role="alert">Start and end times can&apos;t be the same.</p>}
+            </section>
+
+            <section aria-labelledby="add-area">
+              <SectionTitle id="add-area">Area</SectionTitle>
+              {areas.length === 0 ? <p className="text-sm text-slate-500">No active areas. Add them in Settings → Schedule areas.</p> : (
+                <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby="add-area">
+                  {areas.map((a) => {
+                    const on = String(a.area_id) === String(f.area_id);
+                    return <button key={a.area_id} type="button" role="radio" aria-checked={on} className={chip(on)} onClick={() => change({ area_id: String(a.area_id) })}>{a.name}</button>;
+                  })}
+                </div>
+              )}
+            </section>
           </div>
-        </fieldset>
-        <fieldset><legend className="mb-1 text-sm font-medium text-navy-800">Days (one or more)</legend>
-          <div className="flex flex-wrap gap-1.5">
-            {days.map((d) => { const iso = isoDate(d); return (
-              <button key={iso} type="button" aria-pressed={f.dates.includes(iso)} onClick={() => toggle('dates', iso)}
-                className={`rounded-full px-3 py-1 text-xs font-medium ${f.dates.includes(iso) ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{dayLabel(d)}</button>); })}
-          </div>
-        </fieldset>
-        <div className="grid gap-3 sm:grid-cols-4">
-          <Field label="Start"><input className="input" type="time" value={f.start_time} onChange={set('start_time')} /></Field>
-          <Field label="End"><input className="input" type="time" value={f.end_time} onChange={set('end_time')} /></Field>
-          <label className="flex items-end gap-1.5 pb-2 text-xs"><input type="checkbox" className="h-4 w-4 accent-brand" checked={f.ends_next_day} onChange={set('ends_next_day')} /> Ends the next day</label>
-          <Field label="Area"><select className="input" value={f.area_id} onChange={set('area_id')}><option value="">Select</option>{areas.map((a) => <option key={a.area_id} value={a.area_id}>{a.name}</option>)}</select></Field>
         </div>
-        <Field label="Note (optional)"><input className="input" maxLength={300} value={f.note} onChange={set('note')} /></Field>
-        <Field label="If someone already has a shift at that time">
-          <select className="input" value={f.on_conflict} onChange={set('on_conflict')}><option value="skip">Skip it (keep the existing shift)</option><option value="replace">Replace the existing shift</option></select>
-        </Field>
+
+        {/* More options */}
+        <div className="rounded-xl border border-slate-200">
+          <button type="button" aria-expanded={more} aria-controls="add-more" onClick={() => setMore(!more)}
+            className={`${ring} flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium text-navy-900 hover:bg-slate-50`}>
+            <span>More options <span className="font-normal text-slate-500">· note, {CONFLICT_OPTIONS.find((o) => o.value === f.on_conflict).label.toLowerCase()}</span></span>
+            <ChevronDown className={`h-4 w-4 transition-transform ${more ? 'rotate-180' : ''}`} aria-hidden />
+          </button>
+          {more && (
+            <div id="add-more" className="grid gap-3 border-t border-slate-100 p-3 md:grid-cols-2">
+              <Field label="Note (optional)"><input className="input" maxLength={300} value={f.note} onChange={(e) => change({ note: e.target.value })} /></Field>
+              <fieldset>
+                <legend className="mb-1 text-sm font-medium text-navy-800">If a staff member already has a shift at that time</legend>
+                <div className="space-y-1">
+                  {CONFLICT_OPTIONS.map((o) => (
+                    <label key={o.value} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-50">
+                      <input type="radio" name="on_conflict" className="mt-0.5 h-4 w-4 accent-brand" checked={f.on_conflict === o.value} onChange={() => change({ on_conflict: o.value })} />
+                      <span><span className="font-medium text-navy-900">{o.label}</span><span className="block text-xs text-slate-500">{o.hint}</span></span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            </div>
+          )}
+        </div>
+
+        {r.preview && !r.preview.planned && <Warnings warnings={r.preview.warnings} />}
         <PreviewList preview={r.preview} />
       </div>
     </Modal>
@@ -228,8 +376,6 @@ function CopyModal({ mode, from, weekStart, days, onClose, onDone }) {
     </Modal>
   );
 }
-
-const AREA_ICONS = [['health', HeartPulse, 'Has assigned health records'], ['adoption', FileHeart, 'Has assigned adoption applications'], ['transition', GraduationCap, 'Has assigned transition reviews']];
 
 function WeekView() {
   const { query, toast } = useApp();
@@ -303,11 +449,7 @@ function WeekView() {
                   <ul className="space-y-2">
                     {list.map((s) => (
                       <li key={s.schedule_id} className="group rounded-lg bg-page p-2">
-                        <p className="flex items-center gap-1 text-xs font-semibold text-navy-900">{s.full_name}
-                          {s.assigned_areas && AREA_ICONS.filter(([k]) => s.assigned_areas[k]).map(([k, Icon, tip]) => (
-                            <span key={k} title={tip} className="text-slate-400"><Icon className="h-3 w-3" aria-label={tip} /></span>
-                          ))}
-                        </p>
+                        <p className="text-xs font-semibold text-navy-900">{s.full_name}</p>
                         <p className="text-xs text-slate-500">{formatTime(s.start_time)}–{formatTime(s.end_time)}{s.ends_next_day ? ' (next day)' : ''}</p>
                         <p className="text-xs text-slate-600">{s.area_label}</p>
                         {s.note && <p className="text-[11px] text-slate-500">{s.note}</p>}
@@ -341,19 +483,12 @@ function WeekView() {
   );
 }
 
-/** Staff schedules (Admin): the week view, and the Record access overview. */
+/** Staff schedules (Admin): the week view. */
 export default function Schedules() {
-  const [tab, setTab] = useState('week');
   return (
     <>
-      <PageHeader title="Staff schedules" description="Plan who is on duty each day, and see who is assigned to which records. Staff see their own shifts under My schedule." />
-      <div className="mb-4 inline-flex gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200" role="tablist" aria-label="Staff schedules">
-        {[['week', 'Week'], ['access', 'Record access']].map(([k, l]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${tab === k ? 'bg-navy-900 text-white' : 'text-slate-600 hover:text-navy-900'}`}>{l}</button>
-        ))}
-      </div>
-      {tab === 'week' ? <WeekView /> : <RecordAccess />}
+      <PageHeader title="Staff schedules" description="Plan who is on duty each day. Staff see their own shifts under My schedule." />
+      <WeekView />
     </>
   );
 }

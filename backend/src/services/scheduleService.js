@@ -190,11 +190,12 @@ async function saveDay(req, date, body) {
 
 /**
  * Plans and (unless preview) applies a set of new shifts. Conflicts with existing shifts of the same
- * person follow on_conflict: "skip" (default) leaves the existing shift, "replace" removes it first.
+ * person follow on_conflict: "skip" (default) leaves the existing shift, "replace" removes it first,
+ * "keep_both" creates the new shift beside the existing one (the overlap must be confirmed).
  * Applied actions are one batch, which the Admin can undo.
  */
 async function applyPlan(req, kind, planned, { preview, onConflict, summaryLabel, confirm }) {
-  if (!['skip', 'replace'].includes(onConflict)) throw new HttpError(400, 'Choose Skip or Replace for conflicts.');
+  if (!['skip', 'replace', 'keep_both'].includes(onConflict)) throw new HttpError(400, 'Choose what happens when a staff member already has a shift at that time.');
   return withTransaction(async (conn) => {
     const ctx = { staff: await activeStaff(conn), areas: await areas(conn) };
     const rowErrors = {};
@@ -202,10 +203,11 @@ async function applyPlan(req, kind, planned, { preview, onConflict, summaryLabel
     if (Object.keys(rowErrors).length) throw new HttpError(400, 'Some shifts are invalid. Nothing was saved.', { row_errors: rowErrors });
     const existing = await existingAround(conn, [...new Set(values.map((v) => v.user_id))], [...new Set(values.map((v) => v.shift_date))]);
     const items = values.map((v) => ({ ...v, conflicts: existing.filter((e) => e.user_id === v.user_id && overlaps(v, e)) }));
-    const toCreate = items.filter((it) => onConflict === 'replace' || !it.conflicts.length);
+    const toCreate = items.filter((it) => onConflict !== 'skip' || !it.conflicts.length);
     const replaced = onConflict === 'replace' ? [...new Map(items.flatMap((it) => it.conflicts).map((c) => [c.schedule_id, c])).values()] : [];
     const kept = existing.filter((e) => !replaced.some((r) => r.schedule_id === e.schedule_id));
-    const warnings = warningsFor(toCreate, kept, ctx.staff).filter((w) => w.kind === 'long' || !items[w.row]?.conflicts.length);
+    // Conflicts already shown in the plan aren't repeated as warnings, except with keep_both, where the overlap is confirmed.
+    const warnings = warningsFor(toCreate, kept, ctx.staff).filter((w) => onConflict === 'keep_both' || w.kind === 'long' || !toCreate[w.row]?.conflicts.length);
     const result = {
       planned: items.map((it) => ({ user_id: it.user_id, name: ctx.staff.get(it.user_id), shift_date: it.shift_date, start_time: it.start_time, end_time: it.end_time,
         ends_next_day: it.ends_next_day, area: it.area_name, conflicts: it.conflicts.map((c) => describe(c)) })),

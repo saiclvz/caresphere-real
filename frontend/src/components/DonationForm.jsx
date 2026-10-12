@@ -4,6 +4,9 @@ import useApi from '../hooks/useApi';
 import { api, download } from '../api/client';
 import { Button, ErrorNote, Field, Modal, Spinner } from './ui';
 import { formatDateTime } from '../lib/format';
+import { useAuth } from '../context/AuthContext';
+import { hasDuty } from '../lib/duties';
+import AllocationEditor, { allocationBody, blankAllocation } from './donations/AllocationEditor';
 
 /*
  * The one "Record donation" form. Used by the Donations page and by the Visitors page
@@ -19,7 +22,7 @@ export const RECORD_METHODS = ['Cash', 'In-kind'];
 const NEW_ITEM = '__new__';
 const PH_MOBILE = /^(09\d{9}|\+639\d{9}|639\d{9})$/;
 const badInput = 'border-red-400 focus:border-red-500 focus:ring-red-200';
-const blankLine = () => ({ item_id: '', quantity: '', item_name: '', category: '' });
+const blankLine = () => ({ item_id: '', quantity: '', item_name: '', category: '', estimated_value: '', expiry_date: '' });
 
 /** Returns { field: message } for every invalid field. Empty object = valid. */
 function validateDonation(f) {
@@ -36,7 +39,6 @@ function validateDonation(f) {
   if (!f.payment_method) e.payment_method = 'Payment method is required.';
   const inKind = f.payment_method === 'In-kind';
   if (inKind) {
-    if (String(f.amount).trim() && !(Number(f.amount) > 0)) e.amount = 'Leave blank or enter an amount greater than 0.';
     const picked = new Set();
     f.items.forEach((line, i) => {
       if (!line.item_id) e[`item_${i}`] = 'Choose an item, or create a new one.';
@@ -47,11 +49,23 @@ function validateDonation(f) {
       else picked.add(line.item_id);
       if (!String(line.quantity).trim()) e[`qty_${i}`] = 'Quantity is required.';
       else if (!Number.isInteger(Number(line.quantity)) || Number(line.quantity) < 1) e[`qty_${i}`] = 'Enter a whole number of at least 1.';
+      if (String(line.estimated_value).trim() && !(Number(line.estimated_value) > 0)) e[`value_${i}`] = 'Leave blank or enter a value greater than 0.';
     });
   } else if (!String(f.amount).trim()) e.amount = 'Amount is required.';
   else if (!(Number(f.amount) > 0)) e.amount = 'Enter an amount greater than 0.';
   if (!f.description.trim()) e.description = 'Description is required.';
-  if (!f.allocation_notes.trim()) e.allocation_notes = 'Allocation is required.';
+  if (!f.purpose) e.purpose = 'Choose the purpose.';
+  const lines = f.allocation.filter((l) => l.program || l.amount || l.intended_use);
+  if (!lines.length) e.allocation = 'Add at least one allocation line.';
+  lines.forEach((l, i) => {
+    if (!l.program) e[`allocation_${i}`] = 'Choose a program.';
+    else if (!inKind && !(Number(l.amount) > 0)) e[`allocation_${i}`] = 'Enter the amount for this program.';
+    else if ((inKind || l.program === 'Other') && !String(l.intended_use || '').trim()) e[`allocation_${i}`] = l.program === 'Other' ? 'Describe the use for "Other".' : 'Describe the intended use.';
+  });
+  if (!inKind && lines.length && !Object.keys(e).some((k) => k.startsWith('allocation_')) && Number(f.amount) > 0) {
+    const sum = Math.round(lines.reduce((x, l) => x + Number(l.amount), 0) * 100) / 100;
+    if (Math.abs(sum - Number(f.amount)) > 0.009) e.allocation = 'The allocation must add up to the amount.';
+  }
   return e;
 }
 
@@ -83,6 +97,14 @@ function ItemsPicker({ items, setItems, errors, inventory }) {
                 onClick={() => setItems(items.filter((_, j) => j !== i))}><X className="h-4 w-4" /></Button>
             )}
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Estimated value (₱)" error={errors[`value_${i}`]} hint="Optional. Shown as an estimate, never added to cash.">
+              <input className={`input ${errors[`value_${i}`] ? badInput : ''}`} type="number" min="0.01" step="0.01" value={line.estimated_value} onChange={(e) => setLine(i, { estimated_value: e.target.value })} />
+            </Field>
+            <Field label="Expiry date" hint="Optional. Earliest-expiry stock is used first.">
+              <input className="input" type="date" value={line.expiry_date} onChange={(e) => setLine(i, { expiry_date: e.target.value })} />
+            </Field>
+          </div>
           {line.item_id === NEW_ITEM && (
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="New item name" required error={errors[`name_${i}`]}>
@@ -102,11 +124,11 @@ function ItemsPicker({ items, setItems, errors, inventory }) {
 }
 
 /**
- * Prints the receipt PDF (with the QR code and the receipt code under it). Falls back to
- * downloading it when the browser can't print a PDF from the page.
+ * Prints the acknowledgment PDF (with the QR code and the receipt code under it). Falls back to downloading it
+ * when the browser can't print a PDF from the page.
  */
-export async function printReceipt(donationId) {
-  const name = `CareSphere-Receipt-${String(donationId).padStart(6, '0')}.pdf`;
+export async function printReceipt(donationId, number) {
+  const name = `CareSphere-Acknowledgment-${number || donationId}.pdf`;
   const res = await api(`/donations/${donationId}/receipt`, { raw: true });
   const url = URL.createObjectURL(await res.blob());
   const frame = document.createElement('iframe');
@@ -119,27 +141,44 @@ export async function printReceipt(donationId) {
   document.body.appendChild(frame);
 }
 
-/** Shown after a walk-in donation is saved: walk-ins have no portal, so they get a printed receipt. */
-function WalkInSaved({ donation, onClose }) {
+/**
+ * After saving: the donation number, and for an accepted walk-in gift the acknowledgment (walk-ins have no portal,
+ * so they get it printed). In-kind gifts are inspected and accepted first; the acknowledgment comes after that.
+ */
+function Saved({ donation: d0, onClose }) {
+  const [d, setD] = useState(d0);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const run = (kind, fn) => async () => { setBusy(kind); setError(null); try { await fn(); } catch (err) { setError(err); } finally { setBusy(null); } };
+  const issue = async () => { const r = await api(`/donations/${d.donation_id}/acknowledgment`, { method: 'POST', body: {} }); setD(r.data); };
   return (
     <div className="space-y-4">
       <ErrorNote error={error} />
-      <p className="flex items-center gap-2 font-medium text-emerald-700"><CheckCircle2 className="h-5 w-5" aria-hidden /> Donation #{String(donation.donation_id).padStart(6, '0')} recorded</p>
-      <p className="text-sm text-slate-600">{donation.donor_name} is a walk-in donor with no portal account, so give them a printed receipt. It shows the QR code with the receipt code printed under it.</p>
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <p className="text-xs text-slate-500">Receipt code</p>
-        <p className="break-all font-mono text-sm text-navy-900">{donation.qr_receipt_code}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button loading={busy === 'print'} onClick={run('print', () => printReceipt(donation.donation_id))}><Printer className="h-4 w-4" /> Print receipt</Button>
-        <Button variant="secondary" loading={busy === 'pdf'} onClick={run('pdf', () => download(`/donations/${donation.donation_id}/receipt`, `CareSphere-Receipt-${String(donation.donation_id).padStart(6, '0')}.pdf`))}>
-          <Download className="h-4 w-4" /> Download PDF
-        </Button>
-        <Button variant="ghost" className="ml-auto" onClick={onClose}>Done</Button>
-      </div>
+      <p className="flex items-center gap-2 font-medium text-emerald-700"><CheckCircle2 className="h-5 w-5" aria-hidden /> Donation {d.donation_no} recorded · {d.status}</p>
+      {d.can_download ? (
+        <>
+          <p className="text-sm text-slate-600">{d.donor_type === 'walk_in' ? 'Walk-in donors have no portal account, so give them the printed acknowledgment.' : 'The donor can also download it from their portal.'} It shows the QR code with the receipt code printed under it.</p>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-xs text-slate-500">Receipt code</p><p className="break-all font-mono text-sm text-navy-900">{d.qr_receipt_code}</p></div>
+          <div className="flex flex-wrap gap-2">
+            <Button loading={busy === 'print'} onClick={run('print', () => printReceipt(d.donation_id, d.donation_no))}><Printer className="h-4 w-4" aria-hidden /> Print acknowledgment</Button>
+            <Button variant="secondary" loading={busy === 'pdf'} onClick={run('pdf', () => download(`/donations/${d.donation_id}/receipt`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`))}><Download className="h-4 w-4" aria-hidden /> Download PDF</Button>
+            <Button variant="ghost" className="ml-auto" onClick={() => onClose(d)}>Done</Button>
+          </div>
+        </>
+      ) : d.status === 'Accepted' ? (
+        <>
+          <p className="text-sm text-slate-600">The donation is accepted. Issue the acknowledgment now to print it, or later from the donation page.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button loading={busy === 'ack'} onClick={run('ack', issue)}>Issue acknowledgment</Button>
+            <Button variant="ghost" className="ml-auto" onClick={() => onClose(d)}>Later</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-slate-600">{d.in_kind ? 'In-kind gifts are inspected and accepted first. The acknowledgment can be issued after that, from the donation page.' : 'Finish the allocation on the donation page to accept it and issue the acknowledgment.'}</p>
+          <div className="flex justify-end"><Button variant="ghost" onClick={() => onClose(d)}>Done</Button></div>
+        </>
+      )}
     </div>
   );
 }
@@ -150,12 +189,17 @@ function WalkInSaved({ donation, onClose }) {
  */
 export default function DonationForm({ visit = null, onClose, onSaved }) {
   const donors = useApi('/donations/donors');
-  const inventory = useApi('/inventory');
+  const options = useApi('/donations/options');
+  const programs = options.data?.data?.programs || [];
+  const { user } = useAuth();
+  // Staff without the Inventory duty get the item list through the Donations module (names and stock only).
+  const inventory = useApi(hasDuty(user, 'inventory') ? '/inventory' : '/donations/inventory-items');
   const [form, setForm] = useState({
     donor_type: visit ? 'walk_in' : '', donor_id: '',
     walk_in_name: visit?.visitor_name || '', walk_in_contact: visit?.contact_number || '',
+    walk_in_kind: 'Individual', anonymous: false,
     amount: '', payment_method: 'Cash', items: [blankLine()],
-    description: '', allocation_notes: '',
+    description: '', purpose: '', allocation: [blankAllocation()],
   });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState(null);
@@ -188,25 +232,26 @@ export default function DonationForm({ visit = null, onClose, onSaved }) {
         donor_id: form.donor_type === 'registered' ? Number(form.donor_id) : undefined,
         walk_in_name: form.donor_type === 'walk_in' ? form.walk_in_name.trim() : undefined,
         walk_in_contact: form.donor_type === 'walk_in' && form.walk_in_contact.trim() ? form.walk_in_contact.trim() : undefined,
+        walk_in_kind: form.donor_type === 'walk_in' ? form.walk_in_kind : undefined,
+        anonymous: form.anonymous,
         visit_id: visit?.visitor_id,
-        amount: String(form.amount).trim() ? Number(form.amount) : (inKind ? 0 : undefined),
+        amount: inKind ? undefined : Number(form.amount),
         payment_method: form.payment_method,
         items: inKind ? form.items.map((l) => (l.item_id === NEW_ITEM
-          ? { new_item: { item_name: l.item_name.trim(), category: l.category.trim() }, quantity: Number(l.quantity) }
-          : { item_id: Number(l.item_id), quantity: Number(l.quantity) })) : undefined,
+          ? { new_item: { item_name: l.item_name.trim(), category: l.category.trim() }, quantity: Number(l.quantity), estimated_value: l.estimated_value || undefined, expiry_date: l.expiry_date || undefined }
+          : { item_id: Number(l.item_id), quantity: Number(l.quantity), estimated_value: l.estimated_value || undefined, expiry_date: l.expiry_date || undefined })) : undefined,
         description: form.description.trim(),
-        is_general: true, // every donation recorded by Admin or Staff is general
-        allocation_notes: form.allocation_notes.trim(),
+        purpose: form.purpose,
+        allocation: allocationBody(form.allocation, inKind),
       } });
-      if (res.data.donor_type === 'walk_in') setSaved(res.data);
-      else onSaved(res.data);
-    } catch (err) { setError(err); } finally { setSaving(false); }
+      setSaved(res.data);
+    } catch (err) { if (err.details?.errors) setErrors(err.details.errors); setError(err); } finally { setSaving(false); }
   };
 
   if (saved) {
     return (
       <Modal open onClose={() => onSaved(saved)} title="Donation recorded">
-        <WalkInSaved donation={saved} onClose={() => onSaved(saved)} />
+        <Saved donation={saved} onClose={(d) => onSaved(d)} />
       </Modal>
     );
   }
@@ -258,15 +303,28 @@ export default function DonationForm({ visit = null, onClose, onSaved }) {
           </div>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={inKind ? 'Estimated value (₱)' : 'Amount (₱)'} required={!inKind} error={errors.amount} hint={inKind ? 'Optional for in-kind gifts.' : undefined}>
-            <input className={`input ${errors.amount ? badInput : ''}`} type="number" min="0.01" step="0.01" value={form.amount} onChange={set('amount')} />
+        {form.donor_type === 'walk_in' && (
+          <Field label="Donor is" hint="An organization (company, school, church group) or a person.">
+            <select className="input" value={form.walk_in_kind} onChange={set('walk_in_kind')}><option>Individual</option><option>Organization</option></select>
           </Field>
-          <Field label="Payment method" required error={errors.payment_method}>
+        )}
+        {form.donor_type && (
+          <label className="flex items-center gap-2 text-sm text-navy-900">
+            <input type="checkbox" className="h-4 w-4 accent-brand" checked={form.anonymous} onChange={(e) => update({ anonymous: e.target.checked })} />
+            Anonymous donation (shown as "Anonymous donor" everywhere)
+          </label>
+        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Type" required error={errors.payment_method} hint="Cash, or items (in-kind).">
             <select className={`input ${errors.payment_method ? badInput : ''}`} value={form.payment_method} onChange={set('payment_method')}>
               {RECORD_METHODS.map((m) => <option key={m}>{m}</option>)}
             </select>
           </Field>
+          {!inKind && (
+            <Field label="Amount (₱)" required error={errors.amount}>
+              <input className={`input ${errors.amount ? badInput : ''}`} type="number" min="0.01" step="0.01" value={form.amount} onChange={set('amount')} />
+            </Field>
+          )}
         </div>
         {inKind && <ItemsPicker items={form.items} setItems={(items) => update({ items })} errors={errors} inventory={inventory} />}
 
@@ -274,9 +332,17 @@ export default function DonationForm({ visit = null, onClose, onSaved }) {
           <textarea className={`input ${errors.description ? badInput : ''}`} rows={2} maxLength={2000} value={form.description} onChange={set('description')} />
         </Field>
 
-        <Field label="Allocation" required error={errors.allocation_notes} hint="How the donation will be used. Visible to registered donors in their portal.">
-          <textarea className={`input ${errors.allocation_notes ? badInput : ''}`} rows={3} maxLength={3000} value={form.allocation_notes} onChange={set('allocation_notes')} placeholder="e.g. 20 cans of infant formula for the nursery" />
+        <Field label="Purpose" required error={errors.purpose} hint="What the donor's gift is for. The only intent field.">
+          <select className={`input ${errors.purpose ? badInput : ''}`} value={form.purpose} onChange={(e) => {
+            const p = e.target.value;
+            // Prefill a single allocation line with the purpose (and the full amount for cash) when nothing is set yet.
+            const blank = form.allocation.length === 1 && !form.allocation[0].program && !form.allocation[0].amount;
+            update({ purpose: p, ...(blank ? { allocation: [{ ...blankAllocation(p), amount: inKind ? '' : form.amount }] } : {}) });
+          }}>
+            <option value="">Choose...</option>{programs.map((p) => <option key={p}>{p}</option>)}
+          </select>
         </Field>
+        <AllocationEditor lines={form.allocation} onChange={(allocation) => update({ allocation })} inKind={inKind} amount={form.amount} programs={programs} errors={errors} />
       </form>
     </Modal>
   );

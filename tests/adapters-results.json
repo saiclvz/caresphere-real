@@ -1,0 +1,99 @@
+[
+ {
+  "test": "PhilSys adapter asks for the staff step",
+  "pass": true
+ },
+ {
+  "test": "Passport MRZ adapter is consistency only (never verified)",
+  "pass": true
+ },
+ {
+  "test": "Other IDs: manual",
+  "pass": true
+ },
+ {
+  "test": "Adapter offline (timeout) gives unable, never verified",
+  "pass": true,
+  "got": "unable"
+ },
+ {
+  "test": "No internet gives unable",
+  "pass": true,
+  "got": "unable"
+ },
+ {
+  "test": "Unexpected answer gives failed",
+  "pass": true,
+  "got": "failed"
+ },
+ {
+  "test": "Authorized provider verified",
+  "pass": true,
+  "got": "verified"
+ },
+ {
+  "test": "PhilID verified through PhilSys Check -> Verified, Staff-confirmed, official method",
+  "pass": true,
+  "got": {
+   "from": "Flagged for review",
+   "to": "Verified",
+   "result": "verified",
+   "matches": true,
+   "item_type": "PhilSys National ID"
+  }
+ },
+ {
+  "test": "PhilSys verified but details differ -> Information mismatch",
+  "pass": true,
+  "got": {
+   "from": "Flagged for review",
+   "to": "Information mismatch",
+   "result": "verified",
+   "matches": false,
+   "item_type": "PhilSys National ID"
+  }
+ },
+ {
+  "test": "Details differ needs a note",
+  "pass": true,
+  "got": "Describe which details differ (at least 5 characters)."
+ },
+ {
+  "test": "Deactivated card -> Invalid ID",
+  "pass": true,
+  "got": {
+   "from": "Flagged for review",
+   "to": "Invalid ID",
+   "result": "deactivated",
+   "matches": false,
+   "item_type": "PhilSys National ID"
+  }
+ },
+ {
+  "test": "QR unreadable -> Unable to verify",
+  "pass": true,
+  "got": {
+   "from": "Flagged for review",
+   "to": "Unable to verify",
+   "result": "unreadable",
+   "matches": false,
+   "item_type": "PhilSys National ID"
+  }
+ },
+ {
+  "test": "Verified needs the details question",
+  "pass": true,
+  "got": "Say whether the details PhilSys Check displayed match the printed card."
+ },
+ {
+  "test": "PhilSys Check refused for a passport",
+  "pass": true,
+  "got": "PhilSys Check applies to the PhilSys National ID only."
+ },
+ {
+  "test": "Expired ID cannot be verified",
+  "pass": true,
+  "got": "This ID has expired and cannot be marked verified."
+ }
+]
+15/15 passed

@@ -16,6 +16,8 @@ import PhotoCropDialog from '../components/PhotoCropDialog';
 import ChildLegalPanel from '../components/adoption/ChildLegalPanel';
 import ChildCaseWorker from '../components/ChildCaseWorker';
 import AdoptionHistorySection from '../components/adoption/AdoptionHistorySection';
+import TransitionSummaryCard from '../components/TransitionSummaryCard';
+import { hasDuty } from '../lib/duties';
 
 function Info({ label, children }) {
   return (
@@ -120,7 +122,8 @@ export default function ChildDetail() {
             </dl>
           </Card>
 
-          {child.transition_flag && (
+          {hasDuty(user, 'transition') && (child.age >= 18 || child.transition_flag) && <TransitionSummaryCard childId={child.child_id} firstName={child.first_name} />}
+          {!hasDuty(user, 'transition') && child.transition_flag && (
             <Card className="border-amber-200 p-5">
               <h2 className="flex items-center gap-2 font-semibold text-navy-900"><GraduationCap className="h-4 w-4 text-amber-600" /> Transition Review (18+)</h2>
               <p className="mt-1 text-sm text-slate-600">
@@ -146,9 +149,10 @@ export default function ChildDetail() {
             )}
           </Card>
 
-          <AdoptionHistorySection childId={child.child_id} />
+          {/* Adoption panels need the Adoption duty (the server refuses them otherwise). */}
+          {hasDuty(user, 'adoption') && <AdoptionHistorySection childId={child.child_id} />}
           {isAdmin && <ChildCaseWorker child={child} onSaved={reload} />}
-          {child.status === 'Active' && <ChildLegalPanel childId={child.child_id} onChanged={reload} />}
+          {child.status === 'Active' && hasDuty(user, 'adoption') && <ChildLegalPanel childId={child.child_id} onChanged={reload} />}
         </div>
 
         <div className="lg:col-span-3">

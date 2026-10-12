@@ -178,11 +178,69 @@ function SecurityEventsTab() {
   );
 }
 
+/**
+ * Admin: files under retired document types, archived (hidden everywhere, no view or download). Only the
+ * reference number, type and upload date are shown. "Securely dispose" overwrites and removes the file
+ * (confirmation and reason required, logged); the record that it existed stays.
+ */
+function ArchivedDocumentsTab() {
+  const { toast } = useApp();
+  const { data, loading, error, reload } = useApi('/archived-documents');
+  const [target, setTarget] = useState(null);
+  const [reason, setReason] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const d = data?.data;
+  const close = () => { setTarget(null); setReason(''); setConfirmed(false); setSaveError(null); };
+  const dispose = async () => {
+    setBusy(true); setSaveError(null);
+    try {
+      await api(`/archived-documents/${target.document_id}/dispose`, { method: 'POST', body: { confirm: true, reason: reason.trim() } });
+      toast('The file was securely disposed of. This is recorded in the activity log.'); close(); reload();
+    } catch (err) { setSaveError(err); } finally { setBusy(false); }
+  };
+  return (
+    <Card>
+      <div className="border-b border-slate-100 p-4 text-sm text-slate-600">
+        Files uploaded under document types that are no longer used. They are hidden everywhere and can't be opened. Dispose of a file when it is no longer needed (data minimization, RA 10173).
+        {d?.disposed_count ? <span className="block text-xs text-slate-500">{d.disposed_count} already disposed of.</span> : null}
+      </div>
+      {loading && !data ? <Spinner /> : error ? <div className="p-4"><ErrorNote error={error} onRetry={reload} /></div> : !d.pending.length ? <EmptyState icon={ShieldCheck} title="No archived documents" description="Nothing is waiting to be disposed of." /> : (
+        <Table>
+          <thead className="bg-slate-50"><tr><th className="th">Application</th><th className="th">Document type</th><th className="th">Uploaded</th><th className="th"><span className="sr-only">Action</span></th></tr></thead>
+          <tbody className="divide-y divide-slate-100">
+            {d.pending.map((r) => (
+              <tr key={r.document_id}>
+                <td className="td font-mono">{r.reference_no}</td>
+                <td className="td">{r.document_type}</td>
+                <td className="td whitespace-nowrap">{formatDateTime(r.uploaded_at)}</td>
+                <td className="td text-right"><Button size="sm" variant="danger" onClick={() => setTarget(r)}>Securely dispose</Button></td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+      <Modal open={Boolean(target)} onClose={close} title="Securely dispose of this file?" size="sm"
+        footer={<><Button variant="secondary" onClick={close}>Cancel</Button><Button variant="danger" loading={busy} disabled={!confirmed || reason.trim().length < 10} onClick={dispose}>Dispose permanently</Button></>}>
+        {target && (
+          <div className="space-y-3 text-sm">
+            <ErrorNote error={saveError} />
+            <p className="text-slate-700">{target.document_type} for {target.reference_no}, uploaded {formatDateTime(target.uploaded_at)}. The file is overwritten and removed. This can't be undone.</p>
+            <Field label="Reason" required hint="At least 10 characters. Recorded with your name and the time."><textarea className="input" rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+            <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I understand the file will be permanently removed.</label>
+          </div>
+        )}
+      </Modal>
+    </Card>
+  );
+}
+
 /** Data protection (RA 10173): requests (Admin, Staff), incidents and security events (Admin). */
 export default function DataProtection() {
   const { user } = useAuth();
   const isAdmin = user.role === 'Admin';
-  const tabs = [['requests', 'Data subject requests'], ...(isAdmin ? [['incidents', 'Incident log'], ['events', 'Security events']] : [])];
+  const tabs = [['requests', 'Data subject requests'], ...(isAdmin ? [['incidents', 'Incident log'], ['events', 'Security events'], ['archived', 'Archived documents']] : [])];
   const [tab, setTab] = useState('requests');
   return (
     <>
@@ -196,6 +254,7 @@ export default function DataProtection() {
       {tab === 'requests' && <RequestsTab />}
       {tab === 'incidents' && isAdmin && <IncidentsTab />}
       {tab === 'events' && isAdmin && <SecurityEventsTab />}
+      {tab === 'archived' && isAdmin && <ArchivedDocumentsTab />}
     </>
   );
 }

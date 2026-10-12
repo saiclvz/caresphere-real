@@ -1,335 +1,379 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Download, Eye, HandCoins, Pencil, Plus, ScanLine, Trash2 } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, Ban, Download, Eye, FileSpreadsheet, HandCoins, Package, Pencil, Plus, ScanLine, SlidersHorizontal, Users, Wallet } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api, download, qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, ConfirmModal, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table } from '../components/ui';
+import Pagination from '../components/Pagination';
 import VerifyReceiptModal from '../components/VerifyReceiptModal';
-import DonationForm, { RECORD_METHODS } from '../components/DonationForm';
+import DonationForm from '../components/DonationForm';
+import DonationSummary from './DonationReports';
 import BankTransferQueue from '../components/BankTransferQueue';
 import { formatDateTime, formatMoney } from '../lib/format';
+import { SOURCE_LABEL, SOURCE_TONE, allocationText, statusMeta, typeMethod, inKindTotal } from '../lib/donations';
 
-const badInput = 'border-red-400 focus:border-red-500 focus:ring-red-200';
+/** Filters live in the URL (shareable, back button works). Empty values are left out. */
+const FILTER_KEYS = ['date', 'date_from', 'date_to', 'type', 'source', 'status', 'q', 'method', 'receipt', 'purpose', 'donor_type', 'needs_review', 'value_missing', 'attention', 'page', 'limit'];
+const MORE_KEYS = ['method', 'receipt', 'purpose', 'donor_type', 'needs_review', 'value_missing'];
+const DATE_OPTIONS = [['all', 'All dates'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['last7', 'Last 7 days'], ['custom', 'Custom range']];
 
-/** The one place to edit a donation: amount, method, allocation and receipt status. */
-function EditDonation({ donation: d, onClose, onSaved }) {
-  // In-kind gifts with items keep In-kind; others can't switch to In-kind (it needs items).
-  const lockedInKind = d.payment_method === 'In-kind' && Boolean(d.items_summary);
-  // Cash, or the method it already has (e.g. a donor-portal GCash donation). In-kind needs items.
-  const methods = lockedInKind ? ['In-kind'] : [...new Set([...RECORD_METHODS.filter((m) => m !== 'In-kind' || d.payment_method === 'In-kind'), d.payment_method])];
-  const [form, setForm] = useState({
-    amount: String(d.amount ?? ''), payment_method: d.payment_method, allocation_notes: d.allocation_notes || '', receipt_issued: !!d.receipt_issued,
-  });
+export function StatusBadge({ status }) {
+  const m = statusMeta(status);
+  const Icon = m.icon;
+  return <Badge tone={m.tone}><Icon className="mr-1 inline h-3 w-3" aria-hidden />{status}</Badge>;
+}
+
+export function SourceChip({ group }) {
+  return <Badge tone={SOURCE_TONE[group]}>{SOURCE_LABEL[group]}</Badge>;
+}
+
+/** Amount or value: cash amounts are real; in-kind shows the estimate, or "Value not set" (never ₱0.00). */
+export function AmountCell({ d, linkToItems = true }) {
+  if (!d.in_kind) return <span className="font-semibold tabular-nums text-navy-900">{formatMoney(d.amount)}</span>;
+  if (d.estimated_value !== null && d.estimated_value !== undefined) return <span className="tabular-nums text-navy-900">{formatMoney(d.estimated_value)} <span className="text-xs text-slate-500">estimated</span></span>;
+  return (
+    <span className="text-xs">
+      <span className="text-amber-800">Value not set</span>
+      {linkToItems && d.status !== 'Voided' && <Link to={`/donations/${d.donation_id}?tab=items`} className="block font-medium text-brand hover:underline">Add value</Link>}
+    </span>
+  );
+}
+
+export function AllocationCell({ d }) {
+  if (d.allocation?.length) {
+    return (
+      <ul className="space-y-0.5 text-xs">
+        {d.allocation.map((l) => (
+          <li key={l.allocation_id} className={l.needs_review ? 'text-amber-800' : 'text-navy-900'}>
+            {l.needs_review && <AlertTriangle className="mr-1 inline h-3 w-3" aria-hidden />}{allocationText(l, formatMoney)}{l.needs_review && <span className="ml-1 font-medium">· Needs review</span>}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (d.allocation_text) return <span className="text-xs text-amber-800"><AlertTriangle className="mr-1 inline h-3 w-3" aria-hidden />{d.allocation_text} · Needs review</span>;
+  if (['Pending verification', 'Rejected', 'Voided'].includes(d.status)) return <span className="text-xs text-slate-400">-</span>;
+  return <Badge tone="amber">Not set</Badge>;
+}
+
+/** Edit: before acknowledgment only (the server checks). */
+function EditDonation({ d, options, onClose, onSaved }) {
+  const [v, setV] = useState({ amount: String(d.amount), purpose: d.purpose || '', description: d.item_description || '', anonymous: d.is_anonymous });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const inKind = form.payment_method === 'In-kind';
-
-  const check = (f) => {
-    const e = {};
-    if (!inKind || String(f.amount).trim()) {
-      if (!String(f.amount).trim()) e.amount = 'Amount is required.';
-      else if (!(Number(f.amount) >= 0) || (!inKind && !(Number(f.amount) > 0))) e.amount = 'Enter an amount greater than 0.';
-    }
-    if (!f.allocation_notes.trim()) e.allocation_notes = 'Allocation is required.';
-    return e;
-  };
-  const update = (patch) => {
-    const next = { ...form, ...patch };
-    setForm(next);
-    if (Object.keys(errors).length) { const fresh = check(next); setErrors(Object.fromEntries(Object.keys(errors).filter((k) => fresh[k]).map((k) => [k, fresh[k]]))); }
-  };
-  const submit = async (e) => {
-    e.preventDefault();
-    const found = check(form);
-    setErrors(found);
-    if (Object.keys(found).length) return;
-    setSaving(true); setError(null);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true); setError(null); setErrors({});
     try {
-      const res = await api(`/donations/${d.donation_id}`, { method: 'PUT', body: {
-        amount: inKind && !String(form.amount).trim() ? 0 : Number(form.amount), payment_method: form.payment_method,
-        allocation_notes: form.allocation_notes.trim(), receipt_issued: form.receipt_issued,
-      } });
-      onSaved(res.data);
-    } catch (err) { setError(err); } finally { setSaving(false); }
+      await api(`/donations/${d.donation_id}`, { method: 'PUT', body: { ...(d.in_kind ? {} : { amount: Number(v.amount) }), purpose: v.purpose, description: v.description, anonymous: v.anonymous } });
+      onSaved();
+    } catch (err) { if (err.details?.errors) setErrors(err.details.errors); setError(err); } finally { setBusy(false); }
   };
-
   return (
-    <Modal open onClose={onClose} title={`Edit donation from ${d.donor_name}`}
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" form="edit-donation" loading={saving}>Save changes</Button></>}>
-      <form id="edit-donation" onSubmit={submit} noValidate className="space-y-4">
+    <Modal open onClose={onClose} title={`Edit ${d.donation_no}`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={save}>Save changes</Button></>}>
+      <div className="space-y-4">
         <ErrorNote error={error} />
-        <p className="text-sm text-slate-500">{formatDateTime(d.created_at)} · <SourceBadge d={d} /></p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label={inKind ? 'Estimated value (₱)' : 'Amount (₱)'} required={!inKind} error={errors.amount} hint={inKind ? 'Optional for in-kind gifts.' : undefined}>
-            <input className={`input ${errors.amount ? badInput : ''}`} type="number" min="0" step="0.01" value={form.amount} onChange={(e) => update({ amount: e.target.value })} />
-          </Field>
-          <Field label="Method" required hint={lockedInKind ? 'Stays In-kind: its items were added to Inventory.' : undefined}>
-            <select className="input" value={form.payment_method} disabled={lockedInKind} onChange={(e) => update({ payment_method: e.target.value })}>
-              {methods.map((m) => <option key={m}>{m}</option>)}
-            </select>
-          </Field>
-        </div>
-        {d.items_summary && <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600"><span className="font-medium text-navy-900">Items:</span> {d.items_summary}</p>}
-        {!d.allocation_notes && <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-900">This donation has no allocation yet. Add it to save changes or issue a receipt.</p>}
-        <Field label="Allocation" required error={errors.allocation_notes} hint="How the donation will be used. Visible to the donor.">
-          <textarea className={`input ${errors.allocation_notes ? badInput : ''}`} rows={3} maxLength={3000} value={form.allocation_notes} onChange={(e) => update({ allocation_notes: e.target.value })} />
+        <p className="text-xs text-slate-500">Editing is possible until the acknowledgment is issued. After that, changes are corrections with a reason (on the donation page). Change the allocation on the donation page.</p>
+        {!d.in_kind && <Field label="Amount (₱)" required error={errors.amount}><input className="input" type="number" min="0.01" step="0.01" value={v.amount} onChange={(e) => setV({ ...v, amount: e.target.value })} /></Field>}
+        <Field label="Purpose" required error={errors.purpose}>
+          <select className="input" value={v.purpose} onChange={(e) => setV({ ...v, purpose: e.target.value })}>{options.programs.map((p) => <option key={p}>{p}</option>)}</select>
         </Field>
-        <label className={`flex items-center gap-2 text-sm ${d.status === 'Received' ? 'text-slate-700' : 'text-slate-400'}`}>
-          <input type="checkbox" className="h-4 w-4 accent-brand" disabled={d.status !== 'Received'} checked={form.receipt_issued} onChange={(e) => update({ receipt_issued: e.target.checked })} />
-          Receipt issued to the donor{d.status !== 'Received' && ' (available once received)'}
-        </label>
-      </form>
+        <Field label="Description" required><textarea className="input" rows={2} maxLength={2000} value={v.description} onChange={(e) => setV({ ...v, description: e.target.value })} /></Field>
+        <label className="flex items-center gap-2 text-sm text-navy-900"><input type="checkbox" className="h-4 w-4 accent-brand" checked={v.anonymous} onChange={(e) => setV({ ...v, anonymous: e.target.checked })} /> Anonymous donation</label>
+      </div>
     </Modal>
   );
 }
 
-/** Portal = donor's own Donate page; Walk-in = any walk-in donor; Staff recorded = registered donor's gift entered by staff. */
-const SOURCE_LABEL = { portal: 'Portal', walk_in: 'Walk-in', staff: 'Staff recorded' };
-const SOURCE_TONE = { portal: 'blue', walk_in: 'green', staff: 'slate' };
-const sourceGroup = (d) => (d.source === 'portal' ? 'portal' : d.donor_type === 'walk_in' ? 'walk_in' : 'staff');
-function SourceBadge({ d }) {
-  const g = sourceGroup(d);
-  return <Badge tone={SOURCE_TONE[g]}>{SOURCE_LABEL[g]}</Badge>;
+/** Void (Admin) or request a void (Staff). A reason is required; "Other" needs a note. */
+export function VoidDialog({ d, options, isAdmin, onClose, onDone }) {
+  const [v, setV] = useState({ reason: '', note: '', correction: false });
+  const [errors, setErrors] = useState({});
+  const [error, setError] = useState(null);
+  const [needsCorrection, setNeedsCorrection] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const e = {};
+    if (!v.reason) e.reason = 'Choose the reason.';
+    if (v.reason === 'Other' && !v.note.trim()) e.note = 'Describe the reason.';
+    if (v.correction && !v.note.trim()) e.note = 'Explain the correction.';
+    setErrors(e);
+    if (Object.keys(e).length) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await api(`/donations/${d.donation_id}/${isAdmin ? 'void' : 'void-request'}`, { method: 'POST', body: { reason: v.reason, note: v.note.trim(), correction: v.correction } });
+      onDone(res.message);
+    } catch (err) {
+      if (err.details?.needs_correction) setNeedsCorrection(true);
+      if (err.details?.errors) setErrors(err.details.errors);
+      setError(err);
+    } finally { setBusy(false); }
+  };
+  return (
+    <Modal open onClose={onClose} size="sm" title={isAdmin ? `Void ${d.donation_no}?` : `Request a void of ${d.donation_no}`}
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button variant="danger" loading={busy} onClick={submit}>{isAdmin ? 'Void donation' : 'Send request'}</Button></>}>
+      <div className="space-y-3 text-sm">
+        <ErrorNote error={error} />
+        <p className="text-slate-600">{isAdmin
+          ? 'The donation stays in the list with a "Voided" chip and the reason, and is left out of every total and report. Stock it added is taken back out with reversal entries. This is recorded in the audit log.'
+          : 'An administrator reviews the request. Until then the donation stays as it is.'}</p>
+        <Field label="Reason" required error={errors.reason}>
+          <select className="input" value={v.reason} onChange={(e) => setV({ ...v, reason: e.target.value })}>
+            <option value="">Choose...</option>{options.void_reasons.map((r) => <option key={r}>{r}</option>)}
+          </select>
+        </Field>
+        <Field label={v.reason === 'Other' || v.correction ? 'Note' : 'Note (optional)'} required={v.reason === 'Other' || v.correction} error={errors.note}>
+          <textarea className="input" rows={2} maxLength={500} value={v.note} onChange={(e) => setV({ ...v, note: e.target.value })} />
+        </Field>
+        {isAdmin && needsCorrection && (
+          <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-2 text-amber-900">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand" checked={v.correction} onChange={(e) => setV({ ...v, correction: e.target.checked })} />
+            Record this void as a correction. Items already distributed stay distributed; only what is left is reversed.
+          </label>
+        )}
+      </div>
+    </Modal>
+  );
 }
 
-function ChildrenCell({ d }) {
-  if (d.supported_children) return <span className="text-navy-900">{d.supported_children}</span>;
-  if (d.is_general) return <Badge tone="slate">General</Badge>;
-  return <span className="text-slate-400">-</span>;
-}
-
-function DonationDetail({ donation: d, onClose }) {
-  const row = (label, value) => (
-    <div className="grid grid-cols-3 gap-3 py-2">
-      <dt className="text-slate-500">{label}</dt><dd className="col-span-2 text-navy-900">{value || <span className="text-slate-400">-</span>}</dd>
+function Cards({ cards, onPick, canSeeDonors, navigate }) {
+  if (!cards) return null;
+  const items = [
+    { key: 'cash', icon: Wallet, label: 'Cash (verified)', value: formatMoney(cards.cash.total), sub: `${cards.cash.count} donation${cards.cash.count === 1 ? '' : 's'}`, filter: { type: 'cash', status: 'counted' } },
+    { key: 'in_kind', icon: Package, label: 'In-kind (estimated value)', value: inKindTotal(cards.in_kind.count, cards.in_kind.estimated_value, formatMoney), sub: cards.in_kind.no_value ? `${cards.in_kind.no_value} with no value yet` : `${cards.in_kind.count} donation${cards.in_kind.count === 1 ? '' : 's'}`, filter: { type: 'in_kind', status: 'counted' }, subFilter: cards.in_kind.no_value ? { type: 'in_kind', value_missing: '1' } : null },
+    { key: 'donations', icon: HandCoins, label: 'Donations', value: cards.donations, sub: 'verified or accepted', filter: { status: 'counted' } },
+    { key: 'donors', icon: Users, label: 'Donors', value: cards.donors, sub: canSeeDonors ? 'open the donor list' : 'giving donors', filter: canSeeDonors ? null : { status: 'counted' }, go: canSeeDonors ? '/donors' : null },
+    { key: 'attention', icon: AlertTriangle, label: 'Needs attention', value: cards.needs_attention, sub: 'waiting for a person', filter: { attention: '1' }, warn: cards.needs_attention > 0 },
+  ];
+  return (
+    <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5" role="group" aria-label="Donation totals (verified or accepted, never voided)">
+      {items.map(({ key, icon: Icon, label, value, sub, filter, subFilter, go, warn }) => (
+        <div key={key} className={`relative rounded-xl border bg-white p-4 shadow-card ${warn ? 'border-amber-200' : 'border-slate-200/70'}`}>
+          <button type="button" onClick={() => (go ? navigate(go) : onPick(filter))} className="block w-full rounded-lg text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">
+            <span className="flex items-center gap-2 text-xs font-medium text-slate-500"><Icon className={`h-4 w-4 ${warn ? 'text-amber-600' : 'text-brand'}`} aria-hidden /> {label}</span>
+            <span className="mt-1 block text-2xl font-semibold tabular-nums text-navy-900">{value}</span>
+            {!subFilter && <span className="block text-xs text-slate-500">{sub}</span>}
+          </button>
+          {subFilter && <button type="button" onClick={() => onPick(subFilter)} className="rounded text-xs font-medium text-amber-800 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">{sub}</button>}
+        </div>
+      ))}
     </div>
   );
-  return (
-    <Modal open onClose={onClose} title={`Donation #${String(d.donation_id).padStart(6, '0')}`} footer={<Button onClick={onClose}>Close</Button>}>
-      <dl className="divide-y divide-slate-100 text-sm">
-        {row('Date', formatDateTime(d.created_at))}
-        {row('Donor', d.donor_name)}
-        {row('Amount', formatMoney(d.amount))}
-        {row('Payment method', d.payment_method)}
-        {row('Status', <Badge tone={DONATION_TONE[d.status]}>{d.status}</Badge>)}
-        {d.reason_category && row('Reason (earlier form)', d.reason_category)}
-        {d.reason_for_donation && row('Donor\'s note', d.reason_for_donation)}
-        {row('Description', d.item_description)}
-        {/* Only older donations were linked to specific children. */}
-        {d.supported_children && row('Children supported', d.supported_children)}
-        {row('Allocation', d.allocation_notes || <span className="font-medium text-amber-700">Allocation needed</span>)}
-        {row('Source', <><SourceBadge d={d} /> <span className="text-xs text-slate-500">{d.source === 'visitors_page' ? 'recorded from a visit' : d.source === 'donations_page' ? 'recorded on the Donations page' : 'submitted by the donor'}</span></>)}
-        {d.donor_type === 'walk_in' && row('Walk-in contact', d.walk_in_contact)}
-        {d.linked_visit_time && row('Linked visit', formatDateTime(d.linked_visit_time))}
-        {d.items_summary && row('Items', d.items_summary)}
-        {row('Receipt', d.receipt_issued ? 'Receipt issued' : 'No receipt yet')}
-        {d.submitted_by_donor ? row('Submitted', 'Submitted by donor') : null}
-      </dl>
-    </Modal>
-  );
 }
-
-const DATE_OPTIONS = [
-  { key: 'all', label: 'All dates' }, { key: 'today', label: 'Today' }, { key: 'yesterday', label: 'Yesterday' },
-  { key: 'last7', label: 'Last 7 days' }, { key: 'custom', label: 'Custom range' },
-];
-const SOURCE_OPTIONS = [{ key: '', label: 'All sources' }, { key: 'portal', label: 'Portal' }, { key: 'walk_in', label: 'Walk-in' }, { key: 'staff', label: 'Staff recorded' }];
-const RECEIPT_OPTIONS = [{ key: '', label: 'Any' }, { key: 'issued', label: 'Issued' }, { key: 'not_issued', label: 'Not issued' }];
-const DEFAULTS = { date: 'all', from: '', to: '', source: '', method: '', status: '', receipt: '' };
-const STATUS_OPTIONS = ['Pending', 'Pending verification', 'Received', 'Rejected', 'Cancelled'];
-const DONATION_TONE = { Pending: 'amber', 'Pending verification': 'amber', Received: 'green', Rejected: 'red', Cancelled: 'slate' };
-const isDefault = (f) => Object.keys(DEFAULTS).every((k) => f[k] === DEFAULTS[k]);
 
 export default function Donations() {
   const { user } = useAuth();
-  const { query, toast } = useApp();
+  const { toast } = useApp();
+  const navigate = useNavigate();
   const isAdmin = user.role === 'Admin';
   const [params, setParams] = useSearchParams();
-  // ?source=walk_in&donation=ID (from the Visitors page) opens with that filter and that donation.
-  const [f, setF] = useState(() => ({ ...DEFAULTS, source: SOURCE_LABEL[params.get('source')] ? params.get('source') : '' }));
-  const set = (patch) => setF((x) => ({ ...x, ...patch }));
-  const rangeError = f.date === 'custom' && f.from && f.to && f.from > f.to ? 'From must be on or before To.' : null;
-  const apiParams = {
-    date: f.date,
-    date_from: f.date === 'custom' ? f.from || undefined : undefined,
-    date_to: f.date === 'custom' ? f.to || undefined : undefined,
-    source: f.source || undefined, method: f.method || undefined, status: f.status || undefined, receipt: f.receipt || undefined, q: query,
-  };
-  const { data, loading, error, reload } = useApi(rangeError ? null : `/donations${qs(apiParams)}`);
-  const methodList = useApi('/donations/methods').data?.data || [];
-  const [confirmingStatus, setConfirmingStatus] = useState(null); // { donation, status }
-  // Donor-portal donations arrive without an allocation: it is added when confirming receipt.
-  const [confirmAllocation, setConfirmAllocation] = useState('');
-  const [confirmAllocationError, setConfirmAllocationError] = useState(null);
+  const f = Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) || '']));
+  const summary = params.get('view') === 'summary';
+  const [tick, setTick] = useState(0);
+  const setF = (patch, keepPage = false) => setParams((p) => {
+    const n = new URLSearchParams(p);
+    Object.entries(patch).forEach(([k, v]) => (v ? n.set(k, v) : n.delete(k)));
+    if (!keepPage) n.delete('page');
+    return n;
+  }, { replace: true });
+  const [search, setSearch] = useState(f.q);
+  useEffect(() => { const t = setTimeout(() => { if (search.trim() !== f.q) setF({ q: search.trim() }); }, 350); return () => clearTimeout(t); }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [more, setMore] = useState(() => MORE_KEYS.some((k) => f[k]));
+  const rangeError = f.date === 'custom' && f.date_from && f.date_to && f.date_from > f.date_to ? 'From must be on or before To.' : null;
+  const apiQuery = Object.fromEntries(Object.entries({ ...f, page: f.page || '1', limit: f.limit || '20' }).filter(([, v]) => v));
+  const { data, loading, error, reload } = useApi(rangeError || summary ? null : `/donations${qs(apiQuery)}`);
+  const optionsApi = useApi('/donations/options');
+  const options = optionsApi.data?.data || { methods: [], statuses: [], programs: [], void_reasons: [], donor_types: [], can_see_donors: false };
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [viewing, setViewing] = useState(null);
-  const [deleting, setDeleting] = useState(null);
+  const [voiding, setVoiding] = useState(null);
   const [verifying, setVerifying] = useState(false);
   const [busy, setBusy] = useState(null);
-
   const rows = data?.data || [];
-  const summary = data?.summary || { count: 0, received_total: 0 };
+  const shown = data?.meta?.shown ?? 0;
+  const filtered = FILTER_KEYS.filter((k) => !['page', 'limit'].includes(k)).some((k) => f[k] && !(k === 'date' && f[k] === 'all'));
+  const clear = () => { setSearch(''); setParams(summary ? { view: 'summary' } : {}, { replace: true }); };
+  const showView = (v) => setParams((p) => { const n = new URLSearchParams(p); if (v === 'summary') n.set('view', 'summary'); else n.delete('view'); n.delete('page'); return n; }, { replace: true });
+  const dateQuery = Object.fromEntries(Object.entries({ date: f.date || 'all', date_from: f.date === 'custom' ? f.date_from : '', date_to: f.date === 'custom' ? f.date_to : '' }).filter(([, v]) => v));
 
-  const linkedId = Number(params.get('donation')) || null;
-  useEffect(() => {
-    if (!linkedId || !data) return;
-    const found = rows.find((d) => d.donation_id === linkedId);
-    if (found) setViewing(found);
-    setParams({}, { replace: true });
-  }, [linkedId, data]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const setDonationStatus = async () => {
-    setBusy('status');
-    try {
-      const needsAllocation = confirmingStatus.status === 'Received' && !confirmingStatus.donation.allocation_notes;
-      if (needsAllocation && !confirmAllocation.trim()) { setConfirmAllocationError('Allocation is required.'); setBusy(null); return; }
-      await api(`/donations/${confirmingStatus.donation.donation_id}/status`, { method: 'PUT', body: {
-        status: confirmingStatus.status, allocation_notes: needsAllocation ? confirmAllocation.trim() : undefined,
-      } });
-      toast(confirmingStatus.status === 'Received' ? 'Donation marked as received. A receipt can now be issued.' : 'Donation cancelled.');
-      setConfirmingStatus(null); reload();
-    } catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
+  const ack = async (d) => {
+    setBusy(d.donation_id);
+    try { await download(`/donations/${d.donation_id}/receipt`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`); }
+    catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
   };
-  const onCreated = (d) => {
-    setAdding(false);
-    toast(d.donor_type === 'walk_in' ? 'Walk-in donation recorded.' : 'Donation recorded. The donor can download the receipt from their portal.');
-    reload();
-  };
-  const remove = async () => {
-    setBusy('delete');
-    try { const res = await api(`/donations/${deleting.donation_id}`, { method: 'DELETE' }); setDeleting(null); toast(res.message); reload(); }
-    catch (err) { toast(err.message, 'error'); setDeleting(null); } finally { setBusy(null); }
-  };
-  const receipt = async (id) => {
-    setBusy(id);
-    try { await download(`/donations/${id}/receipt`, `CareSphere-Receipt-${String(id).padStart(6, '0')}.pdf`); reload(); }
+  const exportCsv = async () => {
+    setBusy('export');
+    try { await download(`/donations/export${qs(Object.fromEntries(Object.entries(f).filter(([k, v]) => v && !['page', 'limit'].includes(k))))}`, 'donations.csv'); toast('Exported with donor codes only. The export was logged.'); }
     catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
   };
 
-  const filtered = !isDefault(f);
+  const dateFields = (
+    <>
+      <Field label="Date" className="w-36">
+        <select className="input h-10" value={f.date || 'all'} onChange={(e) => setF({ date: e.target.value === 'all' ? '' : e.target.value, ...(e.target.value !== 'custom' ? { date_from: '', date_to: '' } : {}) })}>
+          {DATE_OPTIONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+      </Field>
+      {f.date === 'custom' && <>
+        <Field label="From" className="w-40" error={rangeError}><input className="input h-10" type="date" value={f.date_from} onChange={(e) => setF({ date_from: e.target.value })} /></Field>
+        <Field label="To" className="w-40"><input className="input h-10" type="date" value={f.date_to} onChange={(e) => setF({ date_to: e.target.value })} /></Field>
+      </>}
+    </>
+  );
+
   return (
     <>
-      <PageHeader title="Donations" description="Every donation in one place: walk-in visitors, online gifts from donor accounts, and gifts recorded by staff."
+      <PageHeader title="Donations" description="Every donation in one place: walk-in visitors, online gifts from donor accounts, and gifts recorded by staff. All donations are general."
         actions={<>
-          <Button variant="secondary" onClick={() => setVerifying(true)}><ScanLine className="h-4 w-4" /> Verify receipt</Button>
-          <Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Record donation</Button>
+          <Button variant="secondary" onClick={() => setVerifying(true)}><ScanLine className="h-4 w-4" aria-hidden /> Verify receipt</Button>
+          <Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden /> Record donation</Button>
         </>} />
-      {user.role !== 'Admin' && (
-        <p className="mb-3 text-xs text-slate-500">Donor details are confidential: names show as initials and contact numbers are masked. Match transfers by reference number, amount and date.</p>
+      {!options.can_see_donors && optionsApi.data && (
+        <p className="mb-3 text-xs text-slate-500">Donor names and contact details need the Donor directory duty: you see donor codes and initials. Search works by donation number or donor code.</p>
       )}
-
+      <div role="tablist" aria-label="Donations view" className="relative mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+        {[['list', 'Donations'], ['summary', 'Summary']].map(([k, l]) => {
+          const on = (k === 'summary') === summary;
+          return <button key={k} type="button" role="tab" aria-selected={on} onClick={() => showView(k)}
+            className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${on ? 'border-brand text-navy-900' : 'border-transparent text-slate-500 hover:text-navy-900'}`}>{l}</button>;
+        })}
+      </div>
+      {summary ? (
+        <>
+          <Card className="mb-4 p-3">
+            <div className="flex flex-wrap items-end gap-2" role="search" aria-label="Summary period">{dateFields}</div>
+          </Card>
+          {rangeError ? <p className="text-sm text-red-600">{rangeError}</p> : <DonationSummary key={tick} query={dateQuery} />}
+        </>
+      ) : (<>
       <BankTransferQueue onChanged={reload} />
-      <Card className="mb-4 p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <Field label="Date">
-            <select className="input h-10" value={f.date} onChange={(e) => set({ date: e.target.value })}>{DATE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}</select>
+      <Cards cards={data?.meta?.cards} canSeeDonors={options.can_see_donors} navigate={navigate} onPick={(filter) => { setSearch(''); setParams(new URLSearchParams(filter), { replace: true }); }} />
+
+      <Card className="mb-4 p-3">
+        <div className="flex flex-wrap items-end gap-2" role="search" aria-label="Filter donations">
+          {dateFields}
+          <Field label="Type" className="w-32">
+            <select className="input h-10" value={f.type} onChange={(e) => setF({ type: e.target.value })}><option value="">Both</option><option value="cash">Cash</option><option value="in_kind">In-kind</option></select>
           </Field>
-          <Field label="Source">
-            <select className="input h-10" value={f.source} onChange={(e) => set({ source: e.target.value })}>{SOURCE_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}</select>
-          </Field>
-          <Field label="Method">
-            <select className="input h-10" value={f.method} onChange={(e) => set({ method: e.target.value })}>
-              <option value="">All methods</option>{methodList.map((m) => <option key={m}>{m}</option>)}
+          <Field label="Source" className="w-40">
+            <select className="input h-10" value={f.source} onChange={(e) => setF({ source: e.target.value })}>
+              <option value="">All sources</option>{Object.entries(SOURCE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
             </select>
           </Field>
-          <Field label="Status">
-            <select className="input h-10" value={f.status} onChange={(e) => set({ status: e.target.value })}>
-              <option value="">All statuses</option>{STATUS_OPTIONS.map((s) => <option key={s}>{s}</option>)}
+          <Field label="Status" className="w-48">
+            <select className="input h-10" value={f.status} onChange={(e) => setF({ status: e.target.value })}>
+              <option value="">All statuses</option><option value="counted">Verified or accepted</option>{options.statuses.map((s) => <option key={s}>{s}</option>)}
             </select>
           </Field>
-          <Field label="Receipt">
-            <select className="input h-10" value={f.receipt} onChange={(e) => set({ receipt: e.target.value })}>{RECEIPT_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}</select>
+          <Field label="Search" className="min-w-[12rem] flex-1">
+            <input className="input h-10" type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={options.can_see_donors ? 'Donation number or donor' : 'Donation number or donor code'} />
           </Field>
+          <Button variant="secondary" className="h-10" aria-expanded={more} aria-controls="more-filters" onClick={() => setMore(!more)}>
+            <SlidersHorizontal className="h-4 w-4" aria-hidden /> More filters{MORE_KEYS.filter((k) => f[k]).length ? ` (${MORE_KEYS.filter((k) => f[k]).length})` : ''}
+          </Button>
         </div>
-        {f.date === 'custom' && (
-          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="From" error={rangeError}><input className={`input h-10 ${rangeError ? badInput : ''}`} type="date" value={f.from} onChange={(e) => set({ from: e.target.value })} /></Field>
-            <Field label="To"><input className="input h-10" type="date" value={f.to} onChange={(e) => set({ to: e.target.value })} /></Field>
+        {more && (
+          <div id="more-filters" className="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-100 pt-3">
+            <Field label="Method" className="w-44">
+              <select className="input h-10" value={f.method} onChange={(e) => setF({ method: e.target.value })}>
+                <option value="">All methods</option>{options.methods.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Receipt" className="w-40">
+              <select className="input h-10" value={f.receipt} onChange={(e) => setF({ receipt: e.target.value })}><option value="">Any</option><option value="issued">Issued</option><option value="not_issued">Not issued</option></select>
+            </Field>
+            <Field label="Purpose" className="w-48">
+              <select className="input h-10" value={f.purpose} onChange={(e) => setF({ purpose: e.target.value })}><option value="">All purposes</option>{options.programs.map((p) => <option key={p}>{p}</option>)}</select>
+            </Field>
+            <Field label="Donor type" className="w-44">
+              <select className="input h-10" value={f.donor_type} onChange={(e) => setF({ donor_type: e.target.value })}>
+                <option value="">All donors</option>{options.donor_types.map((t) => <option key={t}>{t}</option>)}<option value="anonymous">Anonymous</option>
+              </select>
+            </Field>
+            <label className="flex h-10 items-center gap-2 text-sm text-navy-900"><input type="checkbox" className="h-4 w-4 accent-brand" checked={f.needs_review === '1'} onChange={(e) => setF({ needs_review: e.target.checked ? '1' : '' })} /> Allocation needs review</label>
+            <label className="flex h-10 items-center gap-2 text-sm text-navy-900"><input type="checkbox" className="h-4 w-4 accent-brand" checked={f.value_missing === '1'} onChange={(e) => setF({ value_missing: e.target.checked ? '1' : '' })} /> Value not set</label>
           </div>
         )}
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-3 text-sm text-slate-500" aria-live="polite">
-          <span>{summary.count} donation{summary.count === 1 ? '' : 's'} · received <span className="font-semibold text-navy-900">{formatMoney(summary.received_total)}</span></span>
-          {filtered && <button type="button" className="ml-auto font-medium text-brand hover:underline" onClick={() => setF(DEFAULTS)}>Reset filters</button>}
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-2 text-sm text-slate-500" aria-live="polite">
+          <span>{loading && !data ? 'Loading...' : `${shown} donation${shown === 1 ? '' : 's'} shown`}{f.attention ? ' · needs attention' : ''}</span>
+          {filtered && <Button size="sm" variant="ghost" onClick={clear}>Clear filters</Button>}
+          <Button size="sm" variant="ghost" className="ml-auto" loading={busy === 'export'} onClick={exportCsv}><FileSpreadsheet className="h-4 w-4" aria-hidden /> Export (donor codes)</Button>
         </div>
       </Card>
 
       <Card>
         {rangeError ? <div className="p-5 text-sm text-red-600">{rangeError}</div>
           : loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (
-            filtered || query
-              ? <EmptyState icon={HandCoins} title="No donations match these filters" description="Try a wider date range or another source, or reset the filters." action={filtered ? <Button variant="secondary" onClick={() => setF(DEFAULTS)}>Reset filters</Button> : null} />
-              : <EmptyState icon={HandCoins} title="No donations yet" action={<Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" /> Record donation</Button>} />
+            filtered
+              ? <EmptyState icon={HandCoins} title="No donations match these filters" description="Try a wider date range, or clear the filters." action={<Button variant="secondary" onClick={clear}>Clear filters</Button>} />
+              : <EmptyState icon={HandCoins} title="No donations yet" action={<Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden /> Record donation</Button>} />
           ) : (
-            <Table>
+            <Table label="Donations">
               <thead className="bg-slate-50"><tr>
-                <th className="th">Date</th><th className="th">Donor</th><th className="th text-right">Amount</th>
-                <th className="th">Method</th><th className="th">Status</th><th className="th">Source</th><th className="th">Children</th><th className="th">Allocation</th><th className="th"><span className="sr-only">Actions</span></th>
+                <th className="th">Donation</th><th className="th">Donor</th><th className="th">Type and method</th><th className="th text-right">Amount or value</th>
+                <th className="th">Purpose</th><th className="th">Status</th><th className="th">Allocation</th><th className="th"><span className="sr-only">Actions</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((d) => (
-                  <tr key={d.donation_id}>
-                    <td className="td whitespace-nowrap">{formatDateTime(d.created_at)}</td>
-                    <td className="td"><p className="font-medium text-navy-900">{d.donor_name}</p>
-                      {d.linked_visit_time && <p className="text-xs text-slate-500">Linked visit: {formatDateTime(d.linked_visit_time)}</p>}</td>
-                    <td className="td text-right font-semibold tabular-nums">{formatMoney(d.amount)}</td>
-                    <td className="td">{d.payment_method}{(d.items_summary || d.item_description) && <p className="text-xs text-slate-500">{d.items_summary || d.item_description}</p>}</td>
-                    <td className="td"><Badge tone={DONATION_TONE[d.status]}>{d.status}</Badge>
-                      {d.submitted_by_donor ? <p className="mt-0.5 text-xs text-slate-500">Submitted by donor</p> : null}</td>
-                    <td className="td whitespace-nowrap"><SourceBadge d={d} />
-                      <p className={`mt-0.5 text-xs ${d.receipt_issued ? 'text-emerald-700' : 'text-slate-500'}`}>{d.receipt_issued ? 'Receipt issued' : 'No receipt yet'}</p></td>
-                    <td className="td max-w-xs text-xs"><ChildrenCell d={d} /></td>
-                    <td className="td max-w-xs">{d.allocation_notes || (['Pending verification', 'Rejected'].includes(d.status) ? <span className="text-xs text-slate-400">Set when confirmed</span> : <Badge tone="amber">Allocation needed</Badge>)}</td>
-                    <td className="td">
-                      <div className="flex justify-end gap-1">
-                        {d.status === 'Pending' && <>
-                          <Button size="sm" onClick={() => { setConfirmAllocation(''); setConfirmAllocationError(null); setConfirmingStatus({ donation: d, status: 'Received' }); }}>Mark received</Button>
-                          <Button size="sm" variant="ghost" onClick={() => setConfirmingStatus({ donation: d, status: 'Cancelled' })}>Cancel</Button>
-                        </>}
-                        <Button size="sm" variant="ghost" aria-label="View details" title="View details" onClick={() => setViewing(d)}><Eye className="h-4 w-4" /></Button>
-                        {d.status !== 'Pending verification' && <Button size="sm" variant="ghost" aria-label="Edit donation" title="Edit donation" onClick={() => setEditing(d)}><Pencil className="h-4 w-4" /></Button>}
-                        {d.status === 'Received' && (d.allocation_notes
-                          ? <Button size="sm" variant="ghost" aria-label="Download receipt" title="Download receipt" loading={busy === d.donation_id} onClick={() => receipt(d.donation_id)}><Download className="h-4 w-4" /></Button>
-                          : <Button size="sm" variant="ghost" aria-label="Add allocation to issue a receipt" title="Add the allocation to issue a receipt" onClick={() => setEditing(d)}><Download className="h-4 w-4 text-slate-300" /></Button>)}
-                        {isAdmin && <Button size="sm" variant="ghost" aria-label="Delete" className="text-red-600" onClick={() => setDeleting(d)}><Trash2 className="h-4 w-4" /></Button>}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {rows.map((d) => {
+                  const voided = d.status === 'Voided';
+                  return (
+                    <tr key={d.donation_id} className={voided ? 'bg-slate-50/60' : undefined}>
+                      <td className="td whitespace-nowrap">
+                        <Link to={`/donations/${d.donation_id}`} className="font-mono font-medium text-brand hover:underline">{d.donation_no}</Link>
+                        <p className="text-xs text-slate-500">{formatDateTime(d.created_at)}</p>
+                      </td>
+                      <td className="td">
+                        {options.can_see_donors && d.donor_ref_id && !d.is_anonymous
+                          ? <Link to={`/donors/${d.donor_ref_id}`} className="font-medium text-navy-900 hover:text-brand hover:underline">{d.donor_display}</Link>
+                          : <span className="font-medium text-navy-900">{d.donor_display}</span>}
+                        <div className="mt-0.5"><SourceChip group={d.source_group} /></div>
+                      </td>
+                      <td className="td">
+                        <p className="text-navy-900">{typeMethod(d)}</p>
+                        {d.in_kind && d.items_summary && <p className="max-w-[14rem] truncate text-xs text-slate-500" title={d.items_summary}>{d.items_summary}</p>}
+                      </td>
+                      <td className="td whitespace-nowrap text-right"><AmountCell d={d} /></td>
+                      <td className="td text-sm">{d.purpose || <span className="text-slate-400">-</span>}</td>
+                      <td className="td">
+                        <StatusBadge status={d.status} />
+                        {voided ? <p className="mt-0.5 text-xs text-red-700">{d.void_reason}{d.void_note ? `: ${d.void_note}` : ''}</p>
+                          : <p className={`mt-0.5 text-xs ${d.has_acknowledgment ? 'text-emerald-700' : 'text-slate-500'}`}>{d.has_acknowledgment ? 'Receipt issued' : 'Receipt not issued'}</p>}
+                        {d.void_requested && !voided && <Badge tone="amber">Void requested</Badge>}
+                      </td>
+                      <td className="td max-w-[16rem]"><AllocationCell d={d} /></td>
+                      <td className="td">
+                        <div className="flex justify-end gap-0.5">
+                          <Button size="sm" variant="ghost" title="View" onClick={() => navigate(`/donations/${d.donation_id}`)}><Eye className="h-4 w-4" aria-hidden /><span className="sr-only">View {d.donation_no}</span></Button>
+                          <Button size="sm" variant="ghost" title={d.can_edit ? 'Edit' : d.can_correct ? 'Acknowledged: make a correction on the donation page' : 'Cannot be edited'} disabled={!d.can_edit} onClick={() => setEditing(d)}>
+                            <Pencil className="h-4 w-4" aria-hidden /><span className="sr-only">Edit {d.donation_no}</span>
+                          </Button>
+                          <Button size="sm" variant="ghost" title={d.can_download ? 'Download acknowledgment' : 'No acknowledgment yet'} disabled={!d.can_download} loading={busy === d.donation_id} onClick={() => ack(d)}>
+                            <Download className="h-4 w-4" aria-hidden /><span className="sr-only">Download acknowledgment for {d.donation_no}</span>
+                          </Button>
+                          {(d.can_void || d.can_request_void) && (
+                            <Button size="sm" variant="ghost" className="text-red-700" title={isAdmin ? 'Void' : 'Request a void'} onClick={() => setVoiding(d)}>
+                              <Ban className="h-4 w-4" aria-hidden /><span className="sr-only">{isAdmin ? 'Void' : 'Request a void of'} {d.donation_no}</span>
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </Table>
           )}
+        <Pagination pagination={data?.pagination} label="donations" onPageChange={(p) => setF({ page: String(p) }, true)} onLimitChange={(l) => setF({ limit: String(l) })} />
       </Card>
+      </>)}
 
-      {adding && <DonationForm onClose={() => setAdding(false)} onSaved={onCreated} />}
-      {viewing && <DonationDetail donation={viewing} onClose={() => setViewing(null)} />}
-      {editing && <EditDonation donation={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast('Donation updated.'); reload(); }} />}
+      {adding && <DonationForm onClose={() => setAdding(false)} onSaved={() => { setAdding(false); toast('Donation recorded.'); reload(); setTick((t) => t + 1); }} />}
+      {editing && <EditDonation d={editing} options={options} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast('Donation updated.'); reload(); }} />}
+      {voiding && <VoidDialog d={voiding} options={options} isAdmin={isAdmin} onClose={() => setVoiding(null)} onDone={(m) => { setVoiding(null); toast(m); reload(); }} />}
       <VerifyReceiptModal open={verifying} onClose={() => setVerifying(false)} />
-      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={busy === 'delete'}
-        title="Delete this donation?"
-        message={deleting ? `${deleting.visit_id ? 'The linked visit stays as "Just visited". ' : ''}${deleting.items_summary ? 'Its items will be taken back out of Inventory. ' : ''}The donor loses this record and its receipt. This cannot be undone.` : ''} />
-      {confirmingStatus?.status === 'Received' && !confirmingStatus.donation.allocation_notes ? (
-        <Modal open onClose={() => setConfirmingStatus(null)} title="Mark donation as received?"
-          footer={<><Button variant="secondary" onClick={() => setConfirmingStatus(null)}>Back</Button><Button loading={busy === 'status'} onClick={setDonationStatus}>Mark received</Button></>}>
-          <div className="space-y-3">
-            <p className="text-sm text-slate-600">Confirm that {formatMoney(confirmingStatus.donation.amount)} from {confirmingStatus.donation.donor_name} has actually been received, and record how it will be used.</p>
-            <Field label="Allocation" required error={confirmAllocationError} hint="How the donation will be used. Visible to the donor.">
-              <textarea className={`input ${confirmAllocationError ? badInput : ''}`} rows={3} maxLength={3000} value={confirmAllocation}
-                onChange={(e) => { setConfirmAllocation(e.target.value); setConfirmAllocationError(null); }} />
-            </Field>
-          </div>
-        </Modal>
-      ) : (
-      <ConfirmModal open={!!confirmingStatus} onClose={() => setConfirmingStatus(null)} loading={busy === 'status'} onConfirm={setDonationStatus}
-        title={confirmingStatus?.status === 'Received' ? 'Mark donation as received?' : 'Cancel this donation?'}
-        confirmLabel={confirmingStatus?.status === 'Received' ? 'Mark received' : 'Cancel donation'}
-        message={confirmingStatus ? (confirmingStatus.status === 'Received'
-          ? `Confirm that ${formatMoney(confirmingStatus.donation.amount)} from ${confirmingStatus.donation.donor_name} has actually been received. A receipt can then be issued.`
-          : `Are you sure you want to cancel the pending donation from ${confirmingStatus.donation.donor_name}?`) : ''} />
-      )}
     </>
   );
 }

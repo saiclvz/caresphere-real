@@ -57,7 +57,8 @@ async function findByPublicId(publicId) {
 /** The file behind a record: { storage_key, mime_type, original_name, sha256 }. */
 async function fileFor(record) {
   if (record.document_id) {
-    const [[d]] = await pool.query('SELECT storage_key, mime_type, original_name, sha256 FROM tbl_adoption_documents WHERE document_id = ?', [record.document_id]);
+    // Archived documents (retired types) can't be opened.
+    const [[d]] = await pool.query('SELECT storage_key, mime_type, original_name, sha256 FROM tbl_adoption_documents WHERE document_id = ? AND archived_at IS NULL', [record.document_id]);
     return d || null;
   }
   if (record.sealed_id) {
@@ -157,6 +158,7 @@ async function accessOverview() {
        FROM tbl_protected_tokens t JOIN tbl_protected_records pr ON pr.record_id = t.record_id
        JOIN tbl_users u ON u.user_id = t.staff_user_id JOIN tbl_users ib ON ib.user_id = t.issued_by
       WHERE t.revoked_at IS NULL AND t.locked_at IS NULL AND t.expires_at > NOW() AND t.uses < t.max_uses
+        AND NOT EXISTS (SELECT 1 FROM tbl_adoption_documents d WHERE d.document_id = pr.document_id AND d.archived_at IS NOT NULL)
       ORDER BY t.expires_at`);
   const [recent] = await pool.query(
     `SELECT l.log_id, l.event, l.record_id, pr.label, l.token_id, l.user_id, u.full_name AS user_name, l.detail, l.ip_address, l.created_at
@@ -272,7 +274,8 @@ async function listRecords({ applicationId, childId }) {
   if (!where.length) return [];
   const [rows] = await pool.query(
     `SELECT record_id, public_id, record_type, label, allow_download, application_id, document_id, child_id, sealed_id, created_at
-       FROM tbl_protected_records WHERE ${where.join(' OR ')} ORDER BY created_at`, params);
+       FROM tbl_protected_records pr WHERE (${where.join(' OR ')})
+        AND NOT EXISTS (SELECT 1 FROM tbl_adoption_documents d WHERE d.document_id = pr.document_id AND d.archived_at IS NOT NULL) ORDER BY created_at`, params);
   return rows.map((r) => ({ ...r, allow_download: !!r.allow_download }));
 }
 

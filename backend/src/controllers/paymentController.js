@@ -35,7 +35,7 @@ exports.list = async (req, res) => {
   const status = req.query.status && P.STATUS_LABELS[req.query.status] ? req.query.status : undefined;
   const { forViewer } = require('../config/donorConfidentiality');
   require('./donationController').logView(req, 'VIEW_BANK_TRANSFERS', 'Bank transfer queue');
-  res.json({ success: true, data: (await P.listForStaff({ status, method: trimOrNull(req.query.method, 60) })).map((r) => forViewer(r, req.user.role)) });
+  res.json({ success: true, data: (await P.listForStaff({ status, method: trimOrNull(req.query.method, 60) })).map((r) => forViewer(r, req.user)) });
 };
 
 /** POST /api/payments/:id/verify (Admin, Staff) { action: confirm|reject, allocation_notes?, reason? } */

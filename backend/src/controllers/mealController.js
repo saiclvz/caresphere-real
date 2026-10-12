@@ -1,6 +1,6 @@
 const Meal = require('../models/mealModel');
 const HttpError = require('../utils/HttpError');
-const { requireDate, oneOf, requireText, toBool } = require('../utils/validate');
+const { requireDate, oneOf, requireText } = require('../utils/validate');
 const { logActivity } = require('../utils/audit');
 
 const TYPES = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
@@ -40,15 +40,6 @@ exports.update = async (req, res) => {
   if (!(await Meal.findById(req.params.id))) throw new HttpError(404, 'Meal not found.');
   await Meal.update(req.params.id, { ...clean(req.body), logged_by: req.user.user_id });
   await logActivity(req, 'UPDATE_MEAL', `Meal #${req.params.id}`);
-  res.json({ success: true, data: await Meal.findById(req.params.id) });
-};
-
-/** PUT /api/meals/:id/active { is_active } - deactivate (remove from the plan) or restore */
-exports.setActive = async (req, res) => {
-  if (!(await Meal.findById(req.params.id))) throw new HttpError(404, 'Meal not found.');
-  const active = toBool(req.body.is_active);
-  await Meal.setActive(req.params.id, active, req.user.user_id);
-  await logActivity(req, active ? 'RESTORE_MEAL' : 'DEACTIVATE_MEAL', `Meal #${req.params.id}`);
   res.json({ success: true, data: await Meal.findById(req.params.id) });
 };
 

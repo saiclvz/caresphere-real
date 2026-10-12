@@ -1,0 +1,58 @@
+Donation conversion APPLIED - 2026-10-11T02:22:00.727Z
+
+7 donation(s) to convert.
+
+DNT-2026-0001  (Cash, PHP 50.00)
+   status:     Received -> Accepted
+   allocation: "subscription" -> Other (Needs review) PHP 50.00
+   purpose:    Other
+   donor:      DNR-0001
+
+DNT-2026-0002  (Cash, PHP 200.00)
+   status:     Received -> Acknowledged
+   allocation: "squishy" -> Other (Needs review) PHP 200.00
+   purpose:    Other
+   donor:      DNR-0002
+
+DNT-2026-0003  (Cash, PHP 500.00)
+   status:     Received -> Acknowledged
+   allocation: "clothing and hygiene" -> Other (Needs review) PHP 500.00
+   purpose:    Other
+   donor:      DNR-0003
+
+DNT-2026-0004  (In-kind)
+   status:     Received -> Acknowledged
+   allocation: "to help children study" -> Education
+   purpose:    Education
+   donor:      DNR-0004
+   items:      earphones x1 (linked to stock), mouse x2 (linked to stock)
+
+DNT-2026-0005  (In-kind)
+   status:     Received -> Acknowledged
+   allocation: "food" -> Food
+   purpose:    Food
+   donor:      DNR-0005
+   items:      spaghetti x1 (linked to stock)
+
+DNT-2026-0006  (Cash, PHP 500.00)
+   status:     Received -> Acknowledged
+   allocation: "hygiene" -> Hygiene PHP 500.00
+   purpose:    Hygiene
+   donor:      DNR-0006
+
+DNT-2026-0007  (Cash, PHP 100.00)
+   status:     Received -> Acknowledged
+   allocation: "candies" -> Food PHP 100.00
+   purpose:    Food
+   donor:      DNR-0007
+
+Rows that don't fit (check these):
+ - DNT-2026-0001: now Accepted, but its allocation needs review. Fix it on the donation page.
+ - DNT-2026-0002: now Acknowledged, but its allocation needs review. Fix it on the donation page.
+ - DNT-2026-0003: now Acknowledged, but its allocation needs review. Fix it on the donation page.
+
+Stock that was already used:
+ - none
+
+Possible duplicate donors (not merged):
+ - none

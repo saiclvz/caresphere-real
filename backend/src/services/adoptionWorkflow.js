@@ -69,6 +69,7 @@ function cleanStatusUpdate(app, body, role) {
   if (WF.FINAL.includes(app.status)) throw new HttpError(409, `This application is ${app.status} and read-only.`);
   const t = WF.transition(app.status, app.application_type, target);
   if (!t) throw new HttpError(409, `An application at "${app.status}" cannot move to "${target}".`);
+  if (t.via === 'matching') throw new HttpError(409, 'Matching is recorded in the Matching and placement tab: propose the match, then an administrator approves it.');
   if (!t.roles.includes(role)) throw new HttpError(403, `Only an administrator can record "${target}".`);
 
   if (str(body.remark).length > 3000) throw new HttpError(400, 'The remark to the applicant can be up to 3000 characters.');
@@ -146,6 +147,82 @@ async function hasDocument(conn, applicationId, docType) {
   return Number(r.n) > 0;
 }
 
+/**
+ * The gate: what keeps an application from moving to `target`. One list used both to refuse the move
+ * (applyStatusUpdate) and to explain blocked stages on the detail page, so the two never disagree.
+ * Returns [{ doc_type?, label, status?, message }]; empty = allowed. Reads only.
+ */
+async function blockersFor(conn, cur, target) {
+  const id = cur.application_id;
+  const out = [];
+  const iso = (v) => (v ? String(v instanceof Date ? v.toISOString() : v).slice(0, 10) : null);
+  if (WF.DOCUMENTS_COMPLETE_FOR.includes(target) && !cur.is_legacy) {
+    const { documentChecklist } = require('./adoptionValidation');
+    const c = documentChecklist(await Adoption.form(id), cur.application_type, await Adoption.documents(id, conn));
+    const all = [...c.summary.blocking, ...(await require('./verification').blocking(id))];
+    all.forEach((b) => out.push({ ...b, message: `${b.label} (${b.status})` }));
+    // Submitted before the ID and clearance checks existed: those details must be collected first.
+    const [[vc]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_verifications WHERE application_id = ?', [id]);
+    if (!Number(vc.n) && cur.submitted_at) {
+      out.push({ doc_type: 'verification:missing', label: 'Government ID and clearance details', status: 'Pending submission',
+        message: 'This application has no ID or clearance checks (it was submitted before they existed). Ask the applicant for the details, then record them.' });
+    }
+  }
+  // Regular adoption: the home's documents for the matched child must be uploaded before the petition.
+  if (target === 'Petition filed' && WF.trackOf(cur.application_type) === 'Regular' && cur.matched_child_id) {
+    const [[child]] = await conn.query('SELECT TIMESTAMPDIFF(YEAR, dob, CURDATE()) AS age FROM tbl_children WHERE child_id = ?', [cur.matched_child_id]);
+    const age = Number(child?.age ?? 0);
+    for (const [key, def] of Object.entries(STAGE_DOCUMENTS)) {
+      if (!def.petition) continue;
+      if ((def.petition === 'age5' && age < 5) || (def.petition === 'age10' && age < 10)) continue;
+      if (!(await hasDocument(conn, id, key))) out.push({ doc_type: key, label: def.label, status: 'Pending submission', message: `Upload the child's document first: ${def.label}.` });
+    }
+  }
+  const needDoc = async (docType, message) => { if (!(await hasDocument(conn, id, docType))) out.push({ doc_type: docType, label: STAGE_DOCUMENTS[docType].label, status: 'Pending submission', message }); };
+  switch (target) {
+    case 'Forum attended': await needDoc('forum_certificate', 'Upload the applicant\'s forum certificate before recording Forum attended.'); break;
+    case 'Case study completed': await needDoc('case_study_report', 'Upload the Social Case Study Report before recording Case study completed.'); break;
+    case 'Cleared for matching':
+      if (!cur.forum_verified_at) out.push({ label: 'Forum attended', message: 'Record Forum attended (with the verified certificate) first.' });
+      if (!cur.case_study_completed_at) out.push({ label: 'Case study completed', message: 'Record Case study completed (with the report) first.' });
+      break;
+    case 'Trial custody':
+      if (!cur.matched_child_id) out.push({ label: 'Matched child', message: 'Match a child first.' });
+      else out.push(...(await require('./matching').trialBlockers(conn, cur)));
+      break;
+    case 'Trial custody completed': {
+      const end = iso(cur.trial_end);
+      if (!end) out.push({ label: 'Trial custody start date', message: 'Record the trial custody start date first.' });
+      else if (end > todayIso()) out.push({ label: 'Trial custody period', message: `Trial custody runs until ${end} (6 months). It can be completed on or after that date.` });
+      break;
+    }
+    case 'Published': await needDoc('publication_proof', 'Upload the proof of publication before recording Published.'); break;
+    case 'Order of Adoption issued':
+      // The Order comes first; the Certificate of Finality is recorded in its own stage afterwards.
+      await needDoc('order_of_adoption', 'Upload the Order of Adoption before recording it.');
+      if (cur.application_type === 'Regular' && !cur.matched_child_id) out.push({ label: 'Matched child', message: 'A regular adoption needs a matched child.' });
+      break;
+    case 'Civil registry updated': await needDoc('certificate_of_finality', 'Upload the Certificate of Finality before recording the civil registration.'); break;
+    default:
+  }
+  // The stage records a status needs (assessment result, placement, RACCO, NACC decision, Order, finality, closure).
+  out.push(...(await require('./adoptionStages').gateFor(conn, cur, target)));
+  return out;
+}
+
+/** Turns gate blockers into the 409 the server returns (same wording as before). */
+function gateError(blockers, target) {
+  const docs = blockers.filter((b) => b.status);
+  if (WF.DOCUMENTS_COMPLETE_FOR.includes(target) && docs.length && !docs.every((b) => b.doc_type === 'verification:missing')) {
+    const list = docs.filter((b) => b.doc_type !== 'verification:missing').slice(0, 8).map((b) => b.message).join('; ');
+    return new HttpError(409, `The application isn't complete yet. These still need verification: ${list}${docs.length > 8 ? '; and more' : ''}.`, { incomplete_documents: docs.map(({ message, ...b }) => b) });
+  }
+  if (target === 'Petition filed' && blockers.every((b) => b.doc_type && STAGE_DOCUMENTS[b.doc_type])) {
+    return new HttpError(409, `Upload the child's documents before filing the petition: ${blockers.map((b) => b.label).join('; ')}.`, { incomplete_documents: docs.map(({ message, ...b }) => b) });
+  }
+  return new HttpError(409, blockers[0].message, docs.length ? { incomplete_documents: docs.map(({ message, ...b }) => b) } : undefined);
+}
+
 /** Releases the child's placement (Placement ended, Declined, Withdrawn). */
 async function releasePlacement(conn, app) {
   if (!app.matched_child_id) return;
@@ -162,49 +239,18 @@ async function applyStatusUpdate(app, u, userId) {
     const notes = [];
     let closed = [];
 
-    // The application is complete only when every required document is verified and unexpired.
-    if (WF.DOCUMENTS_COMPLETE_FOR.includes(u.target) && !cur.is_legacy) {
-      const { documentChecklist } = require('./adoptionValidation');
-      const c = documentChecklist(await Adoption.form(id), cur.application_type, await Adoption.documents(id, conn));
-      const all = [...c.summary.blocking, ...(await require('./verification').blocking(id))];
-      if (all.length) {
-        const list = all.slice(0, 8).map((b) => `${b.label} (${b.status})`).join('; ');
-        throw new HttpError(409, `The application isn't complete yet. These still need verification: ${list}${all.length > 8 ? '; and more' : ''}.`,
-          { incomplete_documents: all });
-      }
-      // Submitted before the ID and clearance checks existed: those details must be collected first.
-      const [[vc]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_verifications WHERE application_id = ?', [id]);
-      if (!Number(vc.n) && cur.submitted_at) {
-        throw new HttpError(409, 'This application has no ID or clearance checks (it was submitted before they existed). Ask the applicant for the details, then record them.',
-          { incomplete_documents: [{ doc_type: 'verification:missing', label: 'Government ID and clearance details', status: 'Pending submission' }] });
-      }
-    }
-    // Regular adoption: the home's documents for the matched child must be uploaded before the petition.
-    if (u.target === 'Petition filed' && WF.trackOf(cur.application_type) === 'Regular' && cur.matched_child_id) {
-      const { STAGE_DOCUMENTS } = require('../config/adoptionForm');
-      const [[child]] = await conn.query('SELECT TIMESTAMPDIFF(YEAR, dob, CURDATE()) AS age FROM tbl_children WHERE child_id = ?', [cur.matched_child_id]);
-      const age = Number(child?.age ?? 0);
-      const missing = [];
-      for (const [key, def] of Object.entries(STAGE_DOCUMENTS)) {
-        if (!def.petition) continue;
-        if ((def.petition === 'age5' && age < 5) || (def.petition === 'age10' && age < 10)) continue;
-        if (!(await hasDocument(conn, id, key))) missing.push(def.label);
-      }
-      if (missing.length) throw new HttpError(409, `Upload the child's documents before filing the petition: ${missing.join('; ')}.`);
-    }
+    // The gate (documents, ID and clearance checks, the child's documents, earlier steps): one list, see blockersFor.
+    const blockers = await blockersFor(conn, cur, u.target);
+    if (blockers.length) throw gateError(blockers, u.target);
 
     switch (u.target) {
       case 'Forum attended':
-        if (!(await hasDocument(conn, id, 'forum_certificate'))) throw new HttpError(409, 'Upload the applicant\'s forum certificate before recording Forum attended.');
         set.forum_verified_at = new Date();
         break;
       case 'Case study completed':
-        if (!(await hasDocument(conn, id, 'case_study_report'))) throw new HttpError(409, 'Upload the Social Case Study Report before recording Case study completed.');
         set.case_study_completed_at = new Date();
         break;
       case 'Cleared for matching':
-        if (!cur.forum_verified_at) throw new HttpError(409, 'Record Forum attended (with the verified certificate) first.');
-        if (!cur.case_study_completed_at) throw new HttpError(409, 'Record Case study completed (with the report) first.');
         set.cleared_at = new Date();
         set.decided_at = new Date();
         break;
@@ -217,19 +263,14 @@ async function applyStatusUpdate(app, u, userId) {
         break;
       }
       case 'Trial custody':
-        if (!cur.matched_child_id) throw new HttpError(409, 'Match a child first.');
         if (cur.matched_at && u.fields.trial_start < String(new Date(cur.matched_at).toISOString()).slice(0, 10)) {
           throw new HttpError(400, 'Trial custody cannot start before the match date.');
         }
         await conn.query("UPDATE tbl_children SET placement_status = 'Trial custody' WHERE child_id = ?", [cur.matched_child_id]);
         break;
-      case 'Trial custody completed': {
-        const end = cur.trial_end ? String(cur.trial_end instanceof Date ? cur.trial_end.toISOString() : cur.trial_end).slice(0, 10) : null;
-        if (!end) throw new HttpError(409, 'Record the trial custody start date first.');
-        if (end > todayIso()) throw new HttpError(409, `Trial custody runs until ${end} (6 months). It can be completed on or after that date.`);
+      case 'Trial custody completed':
         set.trial_completed_at = new Date();
         break;
-      }
       case 'Placement ended':
         await releasePlacement(conn, cur);
         notes.push(`Placement ended${cur.matched_child_id ? ` with child ${cur.matched_child_id}` : ''}. Reason: ${u.reason}`);
@@ -239,12 +280,9 @@ async function applyStatusUpdate(app, u, userId) {
         set.trial_end = null;
         break;
       case 'Published':
-        if (!(await hasDocument(conn, id, 'publication_proof'))) throw new HttpError(409, 'Upload the proof of publication before recording Published.');
         set.published_at = new Date();
         break;
       case 'Order of Adoption issued': {
-        if (!(await hasDocument(conn, id, 'certificate_of_finality'))) throw new HttpError(409, 'Upload the Certificate of Finality before recording the Order of Adoption.');
-        if (cur.application_type === 'Regular' && !cur.matched_child_id) throw new HttpError(409, 'A regular adoption needs a matched child.');
         set.finalized_at = new Date();
         set.finalized_by = userId;
         set.decided_at = new Date();
@@ -281,6 +319,9 @@ async function applyStatusUpdate(app, u, userId) {
     const keys = Object.keys(set);
     await conn.query(`UPDATE tbl_adoption_applications SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE application_id = ?`, [...keys.map((k) => set[k]), id]);
     const historyId = await Adoption.addHistory(conn, { application_id: id, from_status: cur.status, to_status: u.target, changed_by: userId, remark: u.remark });
+    // The application's match follows the status (Trial custody: placed; declined or placement ended: withdrawn).
+    if (!u.keepMatches) await require('./matching').onStatusChange(conn, cur, u.target, userId);
+    if (u.afterInTx) await u.afterInTx(conn, historyId);
     if (u.internalNote) notes.push(u.internalNote);
     for (const n of notes) await Adoption.addNote(conn, { application_id: id, history_id: historyId, author_id: userId, note: n });
     for (const d of u.documents) {
@@ -319,6 +360,7 @@ async function withdraw(app, userId) {
     await conn.query("UPDATE tbl_adoption_applications SET status = 'Withdrawn', withdrawn_at = NOW() WHERE application_id = ?", [cur.application_id]);
     await conn.query("UPDATE tbl_application_document_requests SET status = 'Closed', closed_at = NOW() WHERE application_id = ? AND status = 'Open'", [cur.application_id]);
     const historyId = await Adoption.addHistory(conn, { application_id: cur.application_id, from_status: cur.status, to_status: 'Withdrawn', changed_by: userId });
+    await require('./matching').onStatusChange(conn, cur, 'Withdrawn', userId);
     const params = { id: cur.application_id, ref: cur.reference_no };
     await Notify.adoptionStatus(conn, { applicantId: cur.applicant_id, applicationId: cur.application_id, reference: cur.reference_no, status: 'Withdrawn', historyId });
     await Notify.toAdmins(conn, 'admin_application_withdrawn', { entityType: 'application', entityId: cur.application_id, params, groupKey: `admin_withdrawn:${cur.application_id}` });
@@ -339,6 +381,6 @@ function deadlines(app) {
 }
 
 module.exports = {
-  cleanStatusUpdate, applyStatusUpdate, withdraw, assertMatchable, deadlines, addMonths, addDays,
+  cleanStatusUpdate, applyStatusUpdate, withdraw, assertMatchable, deadlines, addMonths, addDays, blockersFor,
   STAGE_DOC_TYPES: Object.keys(STAGE_DOCUMENTS),
 };

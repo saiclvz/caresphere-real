@@ -22,6 +22,7 @@ exports.update = async (req, res) => {
     if (k === 'org_name' && !String(v).trim()) throw new HttpError(400, 'Organisation name is required.');
     if (k === 'default_allocation_text' && (!String(v).trim() || String(v).length > 300)) throw new HttpError(400, 'Default allocation must be 1 to 300 characters.');
     if (k === 'notification_retention_days' && !(/^\d{2,4}$/.test(String(v)) && Number(v) >= 30 && Number(v) <= 3650)) throw new HttpError(400, 'Notification retention must be 30 to 3650 days.');
+    if (k === 'id_scan_retention_days' && !(/^\d{1,4}$/.test(String(v)) && Number(v) >= 1 && Number(v) <= 3650)) throw new HttpError(400, 'ID scan retention must be 1 to 3650 days.');
     if (k === 'access_log_retention_months' && !(/^\d{1,3}$/.test(String(v)) && Number(v) >= 12 && Number(v) <= 240)) {
       throw new HttpError(400, 'Access log retention must be 12 to 240 months.');
     }

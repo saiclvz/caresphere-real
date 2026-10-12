@@ -1,4 +1,5 @@
 const ExcelJS = require('exceljs');
+const Donation = require('../models/donationModel');
 const { pool } = require('../config/db');
 const Settings = require('../models/settingsModel');
 const pdf = require('../services/pdfService');
@@ -82,10 +83,10 @@ exports.complianceReport = async (req, res) => {
   const [lowItems] = await pool.query(
     'SELECT item_name, quantity, min_threshold FROM tbl_inventory WHERE quantity <= min_threshold ORDER BY quantity');
   const donations = await one(
-    `SELECT SUM(status = 'Received') AS count, COALESCE(SUM(CASE WHEN status = 'Received' THEN amount END), 0) AS total,
-            SUM(status = 'Pending') AS pending,
-            SUM(allocation_notes IS NULL OR TRIM(allocation_notes) = '') AS unallocated
-       FROM tbl_donations WHERE DATE(created_at) BETWEEN ? AND ?`, p);
+    `SELECT SUM(${Donation.COUNTED_SQL}) AS count, COALESCE(SUM(CASE WHEN ${Donation.COUNTED_SQL} AND d.payment_method <> 'In-kind' THEN d.amount END), 0) AS total,
+            SUM(d.status IN ('Pending', 'Pending verification')) AS pending,
+            SUM(d.status <> 'Voided' AND NOT EXISTS (SELECT 1 FROM tbl_donation_allocations a WHERE a.donation_id = d.donation_id AND a.superseded_at IS NULL)) AS unallocated
+       FROM tbl_donations d WHERE DATE(d.created_at) BETWEEN ? AND ?`, p);
   const visitors = await one(
     `SELECT COUNT(*) AS count, SUM(check_out_time IS NULL) AS open
        FROM tbl_visitors WHERE DATE(check_in_time) BETWEEN ? AND ?`, p);

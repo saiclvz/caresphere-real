@@ -1,23 +1,185 @@
 import { useState } from 'react';
-import { Ban, ChevronLeft, ChevronRight, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api, qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Button, Card, ConfirmModal, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner } from '../components/ui';
+import { Button, Card, ConfirmModal, ErrorNote, Modal, NoMatches, PageHeader, Spinner } from '../components/ui';
 import { addDays, isoDate, startOfWeek } from '../lib/format';
 
 const TYPES = ['Breakfast', 'Lunch', 'Snack', 'Dinner'];
-const TAG_SUGGESTIONS = ['Regular', 'Vegetarian', 'Soft food', 'Low sugar', 'No nuts', 'Halal', 'Infant'];
-const newMeal = (type, date) => ({ meal_type: type, menu_description: '', scheduled_date: date, dietary_tags: 'Regular' });
+/** Tag chips offered in the form. Tags already used on this week's meals are added after these. */
+const DEFAULT_TAGS = ['Regular', 'Vegetarian', 'No pork', 'Halal', 'Nut-free', 'Soft / pureed', 'Diabetic-friendly'];
+const MAX_TAGS = 10; // the API accepts up to 10 tags of 30 characters each
+const MAX_TAG_LENGTH = 30;
 
-function validateMeal(f) {
-  const e = {};
-  if (!f.meal_type) e.meal_type = 'Meal type is required.';
-  if (!f.scheduled_date) e.scheduled_date = 'Scheduled date is required.';
-  if (!String(f.menu_description || '').trim()) e.menu_description = 'Description is required.';
-  if (!String(f.dietary_tags || '').split(',').some((t) => t.trim())) e.dietary_tags = 'Add at least one dietary tag.';
-  return e;
+const ring = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2';
+const chip = (on) => `${ring} rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${on ? 'border-brand bg-brand text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-brand hover:bg-brand-soft'}`;
+const linkBtn = `${ring} rounded px-1.5 py-0.5 text-xs font-medium text-brand hover:bg-brand-soft disabled:text-slate-300`;
+const splitTags = (s) => String(s || '').split(',').map((t) => t.trim()).filter(Boolean);
+const dayName = (d) => d.toLocaleDateString('en-PH', { weekday: 'short' });
+const longDay = (d) => d.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/**
+ * Add or edit a meal. Adding: one or more days of the week being viewed, one request per day with the
+ * existing payload (meal_type, menu_description, scheduled_date, dietary_tags as "A, B"). Editing: one day.
+ */
+function MealModal({ initial, days, knownTags, onClose, onSaved }) {
+  const editing = Boolean(initial.meal_id);
+  const [f, setF] = useState({
+    meal_type: initial.meal_type || 'Breakfast',
+    dates: initial.scheduled_date ? [initial.scheduled_date] : [],
+    menu_description: initial.menu_description || '',
+    tags: initial.dietary_tags ? splitTags(initial.dietary_tags) : ['Regular'],
+  });
+  const [custom, setCustom] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const isoDays = days.map((d) => isoDate(d));
+  const tagOptions = [...new Set([...DEFAULT_TAGS, ...knownTags, ...f.tags])];
+
+  const set = (patch) => { setF((x) => ({ ...x, ...patch })); setError(null); };
+  const toggleDay = (iso) => set({ dates: editing ? [iso] : f.dates.includes(iso) ? f.dates.filter((d) => d !== iso) : [...f.dates, iso].sort() });
+  const toggleTag = (t) => set({ tags: f.tags.includes(t) ? f.tags.filter((x) => x !== t) : [...f.tags, t] });
+  const addCustom = () => {
+    const t = custom.replace(/,/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_TAG_LENGTH);
+    if (!t) return;
+    const same = tagOptions.find((o) => o.toLowerCase() === t.toLowerCase()) || t;
+    if (!f.tags.includes(same)) set({ tags: [...f.tags, same] });
+    setCustom('');
+  };
+
+  const description = f.menu_description.trim();
+  const missing = [!f.dates.length && 'day', !description && 'description', !f.tags.length && 'dietary tag'].filter(Boolean);
+  const tooManyTags = f.tags.length > MAX_TAGS;
+  const valid = !missing.length && !tooManyTags;
+  const n = f.dates.length;
+  const summary = missing.length ? `Still needed: ${missing.join(', ')}`
+    : tooManyTags ? `Use up to ${MAX_TAGS} dietary tags`
+      : `${editing ? '' : `${plural(n, 'meal')} · `}${f.meal_type} · ${description}`;
+
+  const save = async () => {
+    if (!valid || busy) return;
+    setBusy(true); setError(null);
+    const body = (date) => ({ meal_type: f.meal_type, menu_description: description, scheduled_date: date, dietary_tags: f.tags.join(', ') });
+    try {
+      if (editing) {
+        await api(`/meals/${initial.meal_id}`, { method: 'PUT', body: body(f.dates[0]) });
+        onSaved('Meal saved.');
+        return;
+      }
+      // One request per day. Days that saved are taken off the selection, so trying again doesn't add them twice.
+      const done = [];
+      for (const date of f.dates) {
+        try {
+          await api('/meals', { method: 'POST', body: body(date) });
+          done.push(date);
+        } catch (err) {
+          const day = days.find((d) => isoDate(d) === date);
+          setF((x) => ({ ...x, dates: x.dates.filter((d) => !done.includes(d)) }));
+          setError(new Error(`${done.length ? `${plural(done.length, 'meal')} saved. ` : ''}Could not save ${day ? longDay(day) : date}: ${err.message}${done.length ? ' The days not saved are still selected; try again.' : ''}`));
+          if (done.length) onSaved(null, true);
+          return;
+        }
+      }
+      onSaved(`${plural(done.length, 'meal')} saved.`);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const footer = (
+    <>
+      <p className={`mr-auto min-w-0 max-w-full truncate text-sm ${valid ? 'text-navy-900' : 'text-slate-500'}`} aria-live="polite">{summary}</p>
+      <Button variant="secondary" className={ring} onClick={onClose}>Cancel</Button>
+      <Button className={ring} disabled={!valid} loading={busy} onClick={save}>{editing ? 'Save meal' : n ? `Save ${plural(n, 'meal')}` : 'Save meals'}</Button>
+    </>
+  );
+
+  return (
+    <Modal open onClose={onClose} title={editing ? 'Edit meal' : 'Add meal'} footer={footer}>
+      <form className="space-y-4" noValidate onSubmit={(e) => { e.preventDefault(); save(); }}>
+        {error && <ErrorNote error={error} />}
+
+        <section aria-labelledby="meal-type">
+          <h3 id="meal-type" className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Meal</h3>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" role="radiogroup" aria-labelledby="meal-type">
+            {TYPES.map((t) => <button key={t} type="button" role="radio" aria-checked={f.meal_type === t} className={chip(f.meal_type === t)} onClick={() => set({ meal_type: t })}>{t}</button>)}
+          </div>
+        </section>
+
+        <section aria-labelledby="meal-days">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h3 id="meal-days" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {editing ? 'Day' : 'Days'} · {[...new Set(days.map((d) => d.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })))].join(' – ')}
+            </h3>
+            {!editing && (
+              <div className="flex gap-1">
+                <button type="button" className={linkBtn} disabled={f.dates.length === 7} onClick={() => set({ dates: isoDays })}>Every day</button>
+                <button type="button" className={linkBtn} disabled={!f.dates.length} onClick={() => set({ dates: [] })}>Clear</button>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-7 gap-1" role={editing ? 'radiogroup' : 'group'} aria-labelledby="meal-days">
+            {days.map((d) => {
+              const iso = isoDate(d);
+              const on = f.dates.includes(iso);
+              const state = editing ? { role: 'radio', 'aria-checked': on } : { 'aria-pressed': on };
+              return (
+                <button key={iso} type="button" {...state} aria-label={longDay(d)} onClick={() => toggleDay(iso)}
+                  className={`${ring} flex flex-col items-center rounded-lg border py-1.5 text-xs transition-colors ${on ? 'border-brand bg-brand text-white' : 'border-slate-300 bg-white text-slate-600 hover:border-brand hover:bg-brand-soft'}`}>
+                  <span className="font-medium">{dayName(d)}</span>
+                  <span className={`text-base font-semibold leading-tight ${on ? 'text-white' : 'text-navy-900'}`}>{d.getDate()}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">Description</span>
+          <input className="input" maxLength={2000} value={f.menu_description} onChange={(e) => set({ menu_description: e.target.value })} placeholder="e.g. Arroz caldo with egg, banana" />
+        </label>
+
+        <section aria-labelledby="meal-tags">
+          <h3 id="meal-tags" className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Dietary tags</h3>
+          <div className="flex flex-wrap gap-1.5">
+            {tagOptions.map((t) => <button key={t} type="button" aria-pressed={f.tags.includes(t)} className={chip(f.tags.includes(t))} onClick={() => toggleTag(t)}>{t}</button>)}
+          </div>
+          <div className="mt-2 flex gap-2">
+            <input className="input h-9" maxLength={MAX_TAG_LENGTH} value={custom} placeholder="Add another tag..." aria-label="Add another tag"
+              onChange={(e) => setCustom(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }} />
+            <Button variant="secondary" size="sm" className={ring} disabled={!custom.trim()} onClick={addCustom}>Add</Button>
+          </div>
+          {tooManyTags && <p className="mt-1 text-xs text-red-600">Use up to {MAX_TAGS} dietary tags.</p>}
+        </section>
+        {/* Lets Enter in the description save the form. */}
+        <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
+      </form>
+    </Modal>
+  );
+}
+
+/** One meal in the grid: description, tags as labels, and Edit / Delete (Delete for Admin only, as before). */
+function MealCard({ meal, canDelete, onEdit, onDelete }) {
+  const what = `${meal.meal_type}: ${meal.menu_description}`;
+  return (
+    <div className="mb-1 rounded-lg bg-white p-2 text-xs text-navy-900 shadow-card">
+      <p className="whitespace-pre-line break-words">{meal.menu_description}</p>
+      {meal.dietary_tags && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {splitTags(meal.dietary_tags).map((t) => <span key={t} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{t}</span>)}
+        </div>
+      )}
+      <div className="mt-1.5 flex gap-3 border-t border-slate-100 pt-1">
+        <button type="button" className={`${ring} rounded text-[11px] font-medium text-brand hover:underline`} onClick={onEdit} aria-label={`Edit ${what}`}>Edit</button>
+        {canDelete && <button type="button" className={`${ring} rounded text-[11px] font-medium text-red-600 hover:underline`} onClick={onDelete} aria-label={`Delete ${what}`}>Delete</button>}
+      </div>
+    </div>
+  );
 }
 
 export default function Meals() {
@@ -29,37 +191,20 @@ export default function Meals() {
   const to = isoDate(days[6]);
   const { data, loading, error, reload } = useApi(`/meals${qs({ from, to, q: query })}`);
   const [form, setForm] = useState(null);
-  const [fieldErrors, setFieldErrors] = useState({});
-  const [toggling, setToggling] = useState(null);
-  const [formError, setFormError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
   const today = isoDate();
+  const canDelete = user.role === 'Admin'; // unchanged: the API allows DELETE for Admin only
 
   const meals = data?.data || [];
-  const openForm = (value) => { setForm(value); setFormError(null); setFieldErrors({}); };
+  const knownTags = [...new Set(meals.flatMap((m) => splitTags(m.dietary_tags)))];
   const cell = (date, type) => meals.filter((m) => m.scheduled_date === date && m.meal_type === type);
 
-  const submit = async (e) => {
-    e.preventDefault();
-    const v = validateMeal(form);
-    setFieldErrors(v);
-    if (Object.keys(v).length) return;
-    setSaving(true); setFormError(null);
-    try {
-      const body = { meal_type: form.meal_type, menu_description: form.menu_description, scheduled_date: form.scheduled_date, dietary_tags: form.dietary_tags };
-      if (form.meal_id) await api(`/meals/${form.meal_id}`, { method: 'PUT', body });
-      else await api('/meals', { method: 'POST', body });
-      await reload(); setForm(null); toast('Meal saved.');
-    } catch (err) { setFormError(err); } finally { setSaving(false); }
-  };
-
-  const toggleActive = async () => {
-    setSaving(true);
-    try {
-      await api(`/meals/${toggling.meal_id}/active`, { method: 'PUT', body: { is_active: !toggling.is_active } });
-      await reload(); toast(toggling.is_active ? 'Meal removed from the plan.' : 'Meal restored.'); setToggling(null);
-    } catch (err) { toast(err.message, 'error'); } finally { setSaving(false); }
+  const saved = (msg, keepOpen = false) => {
+    reload();
+    if (keepOpen) return;
+    setForm(null);
+    if (msg) toast(msg);
   };
 
   const remove = async () => {
@@ -72,8 +217,8 @@ export default function Meals() {
 
   return (
     <>
-      <PageHeader title="Meals" description="Weekly meal plan for the home. Click an empty slot to add a meal."
-        actions={<Button onClick={() => openForm(newMeal('Breakfast', today))}><Plus className="h-4 w-4" /> Add meal</Button>} />
+      <PageHeader title="Meals" description="Weekly meal plan for the home. Click an empty slot to add a meal for that day."
+        actions={<Button onClick={() => setForm({ meal_type: 'Breakfast' })}><Plus className="h-4 w-4" /> Add meal</Button>} />
 
       <div className="mb-4 flex items-center gap-2">
         <Button variant="secondary" size="sm" aria-label="Previous week" onClick={() => setWeekStart(addDays(weekStart, -7))}><ChevronLeft className="h-4 w-4" /></Button>
@@ -94,7 +239,7 @@ export default function Meals() {
                   const key = isoDate(d);
                   return (
                     <th key={key} className={`border-b border-slate-100 p-3 text-left text-sm font-medium ${key === today ? 'text-brand' : 'text-navy-900'}`}>
-                      {d.toLocaleDateString('en-PH', { weekday: 'short' })}
+                      {dayName(d)}
                       <span className="block text-xs font-normal text-slate-500">{d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}</span>
                     </th>
                   );
@@ -108,27 +253,16 @@ export default function Meals() {
                   {days.map((d) => {
                     const date = isoDate(d);
                     const items = cell(date, type);
+                    const add = () => setForm({ meal_type: type, scheduled_date: date });
                     return (
                       <td key={date} className={`border-b border-l border-slate-100 p-2 align-top ${date === today ? 'bg-brand-soft/60' : ''}`}>
-                        {items.map((m) => (
-                          <div key={m.meal_id} className={`group mb-1 rounded-lg p-2 text-xs shadow-card ${m.is_active ? 'bg-white text-navy-900' : 'bg-slate-50 text-slate-400'}`}>
-                            <p className={`whitespace-pre-line ${m.is_active ? '' : 'line-through'}`}>{m.menu_description}</p>
-                            {m.dietary_tags && <p className="mt-1 text-[11px] text-slate-500">{m.dietary_tags}</p>}
-                            {!m.is_active && <p className="mt-0.5 text-[11px] font-medium">Removed</p>}
-                            <div className="mt-1 flex gap-1 opacity-60 group-hover:opacity-100">
-                              <button type="button" className="rounded p-0.5 hover:bg-slate-100" aria-label="Edit meal" onClick={() => openForm({ ...m })}><Pencil className="h-3 w-3" /></button>
-                              <button type="button" className="rounded p-0.5 hover:bg-slate-100" aria-label={m.is_active ? 'Remove meal from plan' : 'Restore meal'} onClick={() => setToggling(m)}>
-                                {m.is_active ? <Ban className="h-3 w-3" /> : <RotateCcw className="h-3 w-3" />}
-                              </button>
-                              {user.role === 'Admin' && <button type="button" className="rounded p-0.5 text-red-600 hover:bg-red-50" aria-label="Delete meal" onClick={() => setDeleting(m)}><Trash2 className="h-3 w-3" /></button>}
-                            </div>
-                          </div>
-                        ))}
-                        {items.length === 0 && (
-                          <button type="button" className="h-12 w-full rounded-lg border border-dashed border-slate-200 text-xs text-slate-400 hover:border-brand hover:text-brand"
-                            onClick={() => openForm(newMeal(type, date))}>
-                            Add
-                          </button>
+                        {items.map((m) => <MealCard key={m.meal_id} meal={m} canDelete={canDelete} onEdit={() => setForm({ ...m })} onDelete={() => setDeleting(m)} />)}
+                        {items.length === 0 ? (
+                          <button type="button" aria-label={`Add ${type} on ${longDay(d)}`} onClick={add}
+                            className={`${ring} h-12 w-full rounded-lg border border-dashed border-slate-200 text-xs text-slate-400 hover:border-brand hover:text-brand`}>Add</button>
+                        ) : (
+                          <button type="button" aria-label={`Add another ${type} on ${longDay(d)}`} onClick={add}
+                            className={`${ring} w-full rounded py-0.5 text-[11px] text-slate-400 hover:text-brand`}>+ Add</button>
                         )}
                       </td>
                     );
@@ -140,28 +274,9 @@ export default function Meals() {
         </Card>
       )}
 
-      <Modal open={Boolean(form)} onClose={() => setForm(null)} title={form?.meal_id ? 'Edit meal' : 'Add meal'}
-        footer={<><Button variant="secondary" onClick={() => setForm(null)}>Cancel</Button><Button type="submit" form="meal-form" loading={saving}>Save meal</Button></>}>
-        {form && (
-          <form id="meal-form" onSubmit={submit} noValidate className="space-y-4">
-            <ErrorNote error={formError} />
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Scheduled date" error={fieldErrors.scheduled_date}><input className="input" type="date" value={form.scheduled_date} onChange={(e) => setForm({ ...form, scheduled_date: e.target.value })} /></Field>
-              <Field label="Meal type" error={fieldErrors.meal_type}><select className="input" value={form.meal_type} onChange={(e) => setForm({ ...form, meal_type: e.target.value })}>{TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
-            </div>
-            <Field label="Description" error={fieldErrors.menu_description}><textarea className="input" rows={3} maxLength={2000} value={form.menu_description} onChange={(e) => setForm({ ...form, menu_description: e.target.value })} placeholder="e.g. Arroz caldo with egg, banana" /></Field>
-            <Field label="Dietary tags" hint="Separate with commas." error={fieldErrors.dietary_tags}>
-              <input className="input" list="diet-tags" value={form.dietary_tags || ''} onChange={(e) => setForm({ ...form, dietary_tags: e.target.value })} placeholder="Regular, No nuts" />
-            </Field>
-            <datalist id="diet-tags">{TAG_SUGGESTIONS.map((t) => <option key={t} value={t} />)}</datalist>
-          </form>
-        )}
-      </Modal>
-      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={saving} title="Delete meal?"
-        message="Are you sure you want to permanently delete this meal?" />
-      <ConfirmModal open={Boolean(toggling)} onClose={() => setToggling(null)} onConfirm={toggleActive} loading={saving}
-        title={toggling?.is_active ? 'Remove meal from the plan?' : 'Restore meal?'} confirmLabel={toggling?.is_active ? 'Remove' : 'Restore'}
-        message={toggling?.is_active ? 'Are you sure you want to remove this meal? It stays on record and can be restored.' : 'This meal will be put back on the plan.'} />
+      {form && <MealModal initial={form} days={days} knownTags={knownTags} onClose={() => setForm(null)} onSaved={saved} />}
+      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={saving} title="Delete this meal?" confirmLabel="Yes, delete"
+        message={deleting ? `${deleting.meal_type} on ${longDay(new Date(`${deleting.scheduled_date}T00:00:00`))}: ${deleting.menu_description}. This can't be undone.` : ''} />
     </>
   );
 }

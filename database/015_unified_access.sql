@@ -27,13 +27,24 @@ CREATE INDEX IF NOT EXISTS idx_challenges_session ON tbl_unlock_challenges (sess
 CREATE INDEX IF NOT EXISTS idx_sessions_jti ON tbl_unlock_sessions (session_jti);
 CREATE INDEX IF NOT EXISTS idx_sessions_active ON tbl_unlock_sessions (ended_at, expires_at);
 
+-- The child's case worker is copied to existing reviews once, when the column is first added. On later
+-- runs nothing is copied, so a review an Admin unassigned stays unassigned.
+DROP PROCEDURE IF EXISTS cs_015_transition_assign;
+CREATE PROCEDURE cs_015_transition_assign()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tbl_transition_reviews' AND COLUMN_NAME = 'assigned_staff_id') THEN
+    ALTER TABLE tbl_transition_reviews ADD COLUMN assigned_staff_id INT NULL;
+    UPDATE tbl_transition_reviews tr JOIN tbl_children c ON c.child_id = tr.child_id
+       SET tr.assigned_staff_id = c.assigned_staff_id
+     WHERE c.assigned_staff_id IS NOT NULL;
+  END IF;
+END;
+CALL cs_015_transition_assign();
+DROP PROCEDURE IF EXISTS cs_015_transition_assign;
 ALTER TABLE tbl_transition_reviews
-  ADD COLUMN IF NOT EXISTS assigned_staff_id INT NULL,
   ADD COLUMN IF NOT EXISTS assigned_by INT NULL,
   ADD COLUMN IF NOT EXISTS assigned_at DATETIME NULL;
-UPDATE tbl_transition_reviews tr JOIN tbl_children c ON c.child_id = tr.child_id
-   SET tr.assigned_staff_id = c.assigned_staff_id
- WHERE tr.assigned_staff_id IS NULL AND c.assigned_staff_id IS NOT NULL;
 ALTER TABLE tbl_transition_reviews
   ADD CONSTRAINT fk_transition_assigned_staff FOREIGN KEY IF NOT EXISTS (assigned_staff_id) REFERENCES tbl_users(user_id),
   ADD CONSTRAINT fk_transition_assigned_by FOREIGN KEY IF NOT EXISTS (assigned_by) REFERENCES tbl_users(user_id);

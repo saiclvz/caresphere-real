@@ -2,29 +2,66 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * CareSphere design system. Colours, fonts and animations are tokens in tailwind.config.js.
+ * Display settings (text size, reduce motion, higher contrast) add classes to <html>; see lib/displayPrefs.js.
+ */
 @layer base {
   html { -webkit-font-smoothing: antialiased; }
+  html.cs-text-lg { font-size: 112.5%; }
+  html.cs-text-xl { font-size: 125%; }
   body { @apply bg-page text-navy-900; }
-  :focus-visible { outline: 2px solid #2563EB; outline-offset: 2px; }
+  /* One visible focus indicator everywhere (keyboard only). */
+  :focus-visible { outline: 2px solid #1D5FD6; outline-offset: 2px; border-radius: 4px; }
   input, select, textarea { font: inherit; }
+  h1, h2, h3 { text-wrap: balance; }
 }
 
 @layer components {
   .input {
-    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-navy-900
-           placeholder:text-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-navy-900 transition-colors
+           placeholder:text-slate-400 hover:border-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20
            disabled:bg-slate-100 disabled:text-slate-500;
   }
-  .th { @apply px-4 py-3 text-left text-xs font-semibold text-slate-500; }
+  .input[aria-invalid="true"] { @apply border-red-500 focus:border-red-600 focus:ring-red-200; }
+  .th { @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500; }
   .td { @apply px-4 py-3 text-sm text-slate-700 align-top; }
+  /* Tables: row hover and keyboard focus inside a row. */
+  .cs-table tbody tr { @apply transition-colors; }
+  .cs-table tbody tr:hover, .cs-table tbody tr:focus-within { @apply bg-brand-50; }
+  /* Headline serif for brand moments only (never for data). */
+  .font-display { letter-spacing: -0.01em; }
+  /* Skeleton placeholders while information loads. */
+  .cs-skeleton {
+    @apply rounded-md bg-slate-200;
+    background-image: linear-gradient(90deg, rgba(255,255,255,0) 0, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%);
+    background-size: 400px 100%; background-repeat: no-repeat;
+    animation: cs-shimmer 1.4s linear infinite;
+  }
 }
+
+@keyframes cs-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
 
 /* PHI placeholder blur (the real record is never sent until unlocked) */
 .phi-blur { filter: blur(8px); user-select: none; pointer-events: none; }
 
+/* Reduced motion: the device setting, or "Reduce motion" in Display settings. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
+html.cs-reduce-motion *, html.cs-reduce-motion *::before, html.cs-reduce-motion *::after {
+  animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+}
+
+/* Higher contrast (Display settings): darker secondary text and borders, stronger focus ring. */
+html.cs-contrast .text-slate-400, html.cs-contrast .text-slate-500 { color: #334155 !important; }
+html.cs-contrast .text-slate-600 { color: #1E293B !important; }
+html.cs-contrast .border-slate-100, html.cs-contrast .border-slate-200, html.cs-contrast .border-slate-300 { border-color: #64748B !important; }
+html.cs-contrast .divide-slate-100 > * + * { border-color: #94A3B8 !important; }
+html.cs-contrast .shadow-card { box-shadow: 0 0 0 1px #64748B !important; }
+html.cs-contrast :focus-visible { outline-width: 3px; outline-color: #121D4D; }
+html.cs-contrast .input { border-color: #475569; }
+html.cs-contrast a:not([class*="bg-"]) { text-decoration: underline; }
 
 
 /*
@@ -33,6 +70,14 @@
 .cs-protected { position: relative; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .cs-protected input, .cs-protected textarea, .cs-protected select { -webkit-user-select: text; user-select: text; }
 .cs-shield { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(16px); }
+/* Capture "hold" (ProtectedContent): while a capture key is held or the window is inactive, the protected
+   content is blanked at once and the screen shows the notice instead, so a capture taken then shows only this. */
+html.cs-capture-hold .cs-protected > :not(.cs-shield) { visibility: hidden !important; }
+html.cs-capture-hold .cs-protected::after {
+  content: 'Screenshot or screen capture is not allowed for protected data.';
+  position: fixed; inset: 0; z-index: 59; display: flex; align-items: center; justify-content: center; padding: 2rem;
+  background: #121D4D; color: #FFFFFF; font: 600 1.125rem/1.4 system-ui, sans-serif; text-align: center;
+}
 @media print {
   .cs-protected * { visibility: hidden !important; }
   .cs-protected::before { content: 'Printing protected data is not allowed.'; visibility: visible; display: block; padding: 2rem; font-size: 14pt; }

@@ -3,7 +3,7 @@ import { Building2, Eye } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
-import { openFileInNewTab } from '../lib/openFile';
+import DocumentViewer from './DocumentViewer';
 import { formatDate, formatDateTime, formatMoney } from '../lib/format';
 import { Badge, Button, Card, ErrorNote, Field, Modal, Table } from './ui';
 
@@ -17,18 +17,22 @@ export default function BankTransferQueue({ onChanged }) {
   const rows = data?.data || [];
   const [acting, setActing] = useState(null); // { payment, action }
   const [text, setText] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const programs = useApi('/donations/options').data?.data?.programs || [];
   const [fieldError, setFieldError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [proof, setProof] = useState(null); // proof shown in the protected viewer
 
   if (!rows.length && !error) return null;
-  const viewProof = (p) => openFileInNewTab(`/payments/${p.payment_id}/proof`).catch((e) => toast(e.message, 'error'));
-  const open = (payment, action) => { setActing({ payment, action }); setText(''); setFieldError(null); };
+  const viewProof = (p) => setProof({ title: `Transfer proof: ${p.transfer_reference || `payment #${p.payment_id}`}`, path: `/payments/${p.payment_id}/proof` });
+  const open = (payment, action) => { setActing({ payment, action }); setText(''); setPurpose(''); setFieldError(null); };
   const submit = async () => {
-    if (!text.trim()) { setFieldError(acting.action === 'confirm' ? 'Allocation is required before the receipt can be issued.' : 'A reason is required when rejecting.'); return; }
+    if (acting.action === 'confirm' && !purpose) { setFieldError('Choose the purpose. It becomes the allocation, which is required before the receipt is issued.'); return; }
+    if (acting.action === 'reject' && !text.trim()) { setFieldError('A reason is required when rejecting.'); return; }
     setBusy(true);
     try {
       await api(`/payments/${acting.payment.payment_id}/verify`, { method: 'POST', body: acting.action === 'confirm'
-        ? { action: 'confirm', allocation_notes: text.trim() } : { action: 'reject', reason: text.trim() } });
+        ? { action: 'confirm', purpose, allocation_notes: text.trim() || undefined } : { action: 'reject', reason: text.trim() } });
       toast(acting.action === 'confirm' ? 'Transfer confirmed. The receipt was issued and the donor notified.' : 'Transfer rejected. The donor was notified.');
       setActing(null); reload(); onChanged?.();
     } catch (err) { setFieldError(err.message); } finally { setBusy(false); }
@@ -36,6 +40,7 @@ export default function BankTransferQueue({ onChanged }) {
 
   return (
     <Card className="mb-4 border border-amber-200">
+      <DocumentViewer open={Boolean(proof)} title={proof?.title} path={proof?.path} onClose={() => setProof(null)} />
       <h2 className="flex items-center gap-2 px-4 pt-4 font-semibold text-navy-900"><Building2 className="h-4 w-4 text-amber-700" aria-hidden /> Bank transfers to verify <Badge tone="amber">{rows.length}</Badge></h2>
       <p className="px-4 text-xs text-slate-500">Match the reference number, amount and date against the home's bank statement before confirming. An attachment is optional.</p>
       {error ? <div className="p-4"><ErrorNote error={error} onRetry={reload} /></div> : (
@@ -68,10 +73,22 @@ export default function BankTransferQueue({ onChanged }) {
         {acting && (
           <div className="space-y-3">
             <p className="text-sm text-slate-600">{formatMoney(acting.payment.amount)} from {acting.payment.donor_name}, reference <span className="font-mono">{acting.payment.transfer_reference}</span>.</p>
-            <Field label={acting.action === 'confirm' ? 'Allocation' : 'Reason (sent to the donor)'} required error={fieldError}
-              hint={acting.action === 'confirm' ? 'How the donation will be used. Shown to the donor.' : undefined}>
-              <textarea className="input" rows={3} maxLength={acting.action === 'confirm' ? 2000 : 1000} value={text} onChange={(e) => { setText(e.target.value); setFieldError(null); }} />
-            </Field>
+            {acting.action === 'confirm' ? (
+              <>
+                <Field label="Purpose" required error={fieldError} hint="The whole amount is allocated to this program. Shown to the donor.">
+                  <select className="input" value={purpose} onChange={(e) => { setPurpose(e.target.value); setFieldError(null); }}>
+                    <option value="">Choose...</option>{programs.map((p) => <option key={p}>{p}</option>)}
+                  </select>
+                </Field>
+                <Field label="Intended use" hint="Optional, e.g. school supplies for the new term.">
+                  <input className="input" maxLength={500} value={text} onChange={(e) => setText(e.target.value)} />
+                </Field>
+              </>
+            ) : (
+              <Field label="Reason (sent to the donor)" required error={fieldError}>
+                <textarea className="input" rows={3} maxLength={1000} value={text} onChange={(e) => { setText(e.target.value); setFieldError(null); }} />
+              </Field>
+            )}
           </div>
         )}
       </Modal>

@@ -100,6 +100,13 @@ exports.adoptionHistory = async (req, res) => {
   }
   await logActivity(req, 'VIEW_CHILD_ADOPTION_HISTORY', `Child ${child.child_id}`);
   const rows = await Child.adoptionHistory(child.child_id);
+  // Each case's summary (stage, matching, placement, petition, NACC, Order, finality, registration, monitoring).
+  const Stages = require('../services/adoptionStages');
+  const Adoption = require('../models/adoptionModel');
+  for (const r of rows) {
+    const app = await Adoption.findById(r.application_id);
+    if (app) r.summary = await Stages.childCaseSummary(app);
+  }
   // Staff unlocked the child, not each application: applicant names stay masked (need-to-know per application).
   const { maskName } = require('../config/adoptionSensitive');
   res.json({ success: true, data: req.user.role === 'Admin' ? rows : rows.map((r) => ({ ...r, applicant: maskName(r.applicant) })) });
@@ -256,7 +263,7 @@ exports.removePhoto = async (req, res) => {
 
 function sendPhoto(res, key) {
   res.setHeader('Content-Type', mimeFromKey(key));
-  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Cache-Control', 'no-store'); // child photos are never kept in the browser cache
   res.send(readUpload(key));
 }
 

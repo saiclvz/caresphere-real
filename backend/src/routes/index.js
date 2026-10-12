@@ -21,8 +21,10 @@ const transitions = require('../controllers/transitionController');
 const inventory = require('../controllers/inventoryController');
 const donations = require('../controllers/donationController');
 const donor = require('../controllers/donorController');
+const donorRecords = require('../controllers/donorRecordController');
 const visitors = require('../controllers/visitorController');
 const meals = require('../controllers/mealController');
+const idTypes = require('../controllers/idTypeController');
 const schedules = require('../controllers/scheduleController');
 const users = require('../controllers/userController');
 const settings = require('../controllers/settingsController');
@@ -33,6 +35,10 @@ const notifications = require('../controllers/notificationController');
 const unlock = require('../controllers/unlockController');
 const payments = require('../controllers/paymentController');
 const protectedRecords = require('../controllers/protectedRecordController');
+const adoptionDetail = require('../controllers/adoptionDetailController');
+const stages = require('../controllers/adoptionStageController');
+const archivedDocs = require('../controllers/archivedDocumentController');
+const matching = require('../controllers/matchingController');
 const childLegal = require('../controllers/childLegalController');
 
 const router = express.Router();
@@ -50,6 +56,9 @@ const tokenLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, message: 'Too man
 const mfaLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 15, message: 'Too many verification attempts. Wait 5 minutes and try again.' });
 const verifyLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: 'Too many receipt checks. Wait a minute and try again.' });
 const uploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, message: 'Too many uploads. Wait a minute and try again.' });
+// ID scan: the page asks for results every few seconds while a photo is scanned; PhilSys Check results are recorded by hand.
+const idScanLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, message: 'Too many requests. Wait a minute and try again.' });
+const philsysLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: 'Too many attempts. Wait a minute and try again.' });
 
 // ---------- Health check ----------
 router.get('/health', (req, res) => res.json({ success: true, service: 'caresphere-api', time: new Date().toISOString() }));
@@ -100,6 +109,20 @@ router.get('/transition-reviews', OPS, D_TRANSITION, h(transitions.list));
 router.get('/transition-reviews/:id', OPS, D_TRANSITION, h(transitions.getOne));
 router.put('/transition-reviews/:id', OPS, D_TRANSITION, h(transitions.update));
 router.put('/transition-reviews/:id/assign', ADMIN, D_TRANSITION, h(transitions.assign));
+router.post('/transition-reviews/:id/begin-assessment', OPS, D_TRANSITION, h(transitions.beginAssessment));
+router.put('/transition-reviews/:id/assessment', OPS, D_TRANSITION, h(transitions.saveAssessment));
+router.post('/transition-reviews/:id/conferences', OPS, D_TRANSITION, h(transitions.saveConference));
+router.put('/transition-reviews/:id/conferences/:cid', OPS, D_TRANSITION, h(transitions.saveConference));
+router.post('/transition-reviews/:id/decision', ADMIN, D_TRANSITION, h(transitions.saveDecision));
+router.post('/transition-reviews/:id/tasks', OPS, D_TRANSITION, h(transitions.saveTask));
+router.put('/transition-reviews/:id/tasks/:taskId', OPS, D_TRANSITION, h(transitions.saveTask));
+router.put('/transition-reviews/:id/preparation', OPS, D_TRANSITION, h(transitions.savePreparation));
+router.post('/transition-reviews/:id/discharge', ADMIN, D_TRANSITION, h(transitions.recordDischarge));
+router.post('/transition-reviews/:id/aftercare', OPS, D_TRANSITION, h(transitions.recordVisit));
+router.post('/transition-reviews/:id/close', ADMIN, D_TRANSITION, h(transitions.close));
+router.post('/transition-reviews/:id/documents', OPS, uploadLimiter, D_TRANSITION, h(transitions.uploadDocument));
+router.get('/transition-reviews/:id/documents/:docId', OPS, D_TRANSITION, h(transitions.viewDocument));
+router.get('/children/:id/transition-summary', OPS, D_TRANSITION, h(transitions.childSummary));
 
 // ---------- Adoption (RA 11642 workflow) ----------
 // Same permission groups as before (DONOR, OPS, REVIEWERS, ADMIN). Admin and Staff must also
@@ -118,6 +141,29 @@ router.delete('/adoptions/:id/documents/:docId', DONOR, D_ADOPTION, h(adoptions.
 router.get('/adoptions/:id/documents/:docId', REVIEWERS, D_ADOPTION, h(adoptions.downloadDocument));
 router.post('/adoptions/:id/documents/:docId/review', OPS, D_ADOPTION, h(adoptions.reviewDocument));
 router.post('/adoptions/:id/verifications/:vid/review', OPS, D_ADOPTION, h(adoptions.reviewVerification));
+router.post('/adoptions/:id/verifications/:vid/philsys-check', OPS, philsysLimiter, D_ADOPTION, h(adoptions.philsysCheck));
+router.get('/adoptions/:id/matching/preview', OPS, D_ADOPTION, h(matching.preview));
+router.post('/adoptions/:id/matches', OPS, D_ADOPTION, h(matching.propose));
+router.post('/adoptions/:id/matches/:mid/review', OPS, D_ADOPTION, h(matching.review));
+router.post('/adoptions/:id/matches/:mid/approve', ADMIN, D_ADOPTION, h(matching.approve));
+router.post('/adoptions/:id/matches/:mid/nacc', ADMIN, D_ADOPTION, h(matching.nacc));
+router.post('/adoptions/:id/matches/:mid/withdraw', OPS, D_ADOPTION, h(matching.withdraw));
+router.post('/adoptions/:id/link', OPS, D_ADOPTION, h(matching.link));
+router.get('/children/:id/match-profile', OPS, D_ADOPTION, h(matching.getProfile));
+router.put('/children/:id/match-profile', ADMIN, D_ADOPTION, h(matching.saveProfile));
+router.post('/children/:id/match-documents/:key/verify', ADMIN, D_ADOPTION, h(matching.verifyChildDocument));
+router.get('/archived-documents', ADMIN, h(archivedDocs.list));
+router.post('/archived-documents/:id/dispose', ADMIN, h(archivedDocs.dispose));
+router.post('/adoptions/staff-case', OPS, D_ADOPTION, h(stages.createStaffCase));
+router.get('/adoption-applicants', OPS, D_ADOPTION, h(stages.applicants));
+router.post('/adoptions/:id/stages/:key/record', OPS, D_ADOPTION, h(stages.saveRecord));
+router.post('/adoptions/:id/stages/:key/entries', OPS, D_ADOPTION, h(stages.addEntry));
+router.post('/adoptions/:id/stages/:key/proceed', OPS, D_ADOPTION, h(stages.proceed));
+router.put('/adoptions/:id/case-child', OPS, D_ADOPTION, h(stages.setChild));
+router.put('/adoptions/:id/eligibility', OPS, D_ADOPTION, h(stages.saveEligibility));
+router.put('/adoptions/:id/pap-answers', OPS, D_ADOPTION, h(stages.papAnswers));
+router.get('/adoptions/:id/tab/:tab', OPS, D_ADOPTION, h(adoptionDetail.tab));
+router.get('/adoptions/:id/id-scan', REVIEWERS, idScanLimiter, D_ADOPTION, h(adoptions.idScan));
 router.put('/adoptions/:id/verifications/:vid', REVIEWERS, D_ADOPTION, h(adoptions.correctVerification));
 router.get('/adoptions/:id/documents/:docId/verify', REVIEWERS, D_ADOPTION, h(adoptions.verifyDocument));
 router.post('/adoptions/:id/documents/:docId/protect', ADMIN, D_ADOPTION, h(adoptions.protectDocument));
@@ -128,6 +174,9 @@ router.post('/adoptions/:id/archive', ADMIN, D_ADOPTION, h(adoptions.archive));
 router.put('/adoptions/:id/assign', ADMIN, D_ADOPTION, h(adoptions.assign));
 router.post('/adoptions/:id/releases', ADMIN, D_ADOPTION, h(compliance.createRelease));
 router.get('/adoption-matchable-children', OPS, D_ADOPTION, h(childLegal.matchable));
+router.get('/adoption-verification-queue', OPS, D_ADOPTION, h(adoptions.verificationQueue));
+router.get('/id-types', ADMIN, h(idTypes.list));
+router.put('/id-types/:key', ADMIN, h(idTypes.save));
 
 // ---------- Child legal records (CDCLAA, sealed original birth record) ----------
 router.put('/children/:id/assign', ADMIN, D_CHILDREN, h(childLegal.assignStaff));
@@ -197,14 +246,35 @@ router.delete('/inventory/:id', OPS, D_INVENTORY, h(inventory.remove));
 
 // ---------- Donations ----------
 router.get('/donations', OPS, D_DONATIONS, h(donations.list));
+router.get('/donations/options', OPS, D_DONATIONS, h(donations.options));
 router.get('/donations/methods', OPS, D_DONATIONS, h(donations.methods));
 router.get('/donations/donors', OPS, D_DONATIONS, h(donations.donors));
+router.get('/donations/inventory-items', OPS, D_DONATIONS, h(donations.inventoryItems));
+router.get('/donations/export', OPS, D_DONATIONS, h(donations.exportCsv));
+router.get('/donations/reports', OPS, D_DONATIONS, h(donations.reports));
 router.get('/donations/verify/:code', OPS, verifyLimiter, D_DONATIONS, h(donations.verify));
 router.post('/donations', OPS, D_DONATIONS, h(donations.create));
-router.put('/donations/:id/status', OPS, D_DONATIONS, h(donations.updateStatus));
+router.get('/donations/:id', OPS, D_DONATIONS, h(donations.getOne));
 router.put('/donations/:id', OPS, D_DONATIONS, h(donations.update));
-router.delete('/donations/:id', ADMIN, D_DONATIONS, h(donations.remove));
+router.post('/donations/:id/status', OPS, D_DONATIONS, h(donations.transition));
+router.put('/donations/:id/status', OPS, D_DONATIONS, h(donations.updateStatus));
+router.post('/donations/:id/acknowledgment', OPS, D_DONATIONS, h(donations.acknowledge));
+router.put('/donations/:id/allocation', OPS, D_DONATIONS, h(donations.setAllocation));
+router.post('/donations/:id/corrections', OPS, D_DONATIONS, h(donations.correct));
+router.put('/donations/:id/items/:lineId', OPS, D_DONATIONS, h(donations.updateItem));
+router.post('/donations/:id/distributions', OPS, D_DONATIONS, h(donations.distribute));
+router.post('/donations/:id/utilization', OPS, D_DONATIONS, h(donations.utilize));
+router.post('/donations/:id/void', ADMIN, D_DONATIONS, h(donations.voidDonation));
+router.post('/donations/:id/void-request', OPS, D_DONATIONS, h(donations.requestVoid));
+router.post('/donations/:id/void-request/decline', ADMIN, D_DONATIONS, h(donations.declineVoid));
+router.post('/donations/:id/documents', OPS, uploadLimiter, D_DONATIONS, h(donations.uploadDocument));
+router.get('/donations/:id/documents/:docId', OPS, D_DONATIONS, h(donations.viewDocument));
 router.get('/donations/:id/receipt', ANY, D_DONATIONS, h(donations.receipt));
+// Donations are never deleted: DELETE /donations/:id is gone (Void instead).
+router.get('/donor-records', OPS, D_DONATIONS, h(donorRecords.list));
+router.get('/donor-records/duplicates', OPS, D_DONATIONS, h(donorRecords.duplicates));
+router.get('/donor-records/:id', OPS, D_DONATIONS, h(donorRecords.getOne));
+router.post('/donor-records/:id/reveal', OPS, D_DONATIONS, h(donorRecords.reveal));
 
 // ---------- Donor portal ----------
 router.get('/donor/summary', DONOR, h(donor.summary));
@@ -237,7 +307,6 @@ router.delete('/visitors/:id', ADMIN, D_VISITORS, h(visitors.remove));
 router.get('/meals', OPS, D_MEALS, h(meals.list));
 router.post('/meals', OPS, D_MEALS, h(meals.create));
 router.put('/meals/:id', OPS, D_MEALS, h(meals.update));
-router.put('/meals/:id/active', OPS, D_MEALS, h(meals.setActive));
 router.delete('/meals/:id', ADMIN, D_MEALS, h(meals.remove));
 
 // ---------- Staff schedules ----------

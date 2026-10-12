@@ -12,6 +12,8 @@ import { formatDate, matches } from '../lib/format';
 import { DUTY_LABELS } from '../lib/duties';
 
 const ALL_DUTIES = Object.keys(DUTY_LABELS);
+/** New Staff accounts start with every duty except the Donor directory (donor identity is opt-in). */
+const DEFAULT_DUTIES = ALL_DUTIES.filter((d) => d !== 'donor_directory');
 const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
 const ROLES = ['Admin', 'Staff', 'Donor'];
@@ -110,7 +112,7 @@ export default function Users() {
   return (
     <>
       <PageHeader title="User accounts" description="Create staff and admin accounts, change roles, and deactivate people who have left."
-        actions={<Button onClick={() => { setForm({ full_name: '', email: '', password: '', confirm: '', role: 'Staff', duties: ALL_DUTIES }); setFormError(null); setPwErrors({}); }}><Plus className="h-4 w-4" /> Create account</Button>} />
+        actions={<Button onClick={() => { setForm({ full_name: '', email: '', password: '', confirm: '', role: 'Staff', duties: DEFAULT_DUTIES }); setFormError(null); setPwErrors({}); }}><Plus className="h-4 w-4" /> Create account</Button>} />
 
       <div className="mb-4 inline-flex rounded-lg bg-white p-1 shadow-card">
         {['', ...ROLES].map((r) => (

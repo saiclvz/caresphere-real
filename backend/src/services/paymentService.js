@@ -93,7 +93,10 @@ async function completeGatewayPayment(paymentId, gatewayPaymentId) {
       allocation_notes: setting?.setting_value || 'General support for the children in our care',
       qr_receipt_code: makeReceiptCode(),
     });
-    await conn.query('UPDATE tbl_donations SET receipt_issued = TRUE WHERE donation_id = ?', [donationId]);
+    // Lifecycle: Received (paid online) -> Accepted (one allocation line) -> Acknowledged (receipt ready, as before).
+    const LC = require('./donationLifecycle');
+    await LC.history(conn, donationId, null, 'Received', 'Paid online', null);
+    await LC.acceptPortalGift(conn, null, donationId, { purpose: LC.purposeFromText(p.reason), use: setting?.setting_value || null, note: 'Paid online: general donation' });
     await conn.query(
       "UPDATE tbl_payments SET status = 'paid', gateway_payment_id = COALESCE(?, gateway_payment_id), paid_at = NOW(), donation_id = ? WHERE payment_id = ?",
       [gatewayPaymentId || null, donationId, paymentId]);
@@ -195,6 +198,7 @@ async function submitBankTransfer(req, body) {
         payment_method: m.name, status: 'Pending verification', reason_for_donation: reason, is_general: true, submitted_by_donor: true,
         qr_receipt_code: makeReceiptCode(),
       });
+      await require('./donationLifecycle').history(conn, donationId, null, 'Pending verification', 'Bank transfer submitted by the donor', req.user.user_id);
       const [r] = await conn.query(
         `INSERT INTO tbl_payments (donor_id, method_id, method_name, gateway, amount, reason, status, transfer_reference, transfer_date, account_last4,
            proof_storage_key, proof_name, proof_mime, proof_size, proof_sha256, donation_id)
@@ -216,23 +220,33 @@ async function submitBankTransfer(req, body) {
   }
 }
 
-/** Staff/Admin: confirm (allocation required, receipt issued) or reject (reason required, donor notified). */
+/**
+ * Staff/Admin: confirm (the purpose is the allocation; the donation is Received, Accepted and acknowledged, so
+ * the receipt is issued) or reject (reason required, donor notified).
+ */
 async function verifyBankTransfer(req, paymentId, body) {
   const action = String(body?.action || '');
   if (!['confirm', 'reject'].includes(action)) throw new HttpError(400, 'Choose Confirm or Reject.');
-  const allocation = action === 'confirm' ? requireText(body?.allocation_notes, 'Allocation is required before the receipt can be issued.', 2000) : null;
+  const LC = require('./donationLifecycle');
+  const L = require('../config/donationLifecycle');
+  const purpose = action === 'confirm' ? String(body?.purpose || '').trim() : null;
+  if (action === 'confirm' && !L.PROGRAMS.includes(purpose)) throw new HttpError(422, 'Choose the purpose (it becomes the allocation).', { errors: { purpose: 'Choose the purpose.' } });
+  const allocation = action === 'confirm' ? (trimOrNull(body?.allocation_notes, 500) || null) : null;
   const reason = action === 'reject' ? requireText(body?.reason, 'A reason is required when rejecting.', 1000) : null;
   return withTransaction(async (conn) => {
     const [[p]] = await conn.query('SELECT * FROM tbl_payments WHERE payment_id = ? FOR UPDATE', [paymentId]);
     if (!p || p.gateway !== 'manual') throw new HttpError(404, 'Payment not found.');
     if (p.status !== 'pending_verification') throw new HttpError(409, `This transfer was already ${STATUS_LABELS[p.status].toLowerCase()}.`);
     if (action === 'confirm') {
-      await conn.query("UPDATE tbl_donations SET status = 'Received', received_at = NOW(), allocation_notes = ?, receipt_issued = TRUE WHERE donation_id = ?", [allocation, p.donation_id]);
+      const d = await LC.lockDonation(conn, p.donation_id);
+      await LC.setStatus(conn, req, d, 'Received', 'Bank transfer verified');
+      await LC.acceptPortalGift(conn, req, p.donation_id, { purpose, use: allocation, note: 'Bank transfer verified' });
       await conn.query("UPDATE tbl_payments SET status = 'confirmed', verified_by = ?, verified_at = NOW() WHERE payment_id = ?", [req.user.user_id, paymentId]);
       await Notify.emit(conn, 'transfer_confirmed', { userId: p.donor_id, entityType: 'payment', entityId: paymentId, groupKey: `transfer_confirmed:payment:${paymentId}` });
       await Notify.toAdmins(conn, 'admin_donation_received', { params: { source: 'bank transfer' }, groupKey: 'donations_received', mode: 'count' });
     } else {
-      await conn.query("UPDATE tbl_donations SET status = 'Rejected' WHERE donation_id = ?", [p.donation_id]);
+      const d = await LC.lockDonation(conn, p.donation_id);
+      await LC.setStatus(conn, req, d, 'Rejected', 'Bank transfer not confirmed');
       await conn.query("UPDATE tbl_payments SET status = 'rejected', verified_by = ?, verified_at = NOW(), rejection_reason = ? WHERE payment_id = ?", [req.user.user_id, reason, paymentId]);
       await Notify.emit(conn, 'transfer_rejected', { userId: p.donor_id, entityType: 'payment', entityId: paymentId, params: { reason },
         groupKey: `transfer_rejected:payment:${paymentId}` });
@@ -255,7 +269,7 @@ const LIST_COLS = `p.payment_id, p.donor_id, u.full_name AS donor_name, p.method
   p.verified_at, v.full_name AS verified_by_name, d.receipt_issued, d.status AS donation_status`;
 const LIST_FROM = `FROM tbl_payments p JOIN tbl_users u ON u.user_id = p.donor_id LEFT JOIN tbl_users v ON v.user_id = p.verified_by
   LEFT JOIN tbl_donations d ON d.donation_id = p.donation_id`;
-const shape = (r) => ({ ...r, has_proof: !!r.has_proof, receipt_available: !!r.receipt_issued && r.donation_status === 'Received', status_label: STATUS_LABELS[r.status] });
+const shape = (r) => ({ ...r, has_proof: !!r.has_proof, receipt_available: !!r.receipt_issued && !['Voided', 'Rejected', 'Pending verification', 'Cancelled'].includes(r.donation_status), status_label: STATUS_LABELS[r.status] });
 
 async function listForDonor(userId) {
   const [rows] = await pool.query(`SELECT ${LIST_COLS} ${LIST_FROM} WHERE p.donor_id = ? ORDER BY p.created_at DESC LIMIT 200`, [userId]);

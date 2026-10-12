@@ -28,7 +28,8 @@ const STAGES = {
   'Home study scheduled': { phase: 'preparation', donor: 'Your home study visit is scheduled.', next: 'Be at home for the visit on the scheduled date.' },
   'Case study completed': { phase: 'preparation', donor: 'The social worker has finished your home study.', next: 'The home will decide if you are cleared for matching.' },
   'Cleared for matching': { phase: 'preparation', donor: 'You are cleared to continue.', next: 'The home will contact you about the next step.' },
-  'Child matched': { phase: 'matching', donor: 'You have been matched with a child.', next: 'The home will arrange the start of trial custody.' },
+  // The applicant sees no child details before the home discloses them (at trial custody).
+  'Child matched': { phase: 'matching', donor: 'A possible match is being reviewed.', next: 'The home will contact you about the next steps.', donorLabel: 'Possible match being reviewed' },
   'Trial custody': { phase: 'matching', donor: 'Trial custody is in progress.', next: 'A social worker will visit for monthly monitoring.' },
   'Trial custody completed': { phase: 'matching', donor: 'Trial custody is complete.', next: 'The home will file the adoption petition.' },
   'Placement ended': { phase: 'matching', donor: 'The placement has ended.', next: 'The home will contact you about what happens next.' },
@@ -57,13 +58,13 @@ const DECLINE = { to: 'Declined', roles: ADMIN };
 const TRANSITIONS = {
   ...Object.fromEntries(PREPARATION.map((s) => [s, prep.filter((t) => t.to !== s || REPEATABLE.includes(t.to))])),
   'Cleared for matching': [
-    { to: 'Child matched', roles: ADMIN, types: ['Regular'] },
+    { to: 'Child matched', roles: ADMIN, types: ['Regular'], via: 'matching' },
     { to: 'Petition filed', roles: OPS, types: ['Relative'] },
     { to: 'Documents requested', roles: OPS }, DECLINE,
   ],
   'Child matched': [{ to: 'Trial custody', roles: ADMIN }, { to: 'Placement ended', roles: ADMIN }, DECLINE],
   'Trial custody': [{ to: 'Trial custody completed', roles: ADMIN }, { to: 'Placement ended', roles: ADMIN }, DECLINE],
-  'Placement ended': [{ to: 'Child matched', roles: ADMIN }, DECLINE],
+  'Placement ended': [{ to: 'Child matched', roles: ADMIN, via: 'matching' }, DECLINE],
   'Trial custody completed': [{ to: 'Petition filed', roles: OPS }, DECLINE],
   'Petition filed': [{ to: 'Published', roles: OPS }, DECLINE],
   Published: [{ to: 'Mandatory appearance done', roles: OPS }, DECLINE],
@@ -97,7 +98,8 @@ const trackOf = (type) => require('./adoptionForm').trackOf(type);
 function allowedTargets(status, type, role) {
   const track = trackOf(type);
   return (TRANSITIONS[status] || [])
-    .filter((t) => t.roles.includes(role) && (!t.types || t.types.includes(track)))
+    // "Child matched" is recorded by approving a match (services/matching.js), not through Update status.
+    .filter((t) => t.roles.includes(role) && (!t.types || t.types.includes(track)) && !t.via)
     .map((t) => t.to);
 }
 
@@ -110,14 +112,33 @@ function transition(status, type, to) {
 // From the home study on, every required document must be verified (no stage after it can be reached without it).
 const DOCUMENTS_COMPLETE_FOR = ['Home study scheduled', 'Cleared for matching', 'Petition filed'];
 
+/**
+ * The staff page's stage bar. A stage is done when its milestone is recorded, current when the
+ * application's status is in it. Matching and Trial custody are skipped on the Relative track.
+ */
+const PROGRESS_STAGES = [
+  { key: 'inquiry', label: 'Inquiry', statuses: ['Submitted'] },
+  { key: 'forum', label: 'Forum', statuses: ['Forum attended'] },
+  { key: 'documents', label: 'Documents', statuses: ['Documents requested'] },
+  { key: 'assessment', label: 'Assessment', statuses: ['Home study scheduled', 'Case study completed', 'Cleared for matching'] },
+  { key: 'matching', label: 'Matching', statuses: ['Child matched'], tracks: ['Regular'] },
+  { key: 'trial', label: 'Trial custody', statuses: ['Trial custody', 'Trial custody completed', 'Placement ended'], tracks: ['Regular'] },
+  { key: 'petition', label: 'Petition', statuses: ['Petition filed', 'Published', 'Mandatory appearance done', 'Endorsed to NACC', 'Awaiting NACC decision'] },
+  { key: 'order', label: 'Order', statuses: ['Order of Adoption issued', 'Civil registry updated', 'Closed'] },
+];
+
 /** For the 4-phase tracker: index of the current phase (0-3), or -1 for draft/declined/withdrawn. */
 function phaseIndex(status) {
   const phase = STAGES[status]?.phase;
   return phase ? PHASES.findIndex((p) => p.key === phase) : -1;
 }
 
+/** The status as the applicant sees it. */
+const donorLabel = (status) => STAGES[status]?.donorLabel || status;
+
 module.exports = {
-  DOCUMENTS_COMPLETE_FOR, trackOf,
+  donorLabel,
+  DOCUMENTS_COMPLETE_FOR, trackOf, PROGRESS_STAGES,
   OPS, ADMIN, PHASES, STAGES, STATUSES, TRANSITIONS, PREPARATION, ACTIVE, INACTIVE, FINAL, WITHDRAWABLE, AFTER_ORDER, PLACED,
   TRIAL_MONTHS, NACC_DECISION_DAYS, DUE_SOON_DAYS, MONITORING_INTERVAL_DAYS, allowedTargets, transition, phaseIndex,
 };

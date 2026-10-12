@@ -105,6 +105,28 @@ function deleteUpload(key) {
   try { fs.unlinkSync(resolveKey(key)); } catch { /* already gone */ }
 }
 
+/**
+ * Secure disposal (Data protection > Archived documents): the stored file is overwritten with random bytes,
+ * flushed, then removed. Returns true when a file was removed, false when it was already gone.
+ */
+function secureDeleteUpload(key) {
+  if (!key) return false;
+  const full = resolveKey(key);
+  let fd;
+  try {
+    const { size } = fs.statSync(full);
+    fd = fs.openSync(full, 'r+');
+    const chunk = 64 * 1024;
+    for (let pos = 0; pos < size; pos += chunk) fs.writeSync(fd, require('crypto').randomBytes(Math.min(chunk, size - pos)), 0, Math.min(chunk, size - pos), pos);
+    fs.fsyncSync(fd);
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    throw err;
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
+  fs.unlinkSync(full);
+  return true;
+}
+
 function mimeFromKey(key) {
   if (key.includes('.pdf.')) return 'application/pdf';
   if (key.includes('.png.')) return 'image/png';
@@ -114,4 +136,4 @@ function mimeFromKey(key) {
 const MB = 1024 * 1024;
 
 module.exports = {
-  imageSize, verifyUpload, saveUpload, readUpload, deleteUpload, mimeFromKey, MB };
+  imageSize, verifyUpload, saveUpload, readUpload, deleteUpload, secureDeleteUpload, mimeFromKey, MB };

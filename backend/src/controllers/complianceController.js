@@ -70,7 +70,9 @@ exports.securityEvents = async (req, res) => {
   res.json({ success: true, data: await C.securityEvents() });
 };
 
-const CAPTURE_KINDS = ['print_screen', 'capture_shortcut', 'print', 'save_page', 'copy', 'cut', 'right_click', 'drag'];
+const CAPTURE_KINDS = ['print_screen', 'capture_shortcut', 'print', 'save_page', 'copy', 'cut', 'right_click', 'drag', 'watermark_tampered'];
+/** Admin may take screenshots and screen recordings (Admin screenshot policy), so these are not attempts for Admin. */
+const SCREENSHOT_KINDS = ['print_screen', 'capture_shortcut'];
 /**
  * POST /api/security/capture-attempts (signed in) { area, kind, path } - a screenshot, print or copy attempt
  * the browser noticed on a protected page. Logged as a security event and in the Audit log.
@@ -78,9 +80,13 @@ const CAPTURE_KINDS = ['print_screen', 'capture_shortcut', 'print', 'save_page',
 exports.captureAttempt = async (req, res) => {
   const kind = String(req.body?.kind || '');
   if (!CAPTURE_KINDS.includes(kind)) throw new HttpError(400, 'Unknown attempt.');
+  if (req.user.role === 'Admin' && SCREENSHOT_KINDS.includes(kind)) return res.json({ success: true, data: { recorded: false } });
   const area = String(req.body?.area || '').replace(/[^\w\s-]/g, '').slice(0, 60) || 'Protected page';
   const path = String(req.body?.path || '').slice(0, 200);
-  await logSecurityEvent(req, 'CAPTURE_ATTEMPT', { detail: `${kind} on ${area} (${path})` });
-  await logActivity(req, `CAPTURE_ATTEMPT (${kind}, ${area})`, path || area);
+  // Browser, OS and device from the request's User-Agent (the page's own report is shown alongside).
+  const client = require('../utils/device').clientLabel(req);
+  const event = kind === 'watermark_tampered' ? 'WATERMARK_TAMPERED' : 'CAPTURE_ATTEMPT';
+  await logSecurityEvent(req, event, { detail: `${kind} on ${area} (${path}); ${client}` });
+  await logActivity(req, `${event} (${kind}, ${area}; ${client})`, path || area);
   res.json({ success: true });
 };

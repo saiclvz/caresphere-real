@@ -55,6 +55,14 @@ exports.clientEvent = async (req, res) => {
 exports.sessions = async (req, res) => {
   const recordType = String(req.query.record_type || '');
   if (!CFG.RECORD_TYPES.includes(recordType)) throw new HttpError(400, 'Unknown record type.');
+  // ?page= gives the paged Access tab view (active first, then the ended history, 10 a page).
+  if (req.query.page !== undefined) {
+    const page = Math.max(1, Math.min(10000, Number.parseInt(req.query.page, 10) || 1));
+    const userId = req.query.user_id ? Number.parseInt(req.query.user_id, 10) || null : null;
+    const state = ['active', 'ended'].includes(req.query.state) ? req.query.state : 'all';
+    res.json({ success: true, data: await U.sessionsPage(recordType, String(req.query.record_id || ''), { page, userId, state }) });
+    return;
+  }
   res.json({ success: true, data: await U.sessionsFor(recordType, String(req.query.record_id || '')) });
 };
 

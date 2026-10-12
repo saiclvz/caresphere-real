@@ -32,6 +32,21 @@ async function logActivityWith(conn, req, action, entity) {
 }
 
 /**
+ * An activity row written by the system on behalf of a user (no request): e.g. the automatic ID checks that
+ * run after an upload. The action text says it was automatic. Never throws.
+ */
+async function logSystemActivity(conn, userId, action, entity) {
+  if (!userId) return;
+  try {
+    const [[u]] = await conn.query('SELECT r.role_name AS role FROM tbl_users u JOIN tbl_roles r ON r.role_id = u.role_id WHERE u.user_id = ?', [userId]);
+    await conn.query('INSERT INTO tbl_activity_logs (user_id, user_role, action_performed, target_entity, ip_address, device_type) VALUES (?, ?, ?, ?, NULL, NULL)',
+      [userId, u?.role || null, String(action).slice(0, 255), String(entity).slice(0, 100)]);
+  } catch (err) {
+    console.error('[audit] Failed to write system activity:', err.message);
+  }
+}
+
+/**
  * Security events (failed logins, lockouts, unauthorized access, token failures). The user may be
  * unknown, so these go to tbl_security_events. Only a hash of a typed email is stored.
  */
@@ -45,4 +60,4 @@ async function logSecurityEvent(req, type, { userId = null, email = null, detail
   }
 }
 
-module.exports = { logActivity, logActivityWith, logSecurityEvent };
+module.exports = { logActivity, logActivityWith, logSystemActivity, logSecurityEvent };

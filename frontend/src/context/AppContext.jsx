@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import { api } from '../api/client';
 import { hasDuty } from '../lib/duties';
 import { useAuth } from './AuthContext';
@@ -90,14 +91,23 @@ export function AppProvider({ children }) {
   return (
     <AppContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-80 flex-col gap-2" aria-live="polite">
-        {toasts.map((t) => (
-          <div key={t.id} role="status"
-            className={`pointer-events-auto rounded-lg px-4 py-3 text-sm shadow-modal ${
-              t.tone === 'error' ? 'bg-red-600 text-white' : 'bg-navy-900 text-white'}`}>
-            {t.message}
-          </div>
-        ))}
+      {/* Toasts: icon + text (not colour alone); errors are announced at once, the rest politely. */}
+      <div className="pointer-events-none fixed inset-x-4 bottom-4 z-[60] flex flex-col gap-2 sm:left-auto sm:right-4 sm:w-96" aria-live="polite">
+        {toasts.map((t) => {
+          const error = t.tone === 'error';
+          const Icon = error ? AlertCircle : t.tone === 'info' ? Info : CheckCircle2;
+          return (
+            <div key={t.id} role={error ? 'alert' : 'status'}
+              className={`pointer-events-auto flex animate-toast items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-modal ${
+                error ? 'border-red-300 bg-red-50 text-red-900' : 'border-brand-200 bg-white text-navy-900'}`}>
+              <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${error ? 'text-red-700' : t.tone === 'info' ? 'text-brand' : 'text-emerald-700'}`} aria-hidden />
+              <span className="min-w-0 flex-1"><span className="sr-only">{error ? 'Error: ' : ''}</span>{t.message}</span>
+              <button type="button" onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))} className="-mr-1 rounded p-0.5 text-slate-500 hover:bg-slate-100 hover:text-navy-900" aria-label="Dismiss">
+                <X className="h-4 w-4" aria-hidden />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </AppContext.Provider>
   );

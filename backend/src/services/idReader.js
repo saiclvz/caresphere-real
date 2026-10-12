@@ -53,6 +53,88 @@ function editingTrace(buffer) {
 
 const check = (name, result, message) => ({ check: name, result, message });
 
+/** "1990-01-02" -> "January 2, 1990" (for System vs ID messages). */
+const longDate = (iso) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ''))) return iso || 'not given';
+  const [y, m, d] = iso.split('-');
+  const mon = MONTHS[Number(m) - 1];
+  return `${mon[0]}${mon.slice(1).toLowerCase()} ${Number(d)}, ${y}`;
+};
+
+const pad = (n) => String(n).padStart(2, '0');
+const validIso = (y, m, d) => {
+  const dt = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  return dt.getUTCFullYear() === Number(y) && dt.getUTCMonth() === Number(m) - 1 && dt.getUTCDate() === Number(d) && Number(y) > 1900 && Number(y) < 2100
+    ? `${y}-${pad(m)}-${pad(d)}` : null;
+};
+const monthNo = (w) => { const i = MONTHS.findIndex((m) => m.startsWith(String(w).slice(0, 3))); return i >= 0 ? i + 1 : null; };
+
+/** Every date printed in a line of text, as YYYY-MM-DD (numeric dates read month-first, as on PH IDs). */
+function datesIn(line) {
+  const t = upper(line);
+  const out = [];
+  const add = (iso) => { if (iso && !out.includes(iso)) out.push(iso); };
+  for (const m of t.matchAll(/(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})/g)) add(validIso(m[1], m[2], m[3]));
+  for (const m of t.matchAll(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})/g)) add(validIso(m[3], m[1], m[2]) || validIso(m[3], m[2], m[1]));
+  for (const m of t.matchAll(/([A-Z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})/g)) if (monthNo(m[1])) add(validIso(m[3], monthNo(m[1]), m[2]));
+  for (const m of t.matchAll(/(\d{1,2})\s+([A-Z]{3,9})\.?,?\s+(\d{4})/g)) if (monthNo(m[2])) add(validIso(m[3], monthNo(m[2]), m[1]));
+  return out;
+}
+
+/**
+ * Information extracted from the reading, for the staff review screen. Labels printed on the card
+ * ("Date of birth", "Expiry", "Address" ...) decide which value is which; anything not found is null.
+ * Extraction only: it never proves the ID is genuine.
+ */
+function extract(reading, idType) {
+  if (!reading || !['read', 'unreadable'].includes(reading.status)) return null;
+  const lines = String(reading.text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const labelled = (re) => {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!re.test(upper(lines[i]))) continue;
+      const same = datesIn(lines[i]);
+      if (same.length) return same[0];
+      const next = lines[i + 1] ? datesIn(lines[i + 1]) : [];
+      if (next.length) return next[0];
+    }
+    return null;
+  };
+  const textAfter = (re, skip = /^$/) => {
+    for (let i = 0; i < lines.length; i += 1) {
+      const u = upper(lines[i]);
+      if (!re.test(u)) continue;
+      const rest = lines[i].replace(/^[^:]*:\s*/, '');
+      if (rest && rest !== lines[i] && rest.length > 2) return rest.slice(0, 160);
+      const next = lines[i + 1];
+      if (next && !skip.test(upper(next))) return next.slice(0, 160);
+    }
+    return null;
+  };
+  const rule = R.ID_TYPES[idType];
+  let idNumber = null;
+  if (rule?.format) {
+    const loose = new RegExp(rule.format.source.replace(/^\^/, '').replace(/\$$/, ''));
+    for (const l of lines) {
+      for (const token of upper(l).split(/\s{2,}|[^A-Z0-9 -]/)) {
+        const c = token.replace(/\s/g, '');
+        const m = c.match(loose);
+        if (m) { idNumber = m[0]; break; }
+      }
+      if (idNumber) break;
+    }
+  }
+  return {
+    detected_type: reading.detected_type || detectType(reading.text, idType),
+    confidence: Number(reading.confidence || 0),
+    full_name: textAfter(/\b(FULL NAME|NAME|PANGALAN|APELYIDO|SURNAME|LAST NAME)\b/, /DATE|BIRTH|ADDRESS|SEX/),
+    date_of_birth: labelled(/BIRTH|KAPANGANAKAN|\bDOB\b/),
+    id_number: idNumber,
+    address: textAfter(/ADDRESS|TIRAHAN/),
+    date_issued: labelled(/ISSU|PETSA NG PAGKAKAISYU/),
+    expiry_date: labelled(/EXPIR|VALID UNTIL|VALIDITY|\bVALID\b/),
+  };
+}
+
 /**
  * Compares a reading with the typed details. Returns { checks, typeMismatch, flags } where flags lists
  * reasons for "Flagged for review". Pure function (no database), so it is easy to test.
@@ -64,7 +146,7 @@ function compare(reading, form) {
   const checks = [];
   const flags = [];
   if (reading.editing_trace) {
-    checks.push(check('Signs of editing', 'warn', `The file names photo-editing software (${reading.editing_trace}). This doesn't mean it is fake; check the original.`));
+    checks.push(check('Signs of editing', 'warn', `Potential alteration detected. Manual verification required. (The file names photo-editing software: ${reading.editing_trace}.)`));
     flags.push('editing');
   } else checks.push(check('Signs of editing', 'pass', 'No editing software named in the file.'));
   const conf = Number(reading.confidence || 0);
@@ -84,7 +166,11 @@ function compare(reading, form) {
   // ID number
   const number = compact(form.id_number);
   if (number && all.includes(number)) checks.push(check('ID number on the photo', 'pass', 'The typed ID number appears on the photo.'));
-  else { checks.push(check('ID number on the photo', 'warn', 'The typed ID number was not found on the photo.')); flags.push('number'); }
+  else {
+    const found = extract(reading, form.id_type)?.id_number;
+    checks.push(check('ID number on the photo', 'warn', found ? `Typed: ${form.id_number} · Read from the ID: ${found}. Possible edited or mistyped number; compare the original.` : 'The typed ID number was not found on the photo.'));
+    flags.push('number');
+  }
   // Name: every part of the name as printed (2+ letters) must appear
   const parts = spaced(form.id_name).split(' ').filter((p) => p.length >= 2);
   const words = ` ${spaced(text)} `;
@@ -92,8 +178,12 @@ function compare(reading, form) {
   if (parts.length && !missing.length) checks.push(check('Name on the photo', 'pass', 'The name as printed appears on the photo.'));
   else { checks.push(check('Name on the photo', 'warn', 'Part of the typed name was not found on the photo.')); flags.push('name'); }
   // Date of birth and expiry
+  const ex = extract(reading, form.id_type) || {};
   if (dateForms(form.id_dob).some((f) => all.includes(f))) checks.push(check('Date of birth on the photo', 'pass', 'The typed date of birth appears on the photo.'));
-  else { checks.push(check('Date of birth on the photo', 'warn', 'The typed date of birth was not found on the photo.')); flags.push('dob'); }
+  else if (ex.date_of_birth && form.date_of_birth && ex.date_of_birth !== form.date_of_birth) {
+    checks.push(check('Date of birth on the photo', 'warn', `Information mismatch? System: ${longDate(form.date_of_birth)} · Read from the ID: ${longDate(ex.date_of_birth)}. The reading may be wrong; compare the original.`));
+    flags.push('dob');
+  } else { checks.push(check('Date of birth on the photo', 'warn', 'The typed date of birth was not found on the photo.')); flags.push('dob'); }
   if (form.id_expiry) {
     if (dateForms(form.id_expiry).some((f) => all.includes(f))) checks.push(check('Expiry date on the photo', 'pass', 'The typed expiry date appears on the photo.'));
     else checks.push(check('Expiry date on the photo', 'warn', 'The typed expiry date was not found on the photo.'));
@@ -140,7 +230,7 @@ function recognizeIsolated(buffer) {
 async function readDocument(documentId) {
   let row;
   try {
-    const [[doc]] = await pool.query('SELECT document_id, application_id, storage_key, mime_type FROM tbl_adoption_documents WHERE document_id = ?', [documentId]);
+    const [[doc]] = await pool.query('SELECT document_id, application_id, storage_key, mime_type, uploaded_by FROM tbl_adoption_documents WHERE document_id = ?', [documentId]);
     if (!doc) return;
     const save = (r) => pool.query('INSERT INTO tbl_id_ocr (document_id, status, detail, text_enc, confidence, detected_type, editing_trace) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [documentId, r.status, r.detail || null, r.text ? encField(r.text) : null, r.confidence ?? null, r.detected_type || null, r.editing_trace || null]);
@@ -167,7 +257,7 @@ async function readDocument(documentId) {
     if (app && app.status !== 'Draft') {
       const Adoption = require('../models/adoptionModel');
       const form2 = await Adoption.form(app.application_id);
-      await withTransaction((conn) => require('./verification').syncFromForm(conn, app, form2, null));
+      await withTransaction((conn) => require('./verification').syncFromForm(conn, app, form2, null, { systemFor: doc.uploaded_by, trigger: 'ID photo read' }));
     }
   } catch (err) {
     console.error('[id-reader] Reading failed:', err.message);
@@ -178,4 +268,4 @@ async function readDocument(documentId) {
 /** Starts reading in the background (the upload doesn't wait for it). */
 const readInBackground = (documentId) => setImmediate(() => { readDocument(documentId); });
 
-module.exports = { compare, detectType, dateForms, editingTrace, latestForApplication, readDocument, readInBackground };
+module.exports = { compare, extract, datesIn, longDate, detectType, dateForms, editingTrace, latestForApplication, readDocument, readInBackground };

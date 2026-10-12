@@ -186,7 +186,7 @@ export function FormField({ name, def, form, onChange, error, config }) {
  * Upload field for one document type. "No file chosen" until a file is uploaded, then the
  * file name(s) in a green state with Replace (single file) or Add another (multiple).
  */
-export function DocumentField({ docType, def, files, required, rules, onUpload, onRemove, canRemove = true, disabled = false }) {
+export function DocumentField({ docType, def, files, required, rules, onUpload, onRemove, canRemove = true, disabled = false, requiredError = null }) {
   const inputRef = useRef(null);
   const id = useId();
   const [error, setError] = useState(null);
@@ -209,7 +209,7 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
   const buttonLabel = busy ? 'Uploading...' : !has ? 'Choose file' : def.multiple ? 'Add another file' : 'Replace';
 
   return (
-    <div className={`cs-file ${has ? 'has-file' : ''}`}>
+    <div className={`cs-file ${has ? 'has-file' : ''} ${requiredError && !has ? 'cs-file-error' : ''}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p id={`${id}-label`} className="cs-title text-sm">{def.label}{required && <span className="cs-req" aria-hidden="true">*</span>}{!required && <span className="cs-muted font-normal"> (optional)</span>}</p>
@@ -221,7 +221,8 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
             </label>
           )}
         </div>
-        <button type="button" className="cs-btn cs-btn-sm" onClick={() => inputRef.current?.click()} disabled={busy || disabled} aria-describedby={`${id}-label`}>
+        <button type="button" id={`f-doc:${docType}`} className="cs-btn cs-btn-sm" onClick={() => inputRef.current?.click()} disabled={busy || disabled}
+          aria-describedby={`${id}-label${requiredError && !has ? ` ${id}-req` : ''}`} aria-invalid={requiredError && !has ? true : undefined}>
           <Upload className="h-4 w-4" aria-hidden /> {buttonLabel}
         </button>
         <input ref={inputRef} type="file" className="sr-only" tabIndex={-1} aria-hidden="true" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" onChange={pick} />
@@ -245,6 +246,7 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
         </ul>
       ) : <p className="cs-muted mt-2 text-sm">No file chosen</p>}
       {error && <p className="cs-error" role="alert">{error}</p>}
+      {requiredError && !has && !error && <p id={`${id}-req`} className="cs-error">{requiredError}</p>}
     </div>
   );
 }

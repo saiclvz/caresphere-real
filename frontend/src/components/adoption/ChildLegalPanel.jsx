@@ -163,6 +163,67 @@ function AdminRecords({ childId }) {
 }
 
 /** Child page: adoption legal records (CDCLAA; sealed records and protected files for Admin). */
+/**
+ * Matching readiness: the child's needs, siblings to place together and room needs (for the compatibility
+ * review), and the child's documents, each verified by Admin. Matching is blocked until all are verified.
+ */
+function MatchReadiness({ childId }) {
+  const { user } = useAuth();
+  const { toast } = useApp();
+  const isAdmin = user.role === 'Admin';
+  const { data, error, reload } = useApi(`/children/${encodeURIComponent(childId)}/match-profile`);
+  const [form, setForm] = useState(null);
+  const [refs, setRefs] = useState({});
+  const [busy, setBusy] = useState(null);
+  const p = data?.data;
+  useEffect(() => { if (p) setForm({ special_needs: p.special_needs || '', sibling_group_size: p.sibling_group_size ?? '', needs_own_room: p.needs_own_room === null ? '' : String(p.needs_own_room) }); }, [p]);
+  if (error) return <ErrorNote error={error} onRetry={reload} />;
+  if (!p || !form) return <Spinner />;
+  const save = async () => {
+    setBusy('profile');
+    try { await api(`/children/${encodeURIComponent(childId)}/match-profile`, { method: 'PUT', body: { ...form, needs_own_room: form.needs_own_room === '' ? null : form.needs_own_room === 'true' } }); toast('Matching profile saved.'); reload(); }
+    catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
+  };
+  const verify = async (key) => {
+    setBusy(key);
+    try { await api(`/children/${encodeURIComponent(childId)}/match-documents/${key}/verify`, { method: 'POST', body: { reference: refs[key] || '' } }); toast('Marked verified.'); reload(); }
+    catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
+  };
+  const missing = p.documents.filter((d) => !d.verified_at).length;
+  return (
+    <Card className="space-y-3 p-5">
+      <div>
+        <h2 className="font-semibold text-navy-900">Matching readiness</h2>
+        <p className="text-xs text-slate-500">Matching is blocked until the CDCLAA and these documents are verified. The profile is used for the compatibility review only.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Field label="Health or special needs"><select className="input" disabled={!isAdmin} value={form.special_needs} onChange={(e) => setForm({ ...form, special_needs: e.target.value })}>
+          <option value="">Not recorded</option>{['None', 'Some', 'Significant'].map((o) => <option key={o}>{o}</option>)}</select></Field>
+        <Field label="Siblings to place together"><input className="input" type="number" min="0" max="10" disabled={!isAdmin} value={form.sibling_group_size} onChange={(e) => setForm({ ...form, sibling_group_size: e.target.value })} /></Field>
+        <Field label="Needs a room of their own"><select className="input" disabled={!isAdmin} value={form.needs_own_room} onChange={(e) => setForm({ ...form, needs_own_room: e.target.value })}>
+          <option value="">Not recorded</option><option value="true">Yes</option><option value="false">No, can share</option></select></Field>
+      </div>
+      {isAdmin && <Button size="sm" variant="secondary" loading={busy === 'profile'} onClick={save}>Save profile</Button>}
+      <div>
+        <p className="text-sm font-medium text-navy-900">Child's documents {missing ? <Badge tone="amber">{missing} not verified</Badge> : <Badge tone="green"><BadgeCheck className="h-3 w-3" aria-hidden /> All verified</Badge>}</p>
+        <ul className="mt-1 divide-y divide-slate-100 text-sm">
+          {p.documents.map((d) => (
+            <li key={d.key} className="flex flex-wrap items-center justify-between gap-2 py-2">
+              <span className="min-w-0">{d.label}{d.verified_at && <span className="block text-xs text-slate-500">Verified by {d.verified_by_name || 'Admin'} on {formatDate(d.verified_at)}{d.reference ? ` · ${d.reference}` : ''}</span>}</span>
+              {d.verified_at ? <Badge tone="green"><BadgeCheck className="h-3 w-3" aria-hidden /> Verified</Badge> : isAdmin ? (
+                <span className="flex items-center gap-2">
+                  <input className="input h-8 w-48 text-xs" maxLength={120} placeholder="Where the original is filed" aria-label={`Reference for ${d.label}`} value={refs[d.key] || ''} onChange={(e) => setRefs({ ...refs, [d.key]: e.target.value })} />
+                  <Button size="sm" variant="secondary" loading={busy === d.key} disabled={(refs[d.key] || '').trim().length < 3} onClick={() => verify(d.key)}>Mark verified</Button>
+                </span>
+              ) : <Badge tone="amber">Not verified</Badge>}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </Card>
+  );
+}
+
 export default function ChildLegalPanel({ childId, onChanged }) {
   const { user } = useAuth();
   return (
@@ -172,6 +233,7 @@ export default function ChildLegalPanel({ childId, onChanged }) {
           <Cdclaa childId={childId} onChanged={onChanged} />
           {user.role === 'Admin' && <Sealed childId={childId} />}
         </Card>
+        <MatchReadiness childId={childId} />
         {user.role === 'Admin' && <AdminRecords childId={childId} />}
       </div>
   );

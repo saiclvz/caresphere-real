@@ -78,6 +78,7 @@ async function toStaff(conn, type, opts = {}) {
 const STAGE_EVENTS = {
   'Initial review': 'application_under_review', 'Home study scheduled': 'interview_scheduled', 'Cleared for matching': 'application_approved',
   Declined: 'application_declined', Withdrawn: 'application_withdrawn', Submitted: 'application_submitted',
+  'Child matched': 'application_match_review',
 };
 async function adoptionStatus(conn, { applicantId, applicationId, reference, status, documentsRequested = false, historyId }) {
   const type = documentsRequested ? 'documents_requested' : STAGE_EVENTS[status] || 'application_status';

@@ -1,0 +1,52 @@
+
+== PhilID front + back, all good: auto=Passed status=(Manual verification required) flags=-
+   checklist: type:pass front:pass back:pass number:pass name:pass dob:pass expiry:n/a machine:pass
+
+== Front only (back missing): auto=null status=(Manual verification required) flags=-
+   [fail] Back: photo: Upload the back of the ID.
+
+== Name and birth date mismatch: auto=Failed status=Information mismatch flags=qr_mismatch,dates_inconsistent
+   [warn] QR code matches the printed details: name differs, date of birth differs. Flagged for review.
+   [fail] Matches your application: Information mismatch. Name – System: Ana Santos Dela Cruz · ID: ANNA SANTOS DELA CRUZ. Date of birth – System: March 14, 1988 · ID: March 15, 1988.
+
+== QR does not match printed data: auto=Failed status=Information mismatch flags=qr_mismatch,dates_inconsistent
+   [warn] QR code matches the printed details: name differs, date of birth differs, number differs. Flagged for review.
+   [fail] Matches your application: Information mismatch. Name – System: Ana Santos Dela Cruz · ID: MARIA LOPEZ REYES. Date of birth – System: March 14, 1988 · ID: July 1, 1979. ID number – System: ••••••••••••3456 · ID: ••••••••••••6666.
+
+== Same photo for both sides: auto=Failed status=Flagged for review flags=same_photo_both_sides
+   [fail] Front and back: The same photo was uploaded for both sides. Upload the back of the card.
+
+== Front and back swapped: auto=Failed status=(Manual verification required) flags=-
+   [fail] Front: Correct side: This looks like the back of the ID, but it was uploaded as the front. Upload the front here.
+   [fail] Front: Required details: Not found on the front: ID number. Take a clearer photo of the whole front.
+   [fail] Front and back: The front and back look swapped. Upload each photo in the right place.
+
+== Blurry front: auto=Unable to read status=(Manual verification required) flags=-
+   [fail] Front: Photo quality: The photo is blurry. Hold the phone steady and tap to focus.
+   [fail] Front: Readable: We couldn't read this side (reading confidence 32%). Please try again in good light.
+
+== Wrong ID type selected: auto=Failed status=ID type mismatch flags=type_differs_by_side,qr_mismatch
+   [fail] Front: ID type: This looks like a Driver's license, but PhilSys National ID (PhilID / ePhilID) was selected.
+   [fail] Front: ID number format: The number read from the ID doesn't match the PhilSys National ID (PhilID / ePhilID) format (e.g. 1234-5678-9012-3456).
+   [warn] QR code matches the printed details: number differs. Flagged for review.
+   [fail] Matches your application: Information mismatch. ID number – System: ••••••••••••3456 · ID: •••••••6789.
+
+== Passport good (back optional): auto=Passed status=(Manual verification required) flags=-
+
+== Passport expired: auto=Failed status=Expired flags=-
+   [warn] Front: MRZ (two lines at the bottom): Read, but part of it was unclear; the readable check digits verify.
+   [fail] Expiry: Expired: expired on January 9, 2020. Upload a valid ID.
+
+== Passport MRZ check failure: auto=Failed status=Flagged for review flags=mrz_check_failed
+   [fail] Front: MRZ (two lines at the bottom): The MRZ check digits don't verify (date of birth, composite). Retake the photo; if this persists, a person will check it.
+
+== Licence number format wrong: auto=Failed status=Invalid ID number flags=type_differs_by_side,qr_mismatch
+   [fail] Front: ID number format: The number read from the ID doesn't match the LTO driver's license format (e.g. N01-23-456789).
+   [warn] QR code matches the printed details: number differs. Flagged for review.
+   [fail] Matches your application: Information mismatch. ID number – System: •••••••6789 · ID: •••2345.
+
+== Duplicate image + ID number used by another applicant: auto=Passed status=Flagged for review flags=duplicate_image,number_reused
+
+== Screenshot instead of a photo: auto=Passed status=Flagged for review flags=possible_screenshot
+
+== 7 uploads of the front: auto=Passed status=Flagged for review flags=too_many_retakes

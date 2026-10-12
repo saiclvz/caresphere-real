@@ -1,6 +1,6 @@
 const { pool } = require('../config/db');
 const { likeParam } = require('../utils/validate');
-const { FIELDS, OTHER_CITY } = require('../config/adoptionForm');
+const { FIELDS, OTHER_CITY, RETIRED_DOC_TYPES } = require('../config/adoptionForm');
 const { CITY_LISTS } = require('../config/phAddress');
 const WF = require('../config/adoptionWorkflow');
 const { encField, decField } = require('../utils/fieldCrypto');
@@ -12,7 +12,7 @@ const LABELS = {};
 /** Sensitive applicant fields stored encrypted (RA 10173). Legal name and email stay readable for search. */
 const ENCRYPTED = new Set(['date_of_birth', 'contact_number', 'house_unit', 'street', 'subdivision', 'barangay', 'province',
   'postal_code', 'id_type', 'id_type_other', 'living_conditions', 'caregiving_experience', 'adoptee_dob', 'adoptee_relationship',
-  'id_number', 'id_expiry', 'id_name', 'id_dob']);
+  'id_number', 'id_expiry', 'id_name', 'id_dob', 'adoptee_name']);
 const dec = (k, v) => (ENCRYPTED.has(k) ? decField(v) : (v ?? ''));
 
 // Columns of tbl_applicant_details that map 1:1 to form fields.
@@ -21,7 +21,7 @@ const DETAIL_FIELDS = [
   'postal_code', 'civil_status', 'employment_status', 'occupation', 'employer', 'position', 'employment_length',
   'income_source', 'housing', 'living_conditions', 'caregiving_experience', 'id_type', 'id_type_other',
   'citizenship', 'children_10_plus', 'nonmarital_children_10_plus', 'has_adopted_before', 'adoptee_dob', 'adoptee_relationship',
-  'id_number', 'id_expiry', 'id_name', 'id_dob',
+  'id_number', 'id_expiry', 'id_name', 'id_dob', 'adoptee_name', 'pref_age_range', 'pref_special_needs', 'pref_siblings', 'pref_space',
 ];
 
 const LIST_COLS = `a.application_id, a.reference_no, a.status, a.application_type, a.is_legacy, a.applicant_id, a.matched_child_id,
@@ -29,7 +29,8 @@ const LIST_COLS = `a.application_id, a.reference_no, a.status, a.application_typ
   a.submitted_at, a.updated_at, a.created_at, a.decided_at, a.withdrawn_at, a.finalized_at,
   ad.legal_name, ad.email, ad.contact_number,
   c.first_name AS child_first_name, LEFT(c.last_name, 1) AS child_last_initial, c.full_name AS child_full_name,
-  (SELECT COUNT(*) FROM tbl_application_document_requests r WHERE r.application_id = a.application_id AND r.status = 'Open') AS open_requests`;
+  (SELECT COUNT(*) FROM tbl_application_document_requests r WHERE r.application_id = a.application_id AND r.status = 'Open'
+    AND r.doc_type NOT IN ('divorce_or_death_certificate', 'child_abuse_clearance', 'fingerprint_clearance')) AS open_requests`;
 
 const FROM = `FROM tbl_adoption_applications a
   LEFT JOIN tbl_applicant_details ad ON ad.application_id = a.application_id
@@ -47,6 +48,12 @@ module.exports = {
    *  - applicantId: a donor's own applications (drafts included).
    *  - otherwise staff view: drafts are never listed (not submitted yet).
    */
+  /** Applications per status (the summary cards), with the same archive rule as the list. */
+  async statusCounts({ includeArchived = false } = {}) {
+    const [rows] = await pool.query(`SELECT status, COUNT(*) AS n FROM tbl_adoption_applications WHERE status <> 'Draft' ${includeArchived ? '' : 'AND archived_at IS NULL'} GROUP BY status`);
+    return Object.fromEntries(rows.map((r) => [r.status, Number(r.n)]));
+  },
+
   async list({ status, statuses, search, applicantId, includeArchived = false, referenceSearchOnly = false, assigned } = {}) {
     const where = [];
     const params = [];
@@ -67,7 +74,10 @@ module.exports = {
       params.push(p, p, p);
     }
     const [rows] = await pool.query(
-      `SELECT ${LIST_COLS} ${FROM} WHERE ${where.join(' AND ')}
+      `SELECT ${LIST_COLS}, cc.child_id AS case_child_id, cc.full_name AS case_child_name, a.application_type AS adoption_type,
+              (SELECT MAX(h.created_at) FROM tbl_application_status_history h WHERE h.application_id = a.application_id AND h.to_status = a.status) AS stage_since
+         ${FROM} LEFT JOIN tbl_children cc ON cc.child_id = COALESCE(a.matched_child_id, a.target_child_id, a.link_child_id)
+        WHERE ${where.join(' AND ')}
         ORDER BY FIELD(a.status, ${STATUSES.map(() => '?').join(', ')}), COALESCE(a.submitted_at, a.created_at) DESC`, [...params, ...STATUSES]);
     return rows;
   },
@@ -164,12 +174,12 @@ module.exports = {
          FROM tbl_adoption_documents d JOIN tbl_users u ON u.user_id = d.uploaded_by
          LEFT JOIN tbl_users rv ON rv.user_id = d.reviewed_by
          LEFT JOIN tbl_protected_records pr ON pr.document_id = d.document_id
-        WHERE d.application_id = ? ORDER BY d.page, d.doc_type, d.uploaded_at`, [id]);
+        WHERE d.application_id = ? AND d.archived_at IS NULL ORDER BY d.page, d.doc_type, d.uploaded_at`, [id]);
     return rows;
   },
 
   async document(id, docId) {
-    const [rows] = await pool.query('SELECT * FROM tbl_adoption_documents WHERE application_id = ? AND document_id = ?', [id, docId]);
+    const [rows] = await pool.query('SELECT * FROM tbl_adoption_documents WHERE application_id = ? AND document_id = ? AND archived_at IS NULL', [id, docId]);
     return rows[0] || null;
   },
 
@@ -219,7 +229,7 @@ module.exports = {
     const [rows] = await pool.query(
       `SELECT r.request_id, r.doc_type, r.message, r.status, r.requested_at, r.fulfilled_at, r.closed_at, u.full_name AS requested_by_name
          FROM tbl_application_document_requests r JOIN tbl_users u ON u.user_id = r.requested_by
-        WHERE r.application_id = ? ORDER BY r.requested_at DESC, r.request_id DESC`, [id]);
+        WHERE r.application_id = ? AND r.doc_type NOT IN (?) ORDER BY r.requested_at DESC, r.request_id DESC`, [id, RETIRED_DOC_TYPES]);
     return forDonor ? rows.map(({ requested_by_name, ...r }) => r) : rows;
   },
 

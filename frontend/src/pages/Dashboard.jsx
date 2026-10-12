@@ -5,7 +5,7 @@ import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAx
 import { AlertTriangle, Baby, Boxes, HandCoins, UserCheck, UtensilsCrossed } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { useAuth } from '../context/AuthContext';
-import { Badge, Card, ErrorNote, PageHeader, Spinner, StatTile } from '../components/ui';
+import { Badge, Card, ErrorNote, WelcomeBanner, Spinner, StatTile } from '../components/ui';
 import { formatMoney } from '../lib/format';
 
 const monthLabel = (key) => new Date(`${key}-01T00:00:00`).toLocaleDateString('en-PH', { month: 'short' });
@@ -21,7 +21,7 @@ export default function Dashboard() {
 
   return (
     <>
-      <PageHeader title={`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}, ${user.full_name.split(' ')[0]}`}
+      <WelcomeBanner title={`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}, ${user.full_name.split(' ')[0]}`}
         description="Today at the home: who's in care, what's running low, and who's on site." />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -51,7 +51,7 @@ export default function Dashboard() {
                 <YAxis tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={70}
                   tickFormatter={(v) => (v >= 1000 ? `₱${(v / 1000).toFixed(0)}k` : `₱${v}`)} />
                 <Tooltip formatter={(v) => formatMoney(v)} labelFormatter={monthLabel} cursor={{ fill: '#F1F5F9' }} />
-                <Bar dataKey="total" name="Amount" fill="#2563EB" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="total" name="Amount" fill="#1D5FD6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -95,7 +95,7 @@ export default function Dashboard() {
                   <Tooltip cursor={{ fill: '#F1F5F9' }} />
                   <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
                   <Bar dataKey="female" name="Girls" stackId="a" fill="#1E293B" />
-                  <Bar dataKey="male" name="Boys" stackId="a" fill="#2563EB" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="male" name="Boys" stackId="a" fill="#1D5FD6" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

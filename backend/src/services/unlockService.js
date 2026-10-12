@@ -256,6 +256,34 @@ async function endForUser(userId) {
 }
 
 /** Sessions for one record (Admin panel), newest first. */
+/**
+ * Paged sessions for one record (Admin, Access tab): active ones always in full, then the ended history,
+ * 10 a page, optionally for one user. Returns { active, history, total, page, per_page, users }.
+ */
+async function sessionsPage(recordType, recordId, { page = 1, perPage = 10, userId = null, state = 'all' } = {}) {
+  const SEL = `SELECT s.session_id, s.user_id, u.full_name AS user_name, s.purpose, ch.purpose_note, ch.acknowledged_at, s.started_at, s.expires_at,
+            s.ended_at, s.end_reason, rb.full_name AS revoked_by_name, (s.ended_at IS NULL AND s.expires_at > NOW()) AS active
+       FROM tbl_unlock_sessions s JOIN tbl_users u ON u.user_id = s.user_id JOIN tbl_unlock_challenges ch ON ch.challenge_id = s.challenge_id
+       LEFT JOIN tbl_users rb ON rb.user_id = s.revoked_by
+      WHERE s.record_type = ? AND s.record_id = ?`;
+  const args = [recordType, String(recordId)];
+  const userCond = userId ? ' AND s.user_id = ?' : '';
+  const userArgs = userId ? [userId] : [];
+  const [active] = state === 'ended' ? [[]] : await pool.query(`${SEL} AND s.ended_at IS NULL AND s.expires_at > NOW()${userCond} ORDER BY s.started_at DESC`, [...args, ...userArgs]);
+  let history = []; let total = 0;
+  if (state !== 'active') {
+    const ended = ' AND NOT (s.ended_at IS NULL AND s.expires_at > NOW())';
+    const [[c]] = await pool.query(`SELECT COUNT(*) AS n FROM tbl_unlock_sessions s WHERE s.record_type = ? AND s.record_id = ?${ended}${userCond}`, [...args, ...userArgs]);
+    total = Number(c.n);
+    [history] = await pool.query(`${SEL}${ended}${userCond} ORDER BY s.started_at DESC LIMIT ? OFFSET ?`, [...args, ...userArgs, perPage, (page - 1) * perPage]);
+  }
+  const [users] = await pool.query(
+    `SELECT DISTINCT u.user_id, u.full_name FROM tbl_unlock_sessions s JOIN tbl_users u ON u.user_id = s.user_id
+      WHERE s.record_type = ? AND s.record_id = ? ORDER BY u.full_name`, args);
+  const fix = (rows) => rows.map((r) => ({ ...r, active: !!r.active }));
+  return { active: fix(active), history: fix(history), total, page, per_page: perPage, users };
+}
+
 async function sessionsFor(recordType, recordId) {
   const [rows] = await pool.query(
     `SELECT s.session_id, s.user_id, u.full_name AS user_name, s.purpose, ch.purpose_note, ch.acknowledged_at, s.started_at, s.expires_at,
@@ -280,5 +308,5 @@ async function activeSessions() {
 
 module.exports = {
   RECORD_TYPES, GENERIC, NOT_ASSIGNED, logEvent, access, createChallenge, verify, sessionFor, lockNow, revoke, endForUser,
-  sessionsFor, activeSessions, recordLabel,
+  sessionsFor, sessionsPage, activeSessions, recordLabel,
 };

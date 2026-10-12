@@ -174,9 +174,9 @@ CREATE TABLE IF NOT EXISTS tbl_donation_children (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------- meals
+-- (is_active, the "remove from plan" flag, was added here and is dropped by 025_remove_meal_disable.sql)
 ALTER TABLE tbl_meals
-  ADD COLUMN IF NOT EXISTS dietary_tags VARCHAR(255) NOT NULL DEFAULT '',
-  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+  ADD COLUMN IF NOT EXISTS dietary_tags VARCHAR(255) NOT NULL DEFAULT '';
 
 -- ---------------------------------------------------------------- visitors (QR passes removed)
 ALTER TABLE tbl_visitors

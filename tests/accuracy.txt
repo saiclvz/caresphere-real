@@ -1,0 +1,18 @@
+Field | Clear photos | Poor photos (dark, glare, blurry, cropped)
+full_name | 9/9 | 2/4
+date_of_birth | 9/9 | 2/4
+id_number | 9/9 | 2/4
+address | 4/4 | 2/4
+date_issued | 5/5 | -
+expiry_date | 5/5 | -
+ALL clear | 41/41 = 100%
+
+Misses:
+philid_front_glare.jpg as front (PhilSys National ID) · full_name: expected "ANA SANTOS DELA CRUZ", read "(nothing)"
+philid_front_glare.jpg as front (PhilSys National ID) · date_of_birth: expected "1988-03-14", read "(nothing)"
+philid_front_glare.jpg as front (PhilSys National ID) · id_number: expected "1234-5678-9012-3456", read "(nothing)"
+philid_front_glare.jpg as front (PhilSys National ID) · address: expected "12 MABINI ST, BRGY 5, QUEZON CITY", read "(nothing)"
+philid_front_blurry.jpg as front (PhilSys National ID) · full_name: expected "ANA SANTOS DELA CRUZ", read "(nothing)"
+philid_front_blurry.jpg as front (PhilSys National ID) · date_of_birth: expected "1988-03-14", read "(nothing)"
+philid_front_blurry.jpg as front (PhilSys National ID) · id_number: expected "1234-5678-9012-3456", read "(nothing)"
+philid_front_blurry.jpg as front (PhilSys National ID) · address: expected "12 MABINI ST, BRGY 5, QUEZON CITY", read "(nothing)"

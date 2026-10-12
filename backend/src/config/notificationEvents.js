@@ -43,6 +43,29 @@ const staffApp = (p) => `/adoptions/${p.id}`;        // Admin / Staff applicatio
 const review = (p) => `/transition-reviews/${p.id}`;
 
 const EVENTS = {
+  // ---------------- Transition Review (18+): case number and event only
+  ...(() => {
+    const ev = {
+      transition_conference: [(p) => `Case ${p.ref}: case conference scheduled`, (p) => `Conference on ${p.date}.`],
+      transition_decision: [(p) => `Case ${p.ref}: transition decision recorded`, (p) => `Decision: ${p.decision}.`],
+      transition_placement: [(p) => `Case ${p.ref}: transition recorded`, () => 'Aftercare follow-ups are scheduled.'],
+      transition_ready_close: [(p) => `Case ${p.ref}: ready for closure`, () => 'Aftercare is complete. The review can be closed.'],
+      transition_assessment_overdue: [(p) => `Case ${p.ref}: transition assessment overdue`, () => 'The assessment has not started yet.'],
+      transition_date_soon: [(p) => `Case ${p.ref}: transition date approaching`, (p) => `Target transition date: ${p.date}.`],
+      transition_plan_incomplete: [(p) => `Case ${p.ref}: transition plan incomplete`, (p) => `Tasks are still open; target date ${p.date}.`],
+      transition_task_due: [(p) => `Case ${p.ref}: transition task due soon`, (p) => `A task is due on ${p.due}.`],
+      aftercare_due: [(p) => `Case ${p.ref}: aftercare follow-up due`, (p) => `${p.round} follow-up on ${p.date}.`],
+      aftercare_overdue: [(p) => `Case ${p.ref}: aftercare follow-up overdue`, (p) => `The ${p.round} follow-up is overdue.`],
+    };
+    const warn = ['transition_assessment_overdue', 'transition_plan_incomplete', 'aftercare_overdue'];
+    const out = {};
+    for (const [k, [title, body]] of Object.entries(ev)) {
+      out[`admin_${k}`] = { category: 'children', priority: warn.includes(k) ? 'warning' : k === 'transition_ready_close' ? 'action' : 'info', title, body, link: review };
+      out[`staff_${k}`] = { category: 'assignments', title, body, link: review };
+    }
+    return out;
+  })(),
+
   // ---------------- Donor: applications
   application_submitted: { category: 'applications', title: (p) => `Application ${p.ref}: submitted`, body: () => 'We received your application. You can follow its progress here.', link: app },
   application_under_review: { category: 'applications', title: (p) => `Application ${p.ref}: under review`, body: () => 'The home has started reviewing your application.', link: app },
@@ -52,6 +75,7 @@ const EVENTS = {
   application_approved: { category: 'applications', critical: true, title: (p) => `Application ${p.ref}: approved`, body: () => 'The home approved your application. Open it to see the next steps.', link: app },
   application_declined: { category: 'applications', critical: true, title: (p) => `Application ${p.ref}: declined`, body: () => 'Open the application to read the home\'s message.', link: app },
   application_withdrawn: { category: 'applications', title: (p) => `Application ${p.ref}: withdrawn`, body: () => 'Your application was withdrawn.', link: app },
+  application_match_review: { category: 'applications', title: (p) => `Application ${p.ref}: a possible match is being reviewed`, body: () => 'The home will contact you about the next steps.', link: app },
   application_status: { category: 'applications', title: (p) => `Application ${p.ref}: ${p.status}`, body: (p) => `Your application is now at: ${p.status}.`, link: app },
 
   // ---------------- Donor: donations
@@ -71,9 +95,12 @@ const EVENTS = {
   // ---------------- Admin
   admin_application_submitted: { category: 'applications', priority: 'action', title: (p) => `Application ${p.ref}: submitted`, body: () => 'A new application needs review and an assigned staff member.', link: staffApp },
   admin_documents_uploaded: { category: 'applications', priority: 'action', title: (p) => `Application ${p.ref}: documents uploaded`, body: () => 'The applicant uploaded requested documents.', link: staffApp },
+  admin_stage_update: { category: 'applications', priority: 'info', title: (p) => `Application ${p.ref}: ${p.stage}`, body: (p) => p.what || 'Open the case for details.', link: staffApp },
+  admin_match_update: { category: 'applications', priority: 'action', title: (p) => `Application ${p.ref}: match ${p.step}`, body: (p) => (p.step === 'under review' ? 'Approve or withdraw the proposed match.' : p.step === 'approved' ? "Record NACC's referral or confirmation." : 'Open Matching and placement for details.'), link: staffApp },
   admin_decision_needed: { category: 'applications', priority: 'action', title: (p) => `Application ${p.ref}: decision needed`, body: () => 'The home study is complete. Clear for matching or decline.', link: staffApp },
   admin_application_withdrawn: { category: 'applications', priority: 'info', title: (p) => `Application ${p.ref}: withdrawn by the applicant`, body: () => 'No action is needed.', link: staffApp },
   admin_transfer_pending: { category: 'donations', priority: 'action', title: (p) => (p.count > 1 ? `${p.count} bank transfers to verify` : 'A bank transfer is waiting for verification'), body: () => 'Proof was uploaded. Confirm or reject it on the Donations page.', link: () => '/donations' },
+  admin_void_requested: { category: 'donations', priority: 'action', title: (p) => `Donation ${p.ref}: void requested`, body: () => 'A staff member asked to void this donation. Approve or decline it on the donation page.', link: (p) => `/donations/${p.id}` },
   admin_donation_received: { category: 'donations', priority: 'info', title: (p) => (p.count > 1 ? `${p.count} donations received` : 'A donation was received'), body: (p) => `Latest: ${p.source}.`, link: () => '/donations' },
   admin_payment_failed: { category: 'donations', priority: 'warning', title: (p) => (p.count > 1 ? `${p.count} online payments failed` : 'An online payment failed'), body: () => 'No donation was recorded.', link: () => '/donations' },
   admin_webhook_error: { category: 'donations', priority: 'warning', title: (p) => (p.count > 1 ? `${p.count} payment webhook errors` : 'A payment webhook error occurred'), body: () => 'Check the PayMongo webhook settings and the server log.', link: () => '/donations' },
@@ -91,6 +118,8 @@ const EVENTS = {
   assigned: { category: 'assignments', title: (p) => `Assigned to you: ${p.ref}`, body: () => 'You can now unlock this record.', link: (p) => (p.kind === 'transition_review' ? review(p) : p.kind === 'child' ? `/children/${encodeURIComponent(p.id)}` : staffApp(p)) },
   unassigned: { category: 'assignments', title: (p) => `Unassigned: ${p.ref}`, body: () => 'You are no longer assigned to this record.', link: () => '/notifications' },
   staff_access_ended: { category: 'assignments', title: (p) => `Access ended: ${p.ref}`, body: () => 'Access ended by an administrator.', link: () => '/notifications' },
+  staff_stage_update: { category: 'applications', title: (p) => `Application ${p.ref}: ${p.stage}`, body: (p) => p.what || 'Open the case for details.', link: staffApp },
+  staff_match_update: { category: 'applications', title: (p) => `Application ${p.ref}: match ${p.step}`, body: () => 'Open Matching and placement for details.', link: staffApp },
   staff_documents_uploaded: { category: 'applications', title: (p) => `Application ${p.ref}: documents uploaded`, body: () => 'The applicant uploaded requested documents.', link: staffApp },
   staff_transfer_pending: { category: 'donations', title: (p) => (p.count > 1 ? `${p.count} bank transfers to verify` : 'A bank transfer is waiting for verification'), body: () => 'Confirm or reject it on the Donations page.', link: () => '/donations' },
   staff_low_stock: { category: 'inventory', title: (p) => `${p.count} item${p.count === 1 ? ' is' : 's are'} low on stock`, body: () => 'Open Inventory to restock.', link: () => '/inventory' },

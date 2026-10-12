@@ -4,6 +4,8 @@ import Layout from './components/Layout';
 import { Spinner } from './components/ui';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import Landing from './pages/Landing';
+import Logo from './components/Logo';
 import Dashboard from './pages/Dashboard';
 import DonorDashboard from './pages/DonorDashboard';
 import DonorHistory from './pages/DonorHistory';
@@ -11,6 +13,9 @@ import Children from './pages/Children';
 import ChildDetail from './pages/ChildDetail';
 import Inventory from './pages/Inventory';
 import Donations from './pages/Donations';
+import DonationDetail from './pages/DonationDetail';
+import Donors from './pages/Donors';
+import DonorProfile from './pages/DonorProfile';
 import Visitors from './pages/Visitors';
 import Meals from './pages/Meals';
 import Schedules from './pages/Schedules';
@@ -59,13 +64,21 @@ function AfterLogin() {
 
 export default function App() {
   const { user, loading } = useAuth();
-  if (loading) return <div className="min-h-screen bg-page"><Spinner label="Restoring your session" /></div>;
+  if (loading) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-page px-6">
+        <Logo variant="stacked" />
+        <Spinner label="Loading information..." />
+      </div>
+    );
+  }
 
   if (!user) {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/" element={<Landing />} />
         <Route path="*" element={<ToLogin />} />
       </Routes>
     );
@@ -86,8 +99,8 @@ export default function App() {
         <Route path="notifications" element={<Notifications />} />
         <Route path="notifications/settings" element={<NotificationSettings />} />
         <Route path="donations/history" element={<RequireRole roles={donor}><ProtectedArea area="Your donations"><DonorHistory /></ProtectedArea></RequireRole>} />
-        <Route path="adopt" element={<RequireRole roles={donor}><AdoptChild /></RequireRole>} />
-        <Route path="applications" element={<RequireRole roles={donor}><MyApplications /></RequireRole>} />
+        <Route path="adopt" element={<RequireRole roles={donor}><ProtectedArea area="Children available for adoption"><AdoptChild /></ProtectedArea></RequireRole>} />
+        <Route path="applications" element={<RequireRole roles={donor}><ProtectedArea area="Your applications"><MyApplications /></ProtectedArea></RequireRole>} />
         <Route path="applications/new" element={<RequireRole roles={donor}><StartApplication /></RequireRole>} />
         <Route path="applications/:id/edit" element={<RequireRole roles={donor}><ProtectedArea area="Your application"><AdoptionForm /></ProtectedArea></RequireRole>} />
         <Route path="applications/:id" element={<RequireRole roles={donor}><ProtectedArea area="Your application"><MyApplicationDetail /></ProtectedArea></RequireRole>} />
@@ -105,6 +118,10 @@ export default function App() {
         <Route path="children/:id" element={<RequireRole roles={ops}><RequireDuty duty="children"><ProtectedArea area="Child records"><ChildDetail /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="inventory" element={<RequireRole roles={ops}><RequireDuty duty="inventory"><Inventory /></RequireDuty></RequireRole>} />
         <Route path="donations" element={<RequireRole roles={ops}><RequireDuty duty="donations"><ProtectedArea area="Donor records"><Donations /></ProtectedArea></RequireDuty></RequireRole>} />
+        <Route path="donations/reports" element={<Navigate to="/donations?view=summary" replace />} />
+        <Route path="donations/:id" element={<RequireRole roles={ops}><RequireDuty duty="donations"><ProtectedArea area="Donor records"><DonationDetail /></ProtectedArea></RequireDuty></RequireRole>} />
+        <Route path="donors" element={<RequireRole roles={ops}><RequireDuty duty="donor_directory"><ProtectedArea area="Donor records"><Donors /></ProtectedArea></RequireDuty></RequireRole>} />
+        <Route path="donors/:id" element={<RequireRole roles={ops}><RequireDuty duty="donor_directory"><ProtectedArea area="Donor records"><DonorProfile /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="visitors" element={<RequireRole roles={ops}><RequireDuty duty="visitors"><ProtectedArea area="Visitor records"><Visitors /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="meals" element={<RequireRole roles={ops}><RequireDuty duty="meals"><Meals /></RequireDuty></RequireRole>} />
         <Route path="my-schedule" element={<RequireRole roles={ops}><MySchedule /></RequireRole>} />

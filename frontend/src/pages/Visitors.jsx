@@ -9,6 +9,7 @@ import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, Tabl
 import DonationForm from '../components/DonationForm';
 import Pagination, { usePageState } from '../components/Pagination';
 import { formatDateTime, formatMoney, isoDate } from '../lib/format';
+import { hasDuty } from '../lib/duties';
 
 const pad = (n) => String(n).padStart(2, '0');
 const nowLocal = () => { const d = new Date(); return `${isoDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -33,7 +34,7 @@ function validate(f, { requireOut = false } = {}) {
 }
 
 /** Link to the donation on the Donations page, filtered to its source. */
-const donationLink = (v) => `/donations?source=${v.donation_donor_type === 'walk_in' ? 'walk_in' : 'staff'}&donation=${v.donation_id}`;
+const donationLink = (v) => `/donations/${v.donation_id}`;
 
 /** Visit type cell: the linked donation (items or amount), or "Just visited". */
 function DonationSummary({ v }) {
@@ -62,7 +63,7 @@ function DonationSummary({ v }) {
   );
 }
 
-function VisitorForm({ initial, onClose, onSaved }) {
+function VisitorForm({ initial, onClose, onSaved, canDonate = true }) {
   const editing = Boolean(initial);
   const [form, setForm] = useState(editing
     ? { visitor_name: initial.visitor_name, contact_number: initial.contact_number || '', purpose: initial.purpose,
@@ -94,13 +95,13 @@ function VisitorForm({ initial, onClose, onSaved }) {
         ? await api(`/visitors/${initial.visitor_id}`, { method: 'PUT', body: { ...body, check_out_time: form.check_out_time || null, ...(form.reviewed && { needs_review: false }) } })
         : await api('/visitors', { method: 'POST', body });
       // A new visit marked "Donated" is saved first; the donation form opens next.
-      onSaved(res.data, { created: !editing, openDonation: !editing && form.donated });
+      onSaved(res.data, { created: !editing, openDonation: !editing && canDonate && form.donated });
     } catch (err) { setError(err); } finally { setSaving(false); }
   };
 
   return (
     <Modal open onClose={onClose} title={editing ? 'Edit visitor record' : 'Check in a visitor'}
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" form="visitor-form" loading={saving}>{editing ? 'Save changes' : form.donated ? 'Check in and record donation' : 'Check in'}</Button></>}>
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" form="visitor-form" loading={saving}>{editing ? 'Save changes' : canDonate && form.donated ? 'Check in and record donation' : 'Check in'}</Button></>}>
       <form id="visitor-form" onSubmit={submit} noValidate className="space-y-4">
         <ErrorNote error={error} />
         <Field label="Name" required error={errors.visitor_name}><input className={`input ${errors.visitor_name ? badInput : ''}`} maxLength={100} value={form.visitor_name} onChange={set('visitor_name')} /></Field>
@@ -130,6 +131,10 @@ function VisitorForm({ initial, onClose, onSaved }) {
               </div>
             )}
           </>
+        ) : !canDonate ? (
+          <p className="rounded-lg border border-slate-200 px-4 py-3 text-xs text-slate-600">
+            Recording a donation needs the Donations duty. Check the visitor in here, and ask an Admin or a staff member with that duty to record the donation.
+          </p>
         ) : (
           <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 px-4 py-3">
             <div>
@@ -189,13 +194,14 @@ const fmt12 = (t) => { if (!t) return ''; const [h, m] = t.split(':').map(Number
 function DeleteVisitModal({ visitor, onClose, onDone }) {
   const donated = visitor.visit_type === 'donation';
   const [choice, setChoice] = useState('');
+  const [reason, setReason] = useState('Entered by mistake');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     if (donated && !choice) { setError(new Error('Choose what happens to the donation.')); return; }
     setBusy(true); setError(null);
     try {
-      const res = await api(`/visitors/${visitor.visitor_id}${donated ? `?donation=${choice}` : ''}`, { method: 'DELETE' });
+      const res = await api(`/visitors/${visitor.visitor_id}${donated ? `?donation=${choice}${choice === 'void' ? `&reason=${encodeURIComponent(reason)}` : ''}` : ''}`, { method: 'DELETE' });
       onDone(res.message);
     } catch (err) { setError(err); } finally { setBusy(false); }
   };
@@ -213,9 +219,17 @@ function DeleteVisitModal({ visitor, onClose, onDone }) {
               <span><span className="font-medium text-navy-900">Keep the donation</span> on the Donations page (it is no longer linked to a visit).</span>
             </label>
             <label className="flex items-start gap-2">
-              <input type="radio" name="donation-choice" className="mt-0.5 accent-brand" checked={choice === 'remove'} onChange={() => setChoice('remove')} />
-              <span><span className="font-medium text-navy-900">Remove the donation too.</span> Any items it added are taken back out of Inventory.</span>
+              <input type="radio" name="donation-choice" className="mt-0.5 accent-brand" checked={choice === 'void'} onChange={() => setChoice('void')} />
+              <span><span className="font-medium text-navy-900">Void the donation.</span> It stays on the Donations page as Voided (never deleted), is left out of totals, and any items it added are taken back out of Inventory.</span>
             </label>
+            {choice === 'void' && (
+              <label className="block text-sm">
+                <span className="font-medium text-navy-900">Void reason</span>
+                <select className="input mt-1" value={reason} onChange={(e) => setReason(e.target.value)}>
+                  {['Entered by mistake', 'Duplicate entry', 'Payment not received'].map((r) => <option key={r}>{r}</option>)}
+                </select>
+              </label>
+            )}
             <p className="text-xs text-amber-900">Your choice is recorded in the audit log.</p>
           </fieldset>
         )}
@@ -228,6 +242,8 @@ export default function Visitors() {
   const { user } = useAuth();
   const { query, toast } = useApp();
   const isAdmin = user.role === 'Admin';
+  // Recording a walk-in donation uses the Donations module, so it needs the Donations duty (server-enforced).
+  const canDonate = hasDuty(user, 'donations');
   const [f, setF] = useState(DEFAULTS);
   const set = (patch) => setF((x) => ({ ...x, ...patch }));
   // Meal periods come from the server config (backend/src/config/visitorFilters.js).
@@ -377,7 +393,7 @@ export default function Visitors() {
                     <td className="td whitespace-nowrap">{formatDateTime(v.check_in_time)}</td>
                     <td className="td whitespace-nowrap">{v.check_out_time ? formatDateTime(v.check_out_time) : <Badge tone="green">on site</Badge>}</td>
                     <td className="td whitespace-nowrap text-right">
-                      {v.visit_type !== 'donation' && <Button size="sm" variant="secondary" onClick={() => setDonatingFor(v)}><HandCoins className="h-3.5 w-3.5" /> Record donation</Button>}{' '}
+                      {v.visit_type !== 'donation' && canDonate && <Button size="sm" variant="secondary" onClick={() => setDonatingFor(v)}><HandCoins className="h-3.5 w-3.5" /> Record donation</Button>}{' '}
                       {!v.check_out_time && <Button size="sm" onClick={() => setCheckingOut(v)}><LogOut className="h-3.5 w-3.5" /> Time out</Button>}{' '}
                       <Button size="sm" variant="ghost" aria-label="Edit visit" onClick={() => setForm(v)}><Pencil className="h-3.5 w-3.5" /></Button>
                       {isAdmin && <Button size="sm" variant="ghost" aria-label="Delete visit" onClick={() => setDeleting(v)}><Trash2 className="h-3.5 w-3.5 text-red-600" /></Button>}
@@ -390,7 +406,7 @@ export default function Visitors() {
         <Pagination pagination={data?.pagination} onPageChange={setPage} onLimitChange={(l) => setLimit(l)} label="visitors" />
       </Card>
 
-      {form && <VisitorForm initial={form === 'new' ? null : form} onClose={() => setForm(null)}
+      {form && <VisitorForm initial={form === 'new' ? null : form} canDonate={canDonate} onClose={() => setForm(null)}
         onSaved={async (v, { created, openDonation }) => {
           setForm(null); await reload();
           toast(created ? `${v.visitor_name} checked in.` : 'Changes saved.');

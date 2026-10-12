@@ -14,9 +14,10 @@ exports.summary = async (req, res) => {
   const donations = await Donation.summary();
 
   const [donationTrend] = await pool.query(
-    `SELECT DATE_FORMAT(created_at, '%Y-%m') AS month, SUM(amount) AS total, COUNT(*) AS count
-       FROM tbl_donations
-      WHERE status = 'Received' AND created_at >= DATE_FORMAT(CURDATE() - INTERVAL 5 MONTH, '%Y-%m-01')
+    // Verified or accepted donations only (never Voided); in-kind estimates are not added to the cash total.
+    `SELECT DATE_FORMAT(d.created_at, '%Y-%m') AS month, SUM(CASE WHEN d.payment_method <> 'In-kind' THEN d.amount ELSE 0 END) AS total, COUNT(*) AS count
+       FROM tbl_donations d
+      WHERE ${Donation.COUNTED_SQL} AND d.created_at >= DATE_FORMAT(CURDATE() - INTERVAL 5 MONTH, '%Y-%m-01')
       GROUP BY month ORDER BY month`);
 
   const [ageGroups] = await pool.query(

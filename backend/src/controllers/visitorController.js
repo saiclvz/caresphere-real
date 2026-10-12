@@ -117,30 +117,27 @@ exports.checkOut = async (req, res) => {
 };
 
 /**
- * DELETE /api/visitors/:id?donation=keep|remove (Admin)
- * A visit with a donation needs an explicit choice: keep the donation (it stays on the
- * Donations page, unlinked) or remove it too (in-kind stock is taken back out).
+ * DELETE /api/visitors/:id?donation=keep|void&reason=&note= (Admin)
+ * A visit with a donation needs an explicit choice: keep the donation (it stays on the Donations page,
+ * unlinked) or void it (with a reason; in-kind stock is reversed). Donations are never deleted.
  */
 exports.remove = async (req, res) => {
   const visitor = await Visitor.findById(req.params.id);
   if (!visitor) throw new HttpError(404, 'Visitor record not found.');
-  const choice = req.query.donation ? String(req.query.donation) : undefined;
-  if (visitor.donation_id && !['keep', 'remove'].includes(choice)) {
-    throw new HttpError(409, 'This visit has a linked donation. Choose whether to keep or remove the donation.', { needs_donation_choice: true });
+  let choice = req.query.donation ? String(req.query.donation) : undefined;
+  if (choice === 'remove') choice = 'void'; // older pages
+  if (visitor.donation_id && !['keep', 'void'].includes(choice)) {
+    throw new HttpError(409, 'This visit has a linked donation. Choose whether to keep or void the donation.', { needs_donation_choice: true });
   }
-  const result = await deleteVisit(visitor.visitor_id, choice, req.user.user_id);
+  const voidBody = { reason: req.query.reason ? String(req.query.reason) : 'Entered by mistake', note: req.query.note ? String(req.query.note).slice(0, 500) : '' };
+  const result = await deleteVisit(req, visitor.visitor_id, choice, voidBody);
   if (result.donationId) {
-    await logActivity(req, `DELETE_VISITOR (donation ${choice === 'remove' ? 'removed' : 'kept'})`, `Visitor #${visitor.visitor_id}`);
-    if (choice === 'remove') {
-      await logActivity(req, `DELETE_DONATION (with visit #${visitor.visitor_id})`, `Donation #${result.donationId}`);
-      for (const it of result.reversed) await logActivity(req, `INVENTORY_DONATION_REVERSAL (-${it.quantity}, donation #${result.donationId})`, `Inventory #${it.item_id}`);
-    } else {
-      await logActivity(req, `UNLINK_DONATION (visit #${visitor.visitor_id} deleted, donation kept)`, `Donation #${result.donationId}`);
-    }
+    await logActivity(req, `DELETE_VISITOR (donation ${choice === 'void' ? 'voided' : 'kept'})`, `Visitor #${visitor.visitor_id}`);
+    await logActivity(req, `UNLINK_DONATION (visit #${visitor.visitor_id} deleted${choice === 'void' ? ', donation voided' : ', donation kept'})`, `Donation #${result.donationId}`);
   } else {
     await logActivity(req, 'DELETE_VISITOR', `Visitor #${visitor.visitor_id}`);
   }
   res.json({ success: true, message: result.donationId
-    ? (choice === 'remove' ? 'Visitor record and its donation deleted.' : 'Visitor record deleted. The donation was kept on the Donations page.')
+    ? (choice === 'void' ? 'Visitor record deleted. The donation was voided and stays on the Donations page.' : 'Visitor record deleted. The donation was kept on the Donations page.')
     : 'Visitor record deleted.' });
 };

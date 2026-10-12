@@ -23,10 +23,12 @@
     "express": "^4.21.1",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "jsqr": "^1.4.0",
     "mysql2": "^3.11.3",
     "pdf-lib": "^1.17.1",
     "pdfkit": "^0.15.0",
     "qrcode": "^1.5.4",
+    "sharp": "^0.33.5",
     "tesseract.js": "^5.1.1"
   }
 }

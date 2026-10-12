@@ -6,7 +6,7 @@ const { requireFields, isEmail, oneOf, toBool } = require('../utils/validate');
 const { logActivity, logActivityWith } = require('../utils/audit');
 const { withTransaction } = require('../config/db');
 const Notify = require('../services/notifications');
-const { DUTIES, DUTY_KEYS } = require('../config/staffDuties');
+const { DUTIES, DUTY_KEYS, DEFAULT_DUTIES } = require('../config/staffDuties');
 
 /** A list of duty keys from the request, checked against config/staffDuties.js. */
 function cleanDuties(raw) {
@@ -79,7 +79,7 @@ exports.create = async (req, res) => {
     await logActivityWith(conn, req, `CREATE_USER (${role})`, `User #${newId}`);
     // A new Staff account gets the duties chosen in the form (every duty if none were sent).
     if (role === 'Staff') {
-      const duties = req.body.duties === undefined ? DUTY_KEYS : cleanDuties(req.body.duties);
+      const duties = req.body.duties === undefined ? DEFAULT_DUTIES : cleanDuties(req.body.duties);
       await User.setDuties(conn, newId, duties, req.user.user_id);
       await logActivityWith(conn, req, `UPDATE_DUTIES (none -> ${duties.join(', ') || 'none'})`, `User #${newId}`);
     }
@@ -138,7 +138,7 @@ exports.update = async (req, res) => {
     // Becoming Staff starts with every duty (Admin can narrow them); leaving Staff clears them.
     if (fields.role_id !== undefined) {
       const newRole = cleanRole(req.body.role);
-      if (newRole === 'Staff' && user.role !== 'Staff') await withTransaction((conn) => User.setDuties(conn, id, DUTY_KEYS, req.user.user_id));
+      if (newRole === 'Staff' && user.role !== 'Staff') await withTransaction((conn) => User.setDuties(conn, id, DEFAULT_DUTIES, req.user.user_id));
       if (newRole !== 'Staff' && user.role === 'Staff') await withTransaction((conn) => User.setDuties(conn, id, [], req.user.user_id));
     }
     if (leavingAdmin) {

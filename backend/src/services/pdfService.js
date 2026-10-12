@@ -1,19 +1,39 @@
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 
-const NAVY = '#0F172A';
-const BLUE = '#2563EB';
+const NAVY = '#1B2A6B'; // CareSphere brand navy (logo)
+const BLUE = '#1D5FD6'; // CareSphere brand blue (logo)
 const MUTED = '#64748B';
 
 // PDFKit's built-in Helvetica has no peso glyph, so amounts print as "PHP".
 const money = (n) => `PHP ${Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** The CareSphere mark (same paths as frontend Logo.jsx), dark-theme colours, drawn at x,y with size s. */
+function drawMark(doc, x, y, s) {
+  doc.save().translate(x, y).scale(s / 100);
+  doc.path('M90.8 33.5 A44 44 0 1 1 70.6 11.1').lineWidth(5).lineCap('round').stroke('#FFFFFF');
+  doc.path('M27 42 L50 22 L73 42').lineWidth(4.5).lineJoin('round').stroke('#FFFFFF');
+  doc.circle(37.5, 47, 4.2).fill('#BFDBFE');
+  doc.path('M30 63 C30 55 33 52 37.5 52 C41 52 43 54 44 57 L44 63Z').fill('#BFDBFE');
+  doc.circle(62.5, 47, 4.2).fill('#BFDBFE');
+  doc.path('M70 63 C70 55 67 52 62.5 52 C59 52 57 54 56 57 L56 63Z').fill('#BFDBFE');
+  doc.circle(50, 41, 5.2).fill('#60A5FA');
+  doc.path('M41 63 C41 53 45 49 50 49 C55 49 59 53 59 63Z').fill('#60A5FA');
+  doc.path('M18 66 Q22 84 50 84 Q78 84 82 66 Q66 76 50 76 Q34 76 18 66Z').fill('#FFFFFF');
+  doc.path('M80 30 C73 25 70 21 72.5 17.5 C74.5 14.5 78.5 15 80 18 C81.5 15 85.5 14.5 87.5 17.5 C90 21 87 25 80 30Z').fill('#60A5FA');
+  doc.restore();
+}
+
+/** Report header: navy band with the full CareSphere logo, the home's name and contact line, then the title. */
 function header(doc, settings, title) {
-  doc.rect(0, 0, doc.page.width, 90).fill(NAVY);
-  doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(18).text(settings.org_name || 'CareSphere', 50, 28);
-  doc.font('Helvetica').fontSize(10).fillColor('#CBD5E1')
-    .text([settings.org_address, settings.org_contact].filter(Boolean).join('  |  ') || 'Child Registry and Welfare Home Operations', 50, 54);
-  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(16).text(title, 50, 120);
+  doc.rect(0, 0, doc.page.width, 96).fill(NAVY);
+  drawMark(doc, 46, 16, 64);
+  doc.font('Times-Bold').fontSize(22).fillColor('#FFFFFF').text('Care', 120, 24, { continued: true }).fillColor('#60A5FA').text('Sphere');
+  doc.font('Helvetica').fontSize(8.5).fillColor('#CBD5E1').text('Every child deserves a loving home.', 121, 50);
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#FFFFFF').text(settings.org_name || 'CareSphere', 300, 26, { width: doc.page.width - 350, align: 'right' });
+  doc.font('Helvetica').fontSize(8.5).fillColor('#CBD5E1')
+    .text([settings.org_address, settings.org_contact].filter(Boolean).join('  |  ') || 'Child Registry and Welfare Home Operations', 300, 42, { width: doc.page.width - 350, align: 'right' });
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(16).text(title, 50, 124);
   doc.moveDown(0.5);
 }
 

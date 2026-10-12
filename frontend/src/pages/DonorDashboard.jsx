@@ -3,7 +3,7 @@ import { Baby, HandHeart, PackageOpen, Receipt } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Card, EmptyState, ErrorNote, NoMatches, PageHeader, Spinner, StatTile } from '../components/ui';
+import { Badge, Card, EmptyState, ErrorNote, NoMatches, WelcomeBanner, Spinner, StatTile } from '../components/ui';
 import { formatDate, formatMoney, matches } from '../lib/format';
 
 function StockBar({ quantity, min }) {
@@ -29,9 +29,9 @@ export default function DonorDashboard() {
 
   return (
     <>
-      <PageHeader title={`Thank you, ${user.full_name.split(' ')[0]}`}
+      <WelcomeBanner title={`Thank you, ${user.full_name.split(' ')[0]}`}
         description="These are the supplies and needs the home is short on right now. The list updates as staff record stock."
-        actions={<Link to="/donations/history" className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark"><Receipt className="h-4 w-4" /> My receipts</Link>} />
+        actions={<Link to="/donations/history" className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-navy-900 transition-colors hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-navy-900"><Receipt className="h-4 w-4" aria-hidden /> My receipts</Link>} />
 
       {s && (
         <div className="grid gap-4 sm:grid-cols-3">

@@ -6,6 +6,7 @@ import { problem as passwordProblem } from '../lib/passwordPolicy';
 import useApi from '../hooks/useApi';
 import PaymentSettings from '../components/PaymentSettings';
 import ScheduleAreasSettings from '../components/schedules/ScheduleAreasSettings';
+import IdTypesSettings from '../components/IdTypesSettings';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
 import { Button, Card, ErrorNote, Field, PageHeader, Spinner } from '../components/ui';
@@ -91,6 +92,9 @@ export default function SettingsPage() {
                   <input className="input" type="number" min="12" max="240" value={form.access_log_retention_months || ''} onChange={set('access_log_retention_months')} />
                 </Field>
               </div>
+              <Field label="ID scan retention (days)" hint="What the ID scan read is cleared this many days after an application is closed, declined or withdrawn. The ID photos and the audit log are kept. 1 to 3650.">
+                <input className="input w-32" type="number" min="1" max="3650" value={form.id_scan_retention_days || ''} onChange={set('id_scan_retention_days')} />
+              </Field>
               <DownloadTypes value={form.staff_download_doc_types || ''} onChange={(v) => setForm((f) => ({ ...f, staff_download_doc_types: v }))} />
             </fieldset>
             <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
@@ -126,6 +130,7 @@ export default function SettingsPage() {
       </div>
       <div className="mt-6"><PaymentSettings /></div>
       <div className="mt-6"><ScheduleAreasSettings /></div>
+      {user?.role === 'Admin' && <div className="mt-6"><IdTypesSettings /></div>}
     </>
   );
 }

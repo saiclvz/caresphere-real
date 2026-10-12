@@ -11,8 +11,10 @@
 -- Safe to run more than once. Rollback: database/rollback/014_transition_unlock_rollback.sql
 USE caresphere_db;
 
-ALTER TABLE tbl_unlock_challenges MODIFY COLUMN record_type ENUM('adoption_application', 'child', 'transition_review') NOT NULL;
-ALTER TABLE tbl_unlock_sessions   MODIFY COLUMN record_type ENUM('adoption_application', 'child', 'transition_review') NOT NULL;
+-- 'health' is listed too: 015 renames 'child' to 'health', and this file runs again on every migrate, so
+-- leaving 'health' out would fail (or, in non-strict mode, blank existing health unlock rows).
+ALTER TABLE tbl_unlock_challenges MODIFY COLUMN record_type ENUM('adoption_application', 'child', 'transition_review', 'health') NOT NULL;
+ALTER TABLE tbl_unlock_sessions   MODIFY COLUMN record_type ENUM('adoption_application', 'child', 'transition_review', 'health') NOT NULL;
 
 ALTER TABLE tbl_children ADD COLUMN IF NOT EXISTS assigned_staff_id INT NULL;
 ALTER TABLE tbl_children

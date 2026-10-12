@@ -14,6 +14,7 @@ const protectedRecords = require('./src/services/protectedRecords');
 const healthAccess = require('./src/services/healthAccessService');
 const paymentService = require('./src/services/paymentService');
 const { syncFlags } = require('./src/controllers/childController');
+const idScan = require('./src/services/idScan');
 
 const app = express();
 app.disable('x-powered-by');
@@ -76,13 +77,17 @@ async function start() {
     process.exit(1);
   }
 
+  // Load the ID type rules once so form validation uses the Admin-edited number formats from the start.
+  require('./src/services/idTypes').all().catch(() => {});
+
   // Housekeeping: drop expired QR sessions and JWT denylist entries hourly.
-  const cleanup = () => Promise.all([purgeExpired(), healthAccess.purgeExpired(), mfa.purgeExpired(), protectedRecords.cleanupGrants(), paymentService.expireStale(),
+  const cleanup = () => Promise.all([purgeExpired(), healthAccess.purgeExpired(), mfa.purgeExpired(), protectedRecords.cleanupGrants(), paymentService.expireStale(), idScan.purgeOld(),
     pool.query('DELETE FROM tbl_session_activity WHERE last_seen < NOW() - INTERVAL 1 DAY')]).catch((e) => console.error('[cleanup]', e.message));
   setInterval(cleanup, 60 * 60 * 1000).unref();
 
   // Flag children who have turned 18 for Transition Review (at start-up and every 6 hours).
-  const flag = () => syncFlags(true).catch((e) => console.error('[transition]', e.message));
+  // Then the Transition Review reminders (assessment overdue, tasks due, transition date, aftercare follow-ups).
+  const flag = () => syncFlags(true).then(() => require('./src/services/transitionWorkflow').sweepReminders()).catch((e) => console.error('[transition]', e.message));
   flag();
   setInterval(flag, 6 * 60 * 60 * 1000).unref();
 
