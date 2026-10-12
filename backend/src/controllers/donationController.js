@@ -288,8 +288,8 @@ exports.getOne = async (req, res) => {
     contact_masked: sees && d.donor_type === 'walk_in' && d.walk_in_contact && !d.is_anonymous ? C.maskContact(d.walk_in_contact) : null,
     recorded_name: isAdmin && d.is_anonymous ? (d.walk_in_name || d.donor_name) : undefined,
   };
-  const audit = isAdmin ? await q(`SELECT l.log_id, l.action_performed, l.created_at, l.user_role, u.full_name AS user_name FROM tbl_activity_logs l LEFT JOIN tbl_users u ON u.user_id = l.user_id
-      WHERE l.target_entity = ? ORDER BY l.created_at DESC LIMIT 200`, [`Donation #${id}`]) : null;
+  const audit = isAdmin ? await q(`SELECT l.log_id, l.action_performed, l.timestamp AS created_at, l.user_role, u.full_name AS user_name FROM tbl_activity_logs l LEFT JOIN tbl_users u ON u.user_id = l.user_id
+      WHERE l.target_entity = ? ORDER BY l.log_id DESC LIMIT 200`, [`Donation #${id}`]) : null;
   await logActivity(req, 'VIEW_DONATION', `Donation #${id}`);
   res.json({ success: true, data: {
     ...rowFor(d, req.user), donor, stepper: stepper(d), allowed: L.TRANSITIONS[d.status] || [], allocation_problems: await LC.allocationProblems(pool, d),

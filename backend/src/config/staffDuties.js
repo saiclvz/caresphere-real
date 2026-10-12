@@ -5,8 +5,9 @@
  * staff member, plus the purpose step, QR token and 3-minute access.
  */
 const DUTIES = {
-  children: { label: 'Child records', hint: 'Children list, child profiles, registering children' },
-  health: { label: 'Health records', hint: 'Child health records and case files (as case worker)' },
+  children: { label: 'Child records', hint: 'Children directory and Care cards; core records when assigned as case worker' },
+  admission: { label: 'Admission', hint: 'Start a New Admission and complete it for Admin approval (no lasting access unless assigned)' },
+  health: { label: 'Health records', hint: 'Child health records (as the assigned case worker, through the unlock step)' },
   adoption: { label: 'Adoption', hint: 'Adoption applications, CDCLAA and protected adoption records' },
   transition: { label: 'Transition Review', hint: 'Transition reviews for youth turning 18' },
   donations: { label: 'Donations', hint: 'Donations, bank-transfer verification and receipts' },
@@ -20,6 +21,6 @@ const DUTY_KEYS = Object.keys(DUTIES);
 const DEFAULT_DUTIES = DUTY_KEYS.filter((k) => k !== 'donor_directory');
 
 /** Which duty each assignable record type (and unlock record type) needs. */
-const DUTY_FOR_RECORD = { child: 'health', health: 'health', adoption_application: 'adoption', transition_review: 'transition' };
+const DUTY_FOR_RECORD = { child: 'children', health: 'health', adoption_application: 'adoption', transition_review: 'transition' };
 
 module.exports = { DUTIES, DUTY_KEYS, DEFAULT_DUTIES, DUTY_FOR_RECORD };

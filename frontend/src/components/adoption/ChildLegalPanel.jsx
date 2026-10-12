@@ -80,7 +80,7 @@ function Cdclaa({ childId, onChanged }) {
     if (Object.keys(e).length) return;
     setBusy(true);
     try {
-      await api(`/children/${childId}/cdclaa`, { method: 'PUT', body: { number: form.number.trim(), date: form.date, file: file ? await pickFile(file) : undefined } });
+      await api(`/children/${childId}/cdclaa`, { method: 'PUT', headers: unlockHeaders('health', childId), body: { number: form.number.trim(), date: form.date, file: file ? await pickFile(file) : undefined } });
       toast('CDCLAA saved. An administrator must verify it before the child can be Available for adoption.');
       setForm(null); setFile(null); reload(); onChanged?.();
     } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }

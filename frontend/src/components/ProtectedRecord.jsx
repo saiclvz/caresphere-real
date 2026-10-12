@@ -14,10 +14,9 @@ const HEALTH = [
   ['blood_type', 'Blood type', false], ['allergies', 'Allergies', false], ['vaccinations', 'Immunizations', true],
   ['prescriptions', 'Prescriptions', true], ['doctor_notes', "Doctor's notes", true],
 ];
-const CASE = [['background_care_info', 'Background and care information'], ['guardian_family_info', 'Guardian and family information']];
 
 /**
- * Health record + confidential case files.
+ * Health record (level 3). Case files are part of the core record now (Case files tab).
  * Admin: re-enter the password (unchanged). Staff: the shared unlock flow (purpose, confidentiality
  * tick, QR to the phone, single-use Token ID). One child unlock opens this section and the child's
  * adoption legal records together, for the unlock length set by Admin. The server enforces the
@@ -87,11 +86,10 @@ export default function ProtectedRecord({ child }) {
 
   const save = async (kind, body) => {
     try {
-      const path = kind === 'health' ? 'health' : 'case-files';
-      const res = await api(`/children/${child.child_id}/${path}`, { method: 'PUT', body, headers: headers() });
-      setData((d) => (kind === 'health' ? { ...d, health: res.data } : { ...d, case_files: res.data }));
+      const res = await api(`/children/${child.child_id}/health`, { method: 'PUT', body, headers: headers() });
+      setData((d) => ({ ...d, health: res.data }));
       setEditing(null);
-      toast(kind === 'health' ? 'Health record saved.' : 'Case files saved.');
+      toast('Health record saved.');
     } catch (err) {
       if (err.status === 401 || err.status === 403) { lock(); throw new Error(`${err.message}`); }
       throw err;
@@ -103,7 +101,7 @@ export default function ProtectedRecord({ child }) {
       <Card className="p-6">
         <div className="flex flex-col items-center text-center">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-navy-900"><Lock className="h-5 w-5 text-white" /></div>
-          <p className="mt-3 font-semibold text-navy-900">Health record and case files are locked</p>
+          <p className="mt-3 font-semibold text-navy-900">Health record is locked</p>
           <p className="mt-1 max-w-sm text-sm text-slate-500">
             {isAdmin ? 'Administrators have full access. Opening them is recorded.'
               : 'State your purpose, scan the QR with your phone, and type the Token ID it shows. This also opens the child\'s adoption legal records.'}
@@ -124,7 +122,6 @@ export default function ProtectedRecord({ child }) {
   }
 
   const h = data.health || {};
-  const c = data.case_files || {};
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center gap-4 bg-navy-900 px-5 py-4 text-white">
@@ -137,7 +134,7 @@ export default function ProtectedRecord({ child }) {
         <Button variant="secondary" size="sm" onClick={() => lock('Record locked.')}><Lock className="h-3.5 w-3.5" /> Lock now</Button>
       </div>
 
-      <section className="border-b border-slate-100 p-5">
+      <section className="p-5">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="font-semibold text-navy-900">Health history</h3>
           {editing !== 'health' && <Button size="sm" variant="secondary" onClick={() => setEditing('health')}><Pencil className="h-3.5 w-3.5" /> Edit</Button>}
@@ -155,22 +152,6 @@ export default function ProtectedRecord({ child }) {
           )}
       </section>
 
-      <section className="p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold text-navy-900">Case files</h3>
-          {editing !== 'case' && <Button size="sm" variant="secondary" onClick={() => setEditing('case')}><Pencil className="h-3.5 w-3.5" /> Edit</Button>}
-        </div>
-        {editing === 'case'
-          ? <EditForm fields={CASE.map(([k, l]) => ({ k, l, long: true }))} initial={c} onCancel={() => setEditing(null)} onSave={(b) => save('case', b)} />
-          : (
-            <dl className="space-y-4">
-              {CASE.map(([k, label]) => (
-                <div key={k}><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-                  <dd className="mt-0.5 whitespace-pre-wrap text-sm text-navy-900">{c[k] || <span className="text-slate-400">Not recorded</span>}</dd></div>
-              ))}
-            </dl>
-          )}
-      </section>
     </Card>
   );
 }

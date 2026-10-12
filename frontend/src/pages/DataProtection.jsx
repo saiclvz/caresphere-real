@@ -1,11 +1,12 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table } from '../components/ui';
 import { formatDateTime } from '../lib/format';
-import { ShieldCheck } from 'lucide-react';
+import { MessageSquareWarning, ShieldCheck } from 'lucide-react';
 
 const DSR_TONE = { Open: 'amber', 'In progress': 'blue', Resolved: 'green', Rejected: 'slate' };
 const SEV_TONE = { Low: 'slate', Medium: 'blue', High: 'amber', Serious: 'red' };
@@ -236,15 +237,74 @@ function ArchivedDocumentsTab() {
   );
 }
 
+const TOPICS = ['Someone saw a record they should not have', 'A record was shared or printed', 'Wrong access or a missing lock', 'Other'];
+
+/** Staff (and Admin): "Report a privacy concern". Admin and the Data Protection Officer are told (no details in the notification). */
+function ReportConcern({ onClose }) {
+  const { toast } = useApp();
+  const [f, setF] = useState({ topic: '', details: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const errs = error?.details?.errors || {};
+  const send = async () => {
+    setBusy(true); setError(null);
+    try { const res = await api('/privacy-concerns', { method: 'POST', body: f }); toast(res.message); onClose(); }
+    catch (err) { setError(err); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open onClose={onClose} title="Report a privacy concern" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={send}>Send</Button></>}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-600">Tell the Admin and the Data Protection Officer about something that may have exposed a child's or another person's data. Use case numbers, not names.</p>
+        <ErrorNote error={error && !Object.keys(errs).length ? error : null} />
+        <Field label="What is it about?" required error={errs.topic}>
+          <select className="input" value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })}><option value="">Choose…</option>{TOPICS.map((t) => <option key={t}>{t}</option>)}</select>
+        </Field>
+        <Field label="What happened?" required error={errs.details}><textarea className="input" rows={4} maxLength={2000} value={f.details} onChange={(e) => setF({ ...f, details: e.target.value })} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+/** Admin: privacy concerns reported by staff. */
+function ConcernsTab() {
+  const { toast } = useApp();
+  const { data, loading, error, reload, setData } = useApi('/privacy-concerns');
+  const rows = data?.data || [];
+  const review = async (c) => {
+    try { setData(await api(`/privacy-concerns/${c.concern_id}/review`, { method: 'POST' })); toast('Marked as reviewed.'); }
+    catch (err) { toast(err.message, 'error'); }
+  };
+  return (
+    <Card>
+      {loading && !data ? <Spinner /> : error ? <div className="p-4"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? <EmptyState icon={ShieldCheck} title="No privacy concerns" /> : (
+        <Table label="Privacy concerns">
+          <thead className="bg-slate-50"><tr><th className="th">Reported</th><th className="th">By</th><th className="th">About</th><th className="th">Details</th><th className="th">Status</th><th className="th"><span className="sr-only">Actions</span></th></tr></thead>
+          <tbody className="divide-y divide-slate-100">{rows.map((c) => (
+            <tr key={c.concern_id}>
+              <td className="td whitespace-nowrap text-xs">{formatDateTime(c.created_at)}</td><td className="td">{c.reported_by_name}</td><td className="td text-sm">{c.topic}</td>
+              <td className="td max-w-md whitespace-pre-wrap text-sm">{c.details}</td>
+              <td className="td"><Badge tone={c.status === 'Open' ? 'amber' : 'green'}>{c.status}</Badge>{c.reviewed_by_name && <p className="text-xs text-slate-500">{c.reviewed_by_name}</p>}</td>
+              <td className="td text-right">{c.status === 'Open' && <Button size="sm" variant="secondary" onClick={() => review(c)}>Mark reviewed<span className="sr-only"> concern from {c.reported_by_name}</span></Button>}</td>
+            </tr>))}</tbody>
+        </Table>
+      )}
+    </Card>
+  );
+}
+
 /** Data protection (RA 10173): requests (Admin, Staff), incidents and security events (Admin). */
 export default function DataProtection() {
   const { user } = useAuth();
   const isAdmin = user.role === 'Admin';
-  const tabs = [['requests', 'Data subject requests'], ...(isAdmin ? [['incidents', 'Incident log'], ['events', 'Security events'], ['archived', 'Archived documents']] : [])];
-  const [tab, setTab] = useState('requests');
+  const tabs = [['requests', 'Data subject requests'], ...(isAdmin ? [['concerns', 'Privacy concerns'], ['incidents', 'Incident log'], ['events', 'Security events'], ['archived', 'Archived documents']] : [])];
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState(() => (tabs.some(([k]) => k === params.get('tab')) ? params.get('tab') : 'requests'));
+  const [reporting, setReporting] = useState(false);
   return (
     <>
-      <PageHeader title="Data protection" description="Requests from people to see or correct their data, security incidents, and security events. The Data Protection Officer contact is set in Settings." />
+      <PageHeader title="Data protection" description="Requests from people to see or correct their data, privacy concerns, security incidents, and security events. The Data Protection Officer contact is set in Settings."
+        actions={<Button variant="secondary" onClick={() => setReporting(true)}><MessageSquareWarning className="h-4 w-4" aria-hidden /> Report a privacy concern</Button>} />
+      {reporting && <ReportConcern onClose={() => setReporting(false)} />}
       <div className="mb-4 inline-flex rounded-lg bg-white p-1 shadow-card" role="tablist">
         {tabs.map(([k, l]) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
@@ -252,6 +312,7 @@ export default function DataProtection() {
         ))}
       </div>
       {tab === 'requests' && <RequestsTab />}
+      {tab === 'concerns' && isAdmin && <ConcernsTab />}
       {tab === 'incidents' && isAdmin && <IncidentsTab />}
       {tab === 'events' && isAdmin && <SecurityEventsTab />}
       {tab === 'archived' && isAdmin && <ArchivedDocumentsTab />}

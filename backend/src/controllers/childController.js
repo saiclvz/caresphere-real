@@ -8,8 +8,9 @@ const { saveUpload, readUpload, deleteUpload, mimeFromKey, MB } = require('../ut
 const {
   requireFields, oneOf, requireDate, trimOrNull, toBool, localToday, ageOn, requireText,
 } = require('../utils/validate');
-const { logActivity } = require('../utils/audit');
+const { logActivity, logActivityWith } = require('../utils/audit');
 const { readPagination } = require('../utils/pagination');
+const Policy = require('../services/childAccess');
 
 const GENDERS = ['Male', 'Female'];
 const STATUSES = ['Active', 'Discharged', 'Adopted'];
@@ -60,30 +61,56 @@ exports.rules = async (req, res) => {
     health_access_seconds: env.healthAccessTtlSeconds, typed_token_seconds: env.qrTtlSeconds } });
 };
 
-/** GET /api/children?status=&q=&flagged=1  (youngest first) */
+/**
+ * GET /api/children?status=&q=&flagged=1&assigned=&sort=&page=&limit=
+ * Directory list through the child record policy: Staff get directory fields (case number, first name and last
+ * initial, status, case worker, dates) and an access chip per row; Admin gets the full rows. Search by case
+ * number or name (Staff: case number and first name). Never sorted by age unless Admin picks it.
+ */
 exports.list = async (req, res) => {
   await syncFlags();
+  const isAdmin = req.user.role === 'Admin';
   const status = req.query.status ? oneOf(req.query.status, STATUSES, 'status') : undefined;
   const paging = readPagination(req.query);
-  const sort = req.query.sort ? oneOf(req.query.sort, ['recent', 'registered', 'case', 'name', 'age'], 'sort') : 'recent';
-  const result = await Child.list({ status, search: req.query.q, flagged: toBool(req.query.flagged), paging, sort });
-  if (paging) return res.json({ success: true, data: await areaView(req, result.rows), pagination: result.pagination });
-  res.json({ success: true, data: await areaView(req, result) });
+  const sorts = isAdmin ? ['recent', 'registered', 'case', 'name', 'age'] : ['recent', 'registered', 'case', 'name'];
+  let sort = req.query.sort ? oneOf(req.query.sort, sorts, 'sort') : 'recent';
+  if (!isAdmin && sort === 'name') sort = 'first_name';
+  let assigned = req.query.assigned ? String(req.query.assigned) : undefined;
+  if (assigned && !['me', 'unassigned', 'attention'].includes(assigned) && !(isAdmin && /^\d+$/.test(assigned))) throw new HttpError(400, 'Choose who the records are assigned to.');
+  if (!isAdmin && ['unassigned', 'attention'].includes(assigned)) assigned = undefined;
+  const monitoring = await Policy.monitoringOf(req);
+  const result = await Child.list({ status, search: req.query.q, flagged: toBool(req.query.flagged), paging, sort, assigned, viewerId: req.user.user_id,
+    searchFull: isAdmin, ids: monitoring ? monitoring.child_ids : undefined });
+  const rows = paging ? result.rows : result;
+  const data = await Policy.shapeList(req, rows.map((c) => ({ ...c, cdclaa_verified: Boolean(c.cdclaa_verified_at) })));
+  await logActivity(req, `CRA_DIRECTORY_VIEWED (list, ${data.length} rows${req.query.q ? ', search' : ''})`, 'Children');
+  const meta = { mode: (await Policy.settings()).child_access_mode, monitoring: Boolean(monitoring) };
+  if (paging) return res.json({ success: true, data, pagination: result.pagination, meta });
+  res.json({ success: true, data, meta });
 };
 
-/** Adds the CDCLAA "verified" flag the availability control needs. */
-async function areaView(req, rows) {
-  return rows.map((c) => ({ ...c, cdclaa_verified: Boolean(c.cdclaa_verified_at) }));
-}
-
-/** GET /api/children/:id - profile only. Health, case files and adoption history have their own endpoints. */
+/** GET /api/children/:id - header and overview at the viewer's level (policy), never more. */
 exports.getOne = async (req, res) => {
-  const child = await Child.findById(req.params.id);
-  if (!child) throw new HttpError(404, 'Child record not found.');
+  const d = await Policy.check(req, req.params.id, 'directory', 'open child page');
+  const child = await Child.findById(d.child_id);
   delete child.profile_photo_path;
-  const discharges = await Child.dischargeHistory(child.child_id);
-  const [view] = await areaView(req, [child]);
-  res.json({ success: true, data: { ...view, discharge_history: discharges } });
+  const coreVisible = d.core || d.shadow || (!d.enforced && d.role === 'Staff');
+  const row = { ...child, cdclaa_verified: Boolean(child.cdclaa_verified_at) };
+  if (coreVisible) row.discharge_history = await Child.dischargeHistory(child.child_id);
+  const data = await Policy.shapeOne(req, row, d);
+  if (d.monitoring) await Policy.monitoringRecordOpened(req, d.child_id);
+  else await logActivity(req, d.core ? 'CRA_CORE_RECORD_OPENED' : 'CRA_DIRECTORY_VIEWED (child page)', `Child ${d.child_id}`);
+  const [[pending]] = await require('../config/db').pool.query("SELECT request_id, created_at FROM tbl_child_access_requests WHERE child_id = ? AND requested_by = ? AND status = 'Pending'", [d.child_id, req.user.user_id]);
+  data.access = { ...data.access, can: { care_card: d.care_card, core: d.core, sensitive: d.sensitive_assigned || req.user.role === 'Admin', edit_care_card: d.edit_care_card,
+    edit_photo: d.edit_photo, access_tab: d.access_tab, edit: d.core && !d.read_only, emergency: false, request: req.user.role === 'Staff' && d.directory && !d.core },
+  initial: d.initial ? { ends_at: d.initial.ends_at } : null, emergency: d.emergency ? { expires_at: d.emergency.expires_at } : null,
+  assignment: d.assignment ? { type: d.assignment.type, ends_at: d.assignment.ends_at } : null, read_only: d.read_only, monitoring: Boolean(d.monitoring),
+  pending_request: pending || null, registered_by_me: Boolean(d.initial),
+  // Not admitted yet: the page sends the viewer to the admission (Admin or the staff member who created it).
+  admission: child.status === 'In admission' ? { status: child.admission_status, creator: Boolean(d.admission_creator), editable: Boolean(d.admission_editable) } : null };
+  const [[adm]] = await require('../config/db').pool.query('SELECT 1 AS ok FROM tbl_child_admissions WHERE child_id = ?', [d.child_id]);
+  data.has_admission_record = Boolean(adm);
+  res.json({ success: true, data });
 };
 
 /**
@@ -92,12 +119,9 @@ exports.getOne = async (req, res) => {
  * legal records; Admin has full access. Every view is logged.
  */
 exports.adoptionHistory = async (req, res) => {
-  const child = await Child.findById(req.params.id);
-  if (!child) throw new HttpError(404, 'Child record not found.');
-  if (req.user.role !== 'Admin') {
-    const s = await require('../services/unlockService').sessionFor(req, 'health', child.child_id);
-    if (!s) throw new HttpError(403, 'Unlock the child record to see its adoption history.', { locked: true });
-  }
+  const access = await Policy.sensitiveAccess(req, req.params.id); // level 3: assigned + unlock session (Admin: always)
+  if (!access.unlocked) throw new HttpError(403, 'Unlock the child record to see its adoption history.', { locked: true });
+  const child = await Child.findById(access.decision.child_id);
   await logActivity(req, 'VIEW_CHILD_ADOPTION_HISTORY', `Child ${child.child_id}`);
   const rows = await Child.adoptionHistory(child.child_id);
   // Each case's summary (stage, matching, placement, petition, NACC, Order, finality, registration, monitoring).
@@ -112,52 +136,18 @@ exports.adoptionHistory = async (req, res) => {
   res.json({ success: true, data: req.user.role === 'Admin' ? rows : rows.map((r) => ({ ...r, applicant: maskName(r.applicant) })) });
 };
 
-/** POST /api/children (Admin, Staff) - new registrations enforce the maximum admission age. Only Admin can set is_public. */
-exports.create = async (req, res) => {
-  requireFields(req.body, ['first_name', 'last_name', 'gender', 'dob', 'admission_date']);
-  const dob = cleanDob(req.body.dob);
-  if (ageOn(dob) > env.maxAdmissionAge) throw new HttpError(422, OVER_AGE);
+// New children are registered only through the admission workflow (services/admission.js, POST /api/admissions):
+// the record starts "In admission" and becomes Active when an Admin approves it.
 
-  const data = {
-    first_name: cleanName(req.body.first_name, 'First name'),
-    last_name: cleanName(req.body.last_name, 'Last name'),
-    gender: oneOf(req.body.gender, GENDERS, 'gender'),
-    dob,
-    admission_date: cleanAdmission(req.body.admission_date, dob),
-    urgent_needs: trimOrNull(req.body.urgent_needs, 2000),
-    public_bio: trimOrNull(req.body.public_bio, 2000),
-    // Only an Admin may publish a profile to the Donor portal. Staff-registered
-    // children always start hidden (RA 10173); an Admin can publish them later.
-    is_public: req.user.role === 'Admin' ? toBool(req.body.is_public) : false,
-    // Admin or Staff may list a child on Adopt a Child. Defaults to not available.
-    // CDCLAA gate (RA 11642): a new child has no verified CDCLAA yet, so never starts as available.
-    available_for_adoption: false,
-    background_care_info: trimOrNull(req.body.background_care_info, 10000),
-    guardian_family_info: trimOrNull(req.body.guardian_family_info, 10000),
-    qr_token: sha256(randomCode(16)),
-  };
+/** POST /api/children/duplicate-check { first_name, last_name, dob } - rate-limited and logged; Staff see no details. */
+exports.duplicateCheck = async (req, res) => {
+  res.json({ success: true, data: await Policy.duplicateCheck(req, req.body || {}) });
+};
 
-  const photo = req.body.photo ? saveUpload(req.body.photo, PHOTO_OPTS) : null;
-  data.profile_photo_path = photo?.storage_key || null;
-
-  let childId;
-  try {
-    childId = await withTransaction(async (conn) => {
-      const id = await Child.nextChildId(conn);
-      await Child.insert(conn, { ...data, child_id: id });
-      const health = req.body.health || {};
-      if (Child.PHI_FIELDS.some((f) => trimOrNull(health[f]))) {
-        const clean = Object.fromEntries(Child.PHI_FIELDS.map((f) => [f, trimOrNull(health[f], 5000)]));
-        await Child.upsertHealth(id, clean, req.user.user_id, conn);
-      }
-      return id;
-    });
-  } catch (err) {
-    if (photo) deleteUpload(photo.storage_key);
-    throw err;
-  }
-  await logActivity(req, 'REGISTER_CHILD', `Child ${childId}`);
-  res.status(201).json({ success: true, data: await Child.findById(childId) });
+/** POST /api/children/:id/intake-complete - the registering Staff member ends their temporary access. */
+exports.intakeComplete = async (req, res) => {
+  await Policy.intakeComplete(req, req.params.id);
+  res.json({ success: true, message: 'Intake marked complete. You now see the directory only.' });
 };
 
 /**
@@ -169,8 +159,9 @@ exports.create = async (req, res) => {
  *  - Staff edits never change status unless status is sent explicitly.
  */
 exports.update = async (req, res) => {
-  const child = await Child.findById(req.params.id);
-  if (!child) throw new HttpError(404, 'Child record not found.');
+  const d = await Policy.check(req, req.params.id, 'core', 'edit child record');
+  const child = await Child.findById(d.child_id);
+  if (child.status === 'In admission') throw new HttpError(409, 'This child is still in admission. Make changes in the admission form.');
   const isAdmin = req.user.role === 'Admin';
   const b = req.body;
   const fields = {};
@@ -243,6 +234,7 @@ exports.remove = async (req, res) => {
 
 // ---------------------------------------------------------------- photos
 exports.uploadPhoto = async (req, res) => {
+  await Policy.check(req, req.params.id, 'edit_photo', 'change photo'); // the photo is part of the Care card
   const child = await Child.photoPath(req.params.id);
   if (!child) throw new HttpError(404, 'Child record not found.');
   const saved = saveUpload(req.body.photo, PHOTO_OPTS);
@@ -253,6 +245,7 @@ exports.uploadPhoto = async (req, res) => {
 };
 
 exports.removePhoto = async (req, res) => {
+  await Policy.check(req, req.params.id, 'edit_photo', 'remove photo');
   const child = await Child.photoPath(req.params.id);
   if (!child) throw new HttpError(404, 'Child record not found.');
   await Child.update(req.params.id, { profile_photo_path: null });
@@ -269,6 +262,7 @@ function sendPhoto(res, key) {
 
 /** GET /api/children/:id/photo (Admin, Staff) */
 exports.photo = async (req, res) => {
+  await Policy.check(req, req.params.id, 'care_card', 'view photo'); // identification photo: Care card level
   const child = await Child.photoPath(req.params.id);
   if (!child?.profile_photo_path) throw new HttpError(404, 'No photo.');
   sendPhoto(res, child.profile_photo_path);
@@ -312,6 +306,7 @@ exports.requestHealthAccess = async (req, res) => {
 
   // Admin: full access with no token or password. Every view is still logged.
   if (req.user.role === 'Admin') {
+    await Policy.check(req, childId, 'sensitive', 'open health record');
     const unlock = require('../services/unlockService');
     await unlock.logEvent(req, { recordType: 'health', recordId: childId, event: 'view_sections', purpose: 'Admin full access', detail: 'health record and case files' });
     return res.json({ success: true, data: await access.issue(req, childId, 'ADMIN_FULL_ACCESS', require('../config/sensitiveAccess').ACCESS_SESSION) });
@@ -321,14 +316,18 @@ exports.requestHealthAccess = async (req, res) => {
 
 /** GET /api/children/:id/protected  (X-Health-Access) - health record + case files */
 exports.getProtected = async (req, res) => {
-  const [health, caseFiles] = await Promise.all([Child.getHealth(req.params.id), Child.getCaseFiles(req.params.id)]);
-  await access.logEvent(req, req.params.id, 'VIEW', 'Health record and case files');
+  // Level 3. The health token came from the unlock flow (Staff) or Admin; the policy re-checks the assignment.
+  await Policy.check(req, req.params.id, 'sensitive', 'view health record');
+  const health = await Child.getHealth(req.params.id);
+  await access.logEvent(req, req.params.id, 'VIEW', 'Health record');
   await logActivity(req, 'VIEW_HEALTH_RECORD', `Child ${req.params.id}`);
-  res.json({ success: true, data: { health, case_files: caseFiles, remaining_seconds: req.healthAccess.remaining_seconds } });
+  // Case files are part of the core record now (GET /children/:id/case-files).
+  res.json({ success: true, data: { health, remaining_seconds: req.healthAccess.remaining_seconds } });
 };
 
 /** PUT /api/children/:id/health  (X-Health-Access) */
 exports.updateHealth = async (req, res) => {
+  await Policy.check(req, req.params.id, 'sensitive', 'update health record');
   const clean = Object.fromEntries(Child.PHI_FIELDS.map((f) => [f, trimOrNull(req.body[f], 5000)]));
   await Child.upsertHealth(req.params.id, clean, req.user.user_id);
   await access.logEvent(req, req.params.id, 'UPDATE', 'Health record');
@@ -336,15 +335,24 @@ exports.updateHealth = async (req, res) => {
   res.json({ success: true, data: await Child.getHealth(req.params.id) });
 };
 
-/** PUT /api/children/:id/case-files  (X-Health-Access) */
+/** GET /api/children/:id/case-files - core record (Admin, assigned case worker, registering Staff in the initial window). */
+exports.getCaseFiles = async (req, res) => {
+  const d = await Policy.check(req, req.params.id, 'core', 'open case files');
+  const files = await Child.getCaseFiles(d.child_id);
+  await logActivity(req, 'CRA_CASE_FILES_VIEWED', `Child ${d.child_id}`);
+  res.json({ success: true, data: { ...files, discharge_history: await Child.dischargeHistory(d.child_id) } });
+};
+
+/** PUT /api/children/:id/case-files - core record. */
 exports.updateCaseFiles = async (req, res) => {
-  await Child.update(req.params.id, {
+  const d = await Policy.check(req, req.params.id, 'core', 'edit case files');
+  if (d.read_only) throw new HttpError(403, 'Monitoring mode is read-only.');
+  await Child.update(d.child_id, {
     background_care_info: trimOrNull(req.body.background_care_info, 10000),
     guardian_family_info: trimOrNull(req.body.guardian_family_info, 10000),
   });
-  await access.logEvent(req, req.params.id, 'UPDATE', 'Case files');
-  await logActivity(req, 'UPDATE_CASE_FILES', `Child ${req.params.id}`);
-  res.json({ success: true, data: await Child.getCaseFiles(req.params.id) });
+  await logActivity(req, 'UPDATE_CASE_FILES', `Child ${d.child_id}`);
+  res.json({ success: true, data: await Child.getCaseFiles(d.child_id) });
 };
 
 /** POST /api/children/:id/health-access/revoke - closes access early (manual lock or timer end) */

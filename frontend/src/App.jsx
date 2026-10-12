@@ -11,6 +11,7 @@ import DonorDashboard from './pages/DonorDashboard';
 import DonorHistory from './pages/DonorHistory';
 import Children from './pages/Children';
 import ChildDetail from './pages/ChildDetail';
+import AdmissionPage from './pages/AdmissionPage';
 import Inventory from './pages/Inventory';
 import Donations from './pages/Donations';
 import DonationDetail from './pages/DonationDetail';
@@ -114,7 +115,8 @@ export default function App() {
         {/* Staff open Data protection here; for Admin it is also a tab of the Audit log. */}
         <Route path="data-protection" element={<RequireRole roles={ops}><ProtectedArea area="Data protection"><DataProtection /></ProtectedArea></RequireRole>} />
         <Route path="transitions" element={<RequireRole roles={ops}><RequireDuty duty="transition"><ProtectedArea area="Transition records"><Transitions /></ProtectedArea></RequireDuty></RequireRole>} />
-        <Route path="children" element={<RequireRole roles={ops}><RequireDuty duty="children"><ProtectedArea area="Child records"><Children /></ProtectedArea></RequireDuty></RequireRole>} />
+        <Route path="children" element={<RequireRole roles={ops}><RequireDuty duty={['children', 'admission']}><ProtectedArea area="Child records"><Children /></ProtectedArea></RequireDuty></RequireRole>} />
+        <Route path="admissions/:id" element={<RequireRole roles={ops}><RequireDuty duty={['children', 'admission']}><ProtectedArea area="Child records"><AdmissionPage /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="children/:id" element={<RequireRole roles={ops}><RequireDuty duty="children"><ProtectedArea area="Child records"><ChildDetail /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="inventory" element={<RequireRole roles={ops}><RequireDuty duty="inventory"><Inventory /></RequireDuty></RequireRole>} />
         <Route path="donations" element={<RequireRole roles={ops}><RequireDuty duty="donations"><ProtectedArea area="Donor records"><Donations /></ProtectedArea></RequireDuty></RequireRole>} />

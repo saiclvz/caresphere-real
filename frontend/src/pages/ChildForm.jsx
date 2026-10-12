@@ -1,15 +1,12 @@
 import { useMemo, useState } from 'react';
-import { ImagePlus } from 'lucide-react';
 import { api } from '../api/client';
 import useApi from '../hooks/useApi';
 import { useAuth } from '../context/AuthContext';
-import { Button, ErrorNote, Field, Modal } from '../components/ui';
+import { Button, ErrorNote, Field, Modal, Notice } from '../components/ui';
 import { isoDate } from '../lib/format';
-import { MB, ageFromDob, checkFile } from '../lib/files';
-import PhotoCropDialog from '../components/PhotoCropDialog';
+import { ageFromDob } from '../lib/files';
 
 const OVER_AGE = 'Registration denied. The child exceeds the maximum age requirement.';
-const PHOTO_TYPES = ['image/jpeg', 'image/png'];
 const blank = (v) => !String(v ?? '').trim();
 
 const EMPTY = {
@@ -20,7 +17,8 @@ const EMPTY = {
 };
 
 /**
- * Register (Admin) or edit (Admin, Staff) a child.
+ * Edit a child (Admin, or Staff with the core record). New children come only through New Admission
+ * (pages/AdmissionPage.jsx): the record is admitted when an Admin approves it.
  *  - New registrations are blocked above the maximum admission age (also enforced by the API).
  *  - Changing status to Discharged requires reason, report and date; "reported by" is the signed-in user.
  *  - Adopted is never chosen here: it is set when an adoption application is marked Completed.
@@ -37,8 +35,6 @@ export default function ChildForm({ initial, onClose, onSaved }) {
     admission_date: initial.admission_date || '', is_public: !!initial.is_public,
     available_for_adoption: !!initial.available_for_adoption,
   } : EMPTY));
-  const [photo, setPhoto] = useState(null);
-  const [cropFile, setCropFile] = useState(null); // picked file waiting in the crop step
   const [touched, setTouched] = useState({});
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -66,23 +62,13 @@ export default function ChildForm({ initial, onClose, onSaved }) {
       if (!form.discharge_date) e.discharge_date = 'Discharge date is required.';
       else if (form.discharge_date > isoDate()) e.discharge_date = 'Discharge date cannot be in the future.';
     }
-    if (photo?.error) e.photo = photo.error;
     return e;
-  }, [form, overAge, editing, discharging, photo]);
+  }, [form, overAge, editing, discharging]);
   const invalid = Object.keys(errors).length > 0;
   const show = (k) => (touched[k] || touched._all || (k === 'dob' && overAge)) && errors[k];
 
-  const pickPhoto = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    const problem = checkFile(file, { types: PHOTO_TYPES, maxBytes: 5 * MB });
-    if (problem) { setPhoto((p) => ({ ...(p?.data ? p : {}), error: `Profile photo: ${problem}` })); return; }
-    setCropFile(file); // crop first; only the cropped image is uploaded
-  };
-
   const submit = async (e) => {
-    e.preventDefault();
+    e?.preventDefault?.();
     setTouched({ _all: true });
     if (invalid) return;
     setSaving(true);
@@ -103,19 +89,8 @@ export default function ChildForm({ initial, onClose, onSaved }) {
           });
         }
         res = await api(`/children/${initial.child_id}`, { method: 'PUT', body });
-      } else {
-        res = await api('/children', {
-          method: 'POST',
-          body: {
-            first_name: form.first_name, last_name: form.last_name, gender: form.gender, dob: form.dob, admission_date: form.admission_date,
-            urgent_needs: form.urgent_needs, public_bio: form.public_bio, ...(isAdmin && { is_public: form.is_public }), available_for_adoption: form.available_for_adoption,
-            background_care_info: form.background_care_info, guardian_family_info: form.guardian_family_info,
-            health: { blood_type: form.blood_type, allergies: form.allergies, vaccinations: form.vaccinations, prescriptions: form.prescriptions, doctor_notes: form.doctor_notes },
-            photo: photo?.data ? { name: photo.name, data: photo.data } : undefined,
-          },
-        });
       }
-      onSaved(res.data);
+      onSaved(res.data, res.message);
     } catch (err) {
       setError(err);
     } finally {
@@ -124,11 +99,11 @@ export default function ChildForm({ initial, onClose, onSaved }) {
   };
 
   return (
-    <Modal open onClose={onClose} title={editing ? `Edit ${initial.full_name}` : 'Register a child'} size="lg"
+    <Modal open onClose={onClose} title={`Edit ${initial.full_name}`} size="lg"
       footer={<>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button type="submit" form="child-form" loading={saving} disabled={overAge || saving}>
-          {editing ? 'Save changes' : 'Register child'}
+          Save changes
         </Button>
       </>}>
       <form id="child-form" onSubmit={submit} noValidate className="space-y-4">
@@ -187,38 +162,6 @@ export default function ChildForm({ initial, onClose, onSaved }) {
               {(!editing || !initial?.cdclaa_verified) && ' Needs a CDCLAA verified by an administrator first (record it on the child\'s page).'}</span></span>
         </label>
 
-        {!editing && (
-          <>
-            <Field label="Profile photo (optional)" error={show('photo') || photo?.error} hint="JPG or PNG, up to 5 MB. Stored encrypted.">
-              <div className="flex items-center gap-3">
-                {photo?.preview && <img src={photo.preview} alt="Cropped preview" className="h-14 w-14 rounded-lg object-cover" />}
-                <span className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-navy-900 hover:bg-slate-50">
-                  <ImagePlus className="h-4 w-4" /> {photo?.data ? 'Change photo' : 'Choose photo'}
-                  <input type="file" accept="image/jpeg,image/png" className="sr-only" onChange={pickPhoto} />
-                </span>
-              </div>
-            </Field>
-            {cropFile && (
-              <PhotoCropDialog file={cropFile} onCancel={() => setCropFile(null)}
-                onConfirm={(out) => { setPhoto({ name: out.name, data: out.data, preview: out.preview }); setCropFile(null); }} />
-            )}
-            <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
-              <legend className="px-1 text-sm font-semibold text-navy-900">Case files (encrypted)</legend>
-              <Field label="Background and care information"><textarea className="input" rows={3} value={form.background_care_info} onChange={set('background_care_info')} /></Field>
-              <Field label="Guardian and family information"><textarea className="input" rows={3} value={form.guardian_family_info} onChange={set('guardian_family_info')} /></Field>
-            </fieldset>
-            <fieldset className="space-y-4 rounded-xl border border-slate-200 p-4">
-              <legend className="px-1 text-sm font-semibold text-navy-900">Health history (encrypted)</legend>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Blood type"><input className="input" value={form.blood_type} onChange={set('blood_type')} maxLength={10} /></Field>
-                <Field label="Allergies"><input className="input" value={form.allergies} onChange={set('allergies')} /></Field>
-              </div>
-              <Field label="Immunizations"><textarea className="input" rows={2} value={form.vaccinations} onChange={set('vaccinations')} /></Field>
-              <Field label="Prescriptions"><textarea className="input" rows={2} value={form.prescriptions} onChange={set('prescriptions')} /></Field>
-              <Field label="Doctor's notes"><textarea className="input" rows={2} value={form.doctor_notes} onChange={set('doctor_notes')} /></Field>
-            </fieldset>
-          </>
-        )}
       </form>
     </Modal>
   );

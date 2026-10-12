@@ -65,7 +65,8 @@ function stageInfo(status) {
  */
 async function sensitiveAccess(req, app) {
   if (req.user.role === 'Admin') return { unlocked: true, assigned: true, admin: true };
-  const assigned = app.assigned_staff_id === req.user.user_id && !!app.assigned_staff_active;
+  // One assignment service (primary, backup or temporary cover), checked by the shared policy.
+  const assigned = await require('../services/childAccess').isAssigned(req, 'adoption_application', app.application_id);
   if (!assigned) return { unlocked: false, assigned: false };
   const s = await U.sessionFor(req, 'adoption_application', app.application_id);
   return { unlocked: Boolean(s), assigned: true, expires_at: s?.expires_at || null, remaining_seconds: s?.remaining_seconds || 0, purpose: s?.purpose || null };
@@ -80,8 +81,8 @@ async function requireSensitive(req, app, what) {
 }
 
 /** Staff may act on an application (record a stage, upload their documents) only when assigned to it. */
-function requireAssigned(req, app) {
-  if (req.user.role === 'Staff' && !(app.assigned_staff_id === req.user.user_id && app.assigned_staff_active)) throw new HttpError(403, U.NOT_ASSIGNED, { not_assigned: true });
+async function requireAssigned(req, app) {
+  if (req.user.role === 'Staff' && !(await require('../services/childAccess').isAssigned(req, 'adoption_application', app.application_id))) throw new HttpError(403, U.NOT_ASSIGNED, { not_assigned: true });
 }
 
 /** Assignment as shown to everyone: a deactivated staff account shows as unassigned (and is flagged). */
@@ -502,7 +503,7 @@ exports.uploadDocument = async (req, res) => {
       if (!requests.length && !forumOk && !idRetakeOk) throw new HttpError(409, 'This document has not been requested. After submitting, you can only add documents the home asks for.');
     }
   } else if (role === 'Staff') {
-    requireAssigned(req, app);
+    await requireAssigned(req, app);
     // A case staff opened for a walk-in applicant: the assigned staff member also uploads the applicant's documents.
     const walkIn = Boolean(app.created_by_staff) && Boolean(DOCUMENTS[docType]);
     if (walkIn) await requireSensitive(req, app, 'Uploading the applicant\'s documents');
@@ -663,7 +664,7 @@ exports.list = async (req, res) => {
 exports.updateStatus = async (req, res) => {
   const app = await loadById(req);
   const update = workflow.cleanStatusUpdate(app, req.body || {}, req.user.role);
-  requireAssigned(req, app);
+  await requireAssigned(req, app);
   if (update.internalNote) await requireSensitive(req, app, 'Adding an internal note');
   const { historyId, closed } = await workflow.applyStatusUpdate(app, update, req.user.user_id);
   const ref = `Application #${app.application_id}`;

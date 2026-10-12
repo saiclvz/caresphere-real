@@ -46,6 +46,7 @@ const profileView = (c) => ({
 
 /** GET /api/children/:id/match-profile (Admin, Staff with the adoption duty) */
 exports.getProfile = async (req, res) => {
+  await require('../services/childAccess').check(req, req.params.id, 'sensitive', 'view matching profile'); // adoption: level 3
   res.json({ success: true, data: profileView(await childOr404(req.params.id)) });
 };
 

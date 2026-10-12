@@ -37,7 +37,8 @@ const SELECT = `SELECT tr.review_id, tr.child_id, tr.review_status, tr.notes, tr
 /** Admin: always open. Staff: only the review's assigned staff (active account), during an unlock session. */
 async function access(req, row) {
   if (req.user.role === 'Admin') return { unlocked: true, assigned: true, admin: true };
-  const assigned = row.assigned_staff_id === req.user.user_id && !!row.assigned_staff_active;
+  // The review's own assignment or the child's case worker assignment (one assignment service, shared policy).
+  const assigned = await require('../services/childAccess').isAssigned(req, REC, row.review_id);
   if (!assigned) return { unlocked: false, assigned: false };
   const s = await U.sessionFor(req, REC, row.review_id);
   return { unlocked: Boolean(s), assigned: true, expires_at: s?.expires_at || null, purpose: s?.purpose || null };
@@ -277,13 +278,14 @@ exports.childSummary = async (req, res) => {
   const d = await W.loadAll(pool, row);
   const st = W.stageStates(row, d);
   const cur = st.find((x) => x.state === 'current');
-  const mine = req.user.role === 'Admin' || (row.assigned_staff_id === req.user.user_id && !!row.assigned_staff_active);
+  // Level 3 summary: through the child record policy (Admin, or assigned to the review or the child).
+  const mine = req.user.role === 'Admin' || await require('../services/childAccess').isAssigned(req, REC, row.review_id);
   const dec = W.latestDecision(d);
   const onHold = !row.closed_at && dec && !TC.APPROVED.includes(dec.decision);
   res.json({ success: true, data: { eligible: true, review: {
     review_id: row.review_id, review_status: row.review_status, display_status: onHold ? 'On Hold' : row.review_status,
     current_stage: row.closed_at ? 'Closed' : cur?.label || null, target_transition_date: W.ymd(row.target_transition_date),
-    next_review_date: onHold ? W.ymd(row.next_review_date) : null, assigned_staff_name: row.assigned_staff_active ? row.assigned_staff_name : null,
+    next_review_date: onHold ? W.ymd(row.next_review_date) : null, assigned_staff_name: mine && row.assigned_staff_active ? row.assigned_staff_name : null,
     ...(mine ? { pathway: row.proposed_pathway, aftercare_status: d.aftercare ? `${d.aftercare.status}: ${d.visits.filter((v) => v.visit_date).length} of ${d.visits.length} follow-ups recorded` : 'Not started' } : {}),
   } } });
 };

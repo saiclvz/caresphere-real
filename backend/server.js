@@ -91,6 +91,13 @@ async function start() {
   flag();
   setInterval(flag, 6 * 60 * 60 * 1000).unref();
 
+  // Child record access: end what expired (initial access, temporary covers, emergency access, monitoring visits),
+  // alert Admin (unassigned records, covers ending), remind case workers about Care card reviews. Every 15 minutes.
+  // Expiry itself is checked live on every request; this job only records it and sends the alerts.
+  const childAccessSweep = () => require('./src/services/childAccess').sweep().catch((e) => console.error('[child-access]', e.message));
+  childAccessSweep();
+  setInterval(childAccessSweep, 15 * 60 * 1000).unref();
+
   app.listen(env.port, '0.0.0.0', () => {
     console.log(`[api] CareSphere API listening on http://0.0.0.0:${env.port} (reachable on your LAN)`);
   });

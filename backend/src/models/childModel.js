@@ -8,8 +8,8 @@ const { likeParam } = require('../utils/validate');
 // Age is always computed from date of birth by the database, never stored.
 const AGE = 'TIMESTAMPDIFF(YEAR, c.dob, CURDATE())';
 
-const LIST_COLS = `c.child_id, c.first_name, c.last_name, c.full_name, c.gender, c.dob, c.admission_date,
-  c.public_ref, c.assigned_staff_id, (SELECT full_name FROM tbl_users WHERE user_id = c.assigned_staff_id) AS assigned_staff_name, c.status, c.urgent_needs, c.public_bio, c.is_public, c.available_for_adoption, c.placement_status,
+const LIST_COLS = `c.child_id, c.first_name, c.last_name, c.full_name, c.gender, c.dob, c.admission_date, c.created_at,
+  c.public_ref, c.admission_status, c.assigned_staff_id, (SELECT full_name FROM tbl_users WHERE user_id = c.assigned_staff_id AND is_active = TRUE) AS assigned_staff_name, c.status, c.urgent_needs, c.public_bio, c.is_public, c.available_for_adoption, c.placement_status,
   c.cdclaa_number, c.cdclaa_date, c.cdclaa_verified_at, c.updated_at,
   (c.profile_photo_path IS NOT NULL) AS has_photo,
   ${AGE} AS age,
@@ -31,6 +31,7 @@ function withPhotoUrl(row) {
 const CHILD_SORTS = {
   recent: 'c.updated_at DESC, c.child_id DESC', registered: 'c.created_at DESC, c.child_id DESC',
   case: 'c.child_id ASC', name: 'c.full_name ASC, c.child_id ASC', age: 'c.dob DESC, c.child_id ASC',
+  first_name: 'c.first_name ASC, c.child_id ASC', // Staff: name order without revealing last names
 };
 
 module.exports = {
@@ -46,15 +47,40 @@ module.exports = {
    * Child records list. Default order: most recent activity. Age is only a sort the user picks.
    * sort: recent | registered | case | name | age
    */
-  async list({ status, search, flagged, paging, sort = 'recent' } = {}) {
+  /**
+   * assigned: 'unassigned' | 'me' | a staff user id (who the "me" is: viewerId). searchFull: Admin search by full
+   * name; Staff search only by case number and first name (search results carry directory fields only).
+   * ids: limit to these children (a monitoring visit).
+   */
+  async list({ status, search, flagged, paging, sort = 'recent', assigned, viewerId, searchFull = false, ids } = {}) {
     const where = [];
     const params = [];
-    if (status) { where.push('c.status = ?'); params.push(status); }
+    // Children still in admission (not approved yet) never appear in the Children list (see Admissions).
+    if (status) { where.push('c.status = ?'); params.push(status); } else where.push("c.status <> 'In admission'");
     if (flagged) where.push(`${AGE} >= ${Number(env.transitionAge)} AND c.status = 'Active'`);
+    if (ids) { where.push(ids.length ? 'c.child_id IN (?)' : '1 = 0'); if (ids.length) params.push(ids); }
     if (search) {
-      where.push('(c.child_id LIKE ? OR c.full_name LIKE ? OR c.status LIKE ? OR c.urgent_needs LIKE ?)');
       const p = likeParam(search);
-      params.push(p, p, p, p);
+      if (searchFull) { where.push('(c.child_id LIKE ? OR c.full_name LIKE ? OR c.status LIKE ? OR c.urgent_needs LIKE ?)'); params.push(p, p, p, p); }
+      else { where.push('(c.child_id LIKE ? OR c.first_name LIKE ?)'); params.push(p, p); }
+    }
+    // One assignment service: active rows in tbl_record_assignments, or the old field for records not converted yet.
+    const ACTIVE = 'a.ended_at IS NULL AND a.starts_at <= NOW() AND (a.ends_at IS NULL OR a.ends_at > NOW())';
+    const assignedTo = (uid) => {
+      params.push(uid, uid);
+      return `(EXISTS (SELECT 1 FROM tbl_record_assignments a WHERE a.record_type = 'child' AND a.record_id = c.child_id AND a.user_id = ? AND ${ACTIVE})
+        OR (c.assigned_staff_id = ? AND NOT EXISTS (SELECT 1 FROM tbl_record_assignments a2 WHERE a2.record_type = 'child' AND a2.record_id = c.child_id)))`;
+    };
+    if (assigned === 'unassigned') {
+      where.push('(c.assigned_staff_id IS NULL OR NOT EXISTS (SELECT 1 FROM tbl_users au WHERE au.user_id = c.assigned_staff_id AND au.is_active = TRUE))');
+    } else if (assigned === 'me' && viewerId) {
+      const cond = assignedTo(viewerId);
+      where.push(`(${cond} OR EXISTS (SELECT 1 FROM tbl_child_initial_access ia WHERE ia.child_id = c.child_id AND ia.user_id = ? AND ia.ended_at IS NULL AND ia.ends_at > NOW()))`);
+      params.push(viewerId);
+    } else if (assigned && /^\d+$/.test(String(assigned))) {
+      where.push(assignedTo(Number(assigned)));
+    } else if (assigned === 'attention') {
+      where.push("EXISTS (SELECT 1 FROM tbl_reassignment_flags f WHERE f.record_type = 'child' AND f.record_id = c.child_id AND f.cleared_at IS NULL)");
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const select = `SELECT ${LIST_COLS}
@@ -74,7 +100,7 @@ module.exports = {
 
   async findById(id) {
     const [rows] = await pool.query(
-      `SELECT ${LIST_COLS}, c.created_at, c.profile_photo_path,
+      `SELECT ${LIST_COLS}, c.profile_photo_path,
               (SELECT COUNT(*) FROM tbl_health_history h WHERE h.child_id = c.child_id) AS has_health_record
          FROM tbl_children c LEFT JOIN tbl_transition_reviews tr ON tr.child_id = c.child_id
         WHERE c.child_id = ?`, [id]);
@@ -101,8 +127,9 @@ module.exports = {
     await conn.query(
       `INSERT INTO tbl_children (child_id, public_ref, first_name, last_name, gender, dob, admission_date, status,
          urgent_needs, public_bio, is_public, available_for_adoption, background_care_info, guardian_family_info, profile_photo_path, qr_token)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [c.child_id, newPublicRef(), c.first_name, c.last_name, c.gender, c.dob, c.admission_date, c.urgent_needs, c.public_bio,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      // New admissions start 'In admission' (not admitted until an Admin approves); other inserts stay Active.
+      [c.child_id, newPublicRef(), c.first_name, c.last_name, c.gender, c.dob, c.admission_date, c.status || 'Active', c.urgent_needs, c.public_bio,
         c.is_public ? 1 : 0, c.available_for_adoption ? 1 : 0, encrypt(c.background_care_info, env.phiKey), encrypt(c.guardian_family_info, env.phiKey),
         c.profile_photo_path || null, c.qr_token]);
   },
@@ -141,8 +168,12 @@ module.exports = {
               (SELECT COUNT(*) FROM tbl_sealed_records WHERE child_id = ?) +
               (SELECT COUNT(*) FROM tbl_transition_events e JOIN tbl_transition_reviews tr ON tr.review_id = e.review_id WHERE tr.child_id = ?) +
               (SELECT COUNT(*) FROM tbl_information_releases WHERE child_id = ?) +
-              (SELECT COUNT(*) FROM tbl_protected_tokens t JOIN tbl_protected_records r ON r.record_id = t.record_id WHERE r.child_id = ?) AS n`,
-      [id, id, id, id, id, id, id]);
+              (SELECT COUNT(*) FROM tbl_emergency_access WHERE child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_child_access_requests WHERE child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_monitoring_records WHERE child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_protected_tokens t JOIN tbl_protected_records r ON r.record_id = t.record_id WHERE r.child_id = ?) +
+              (SELECT COUNT(*) FROM tbl_child_admission_history WHERE child_id = ?) AS n`,
+      [id, id, id, id, id, id, id, id, id, id, id]);
     return Number(row.n) > 0;
   },
 

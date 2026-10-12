@@ -7,6 +7,7 @@ import useApi from '../hooks/useApi';
 import PaymentSettings from '../components/PaymentSettings';
 import ScheduleAreasSettings from '../components/schedules/ScheduleAreasSettings';
 import IdTypesSettings from '../components/IdTypesSettings';
+import ChildAccessSettings from '../components/children/ChildAccessSettings';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
 import { Button, Card, ErrorNote, Field, PageHeader, Spinner } from '../components/ui';
@@ -48,7 +49,9 @@ export default function SettingsPage() {
     e.preventDefault();
     setSaving(true); setSaveError(null);
     try {
-      const res = await api('/settings', { method: 'PUT', body: form });
+      // The DPO contact and child record access are saved in their own section below (logged with old and new values).
+      const body = Object.fromEntries(Object.entries(form).filter(([k]) => !k.startsWith('dpo_') && !k.startsWith('child_')));
+      const res = await api('/settings', { method: 'PUT', body });
       setForm(res.data); setOrgName(res.data.org_name); toast('Settings saved.');
     } catch (err) { setSaveError(err); } finally { setSaving(false); }
   };
@@ -97,15 +100,6 @@ export default function SettingsPage() {
               </Field>
               <DownloadTypes value={form.staff_download_doc_types || ''} onChange={(v) => setForm((f) => ({ ...f, staff_download_doc_types: v }))} />
             </fieldset>
-            <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
-              <legend className="px-1 text-sm font-medium text-navy-800">Data Protection Officer (RA 10173)</legend>
-              <p className="text-xs text-slate-500">Shown to applicants in the privacy notice. Serious breaches must be reported to the National Privacy Commission and the affected people within 72 hours; log incidents under Data protection.</p>
-              <Field label="Name"><input className="input" maxLength={150} value={form.dpo_name || ''} onChange={set('dpo_name')} /></Field>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Email"><input className="input" type="email" maxLength={150} value={form.dpo_email || ''} onChange={set('dpo_email')} /></Field>
-                <Field label="Phone"><input className="input" maxLength={50} value={form.dpo_phone || ''} onChange={set('dpo_phone')} /></Field>
-              </div>
-            </fieldset>
             <Field label="Default low-stock level" hint="Pre-filled when adding inventory items">
               <input className="input w-32" type="number" min={0} value={form.default_min_threshold || ''} onChange={set('default_min_threshold')} />
             </Field>
@@ -128,6 +122,7 @@ export default function SettingsPage() {
           </form>
         </Card>
       </div>
+      <div className="mt-6"><ChildAccessSettings /></div>
       <div className="mt-6"><PaymentSettings /></div>
       <div className="mt-6"><ScheduleAreasSettings /></div>
       {user?.role === 'Admin' && <div className="mt-6"><IdTypesSettings /></div>}

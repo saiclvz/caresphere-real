@@ -1,0 +1,24 @@
+Child record access: assignment conversion (APPLIED) 2026-10-12T12:35:42.259Z
+
+Converted to primary assignments: 10
+ - Child CS-2026-0001: CareSphere's Staff -> primary
+ - Child CS-2026-0002: Sai Calvez -> primary
+ - Child CS-2026-0003: test -> primary
+ - Child CS-2026-0004: Sai Calvez -> primary
+ - Child CS-2026-0008: Sai Calvez -> primary
+ - Child CS-2026-0009: Sai Calvez -> primary
+ - Child CS-2026-0010: CareSphere's Staff -> primary
+ - Application ADP-2026-0003: CareSphere's Staff -> primary
+ - Application ADP-2026-0004: Sai Calvez -> primary
+ - Transition review #400 (case CS-2026-0004): Sai Calvez -> primary
+
+Marked "needs reassignment" (assigned account is deactivated): 0
+
+Active children without a case worker (Unassigned, Admin alerted): 3
+ - Child CS-2026-0005
+ - Child CS-2026-0006
+ - Child CS-2026-0007
+
+Already converted (skipped): 0
+
+Not changed: Staff duties, children, test data, the audit log. The rollout mode stays "Log only" until you switch it in Settings.

@@ -14,6 +14,8 @@ function refuse(req, next, duty) {
   return next(denied(duty));
 }
 const requireDuty = (duty) => (req, res, next) => (hasDuty(req, duty) ? next() : refuse(req, next, duty));
+/** Any one of these duties (e.g. Child records OR Admission for the admission pages). */
+const requireAnyDuty = (...duties) => (req, res, next) => (duties.some((d) => hasDuty(req, d)) ? next() : refuse(req, next, duties[0]));
 
 /** The unlock flow: the duty follows the record type in the body. */
 const requireDutyForUnlock = (req, res, next) => {
@@ -21,4 +23,4 @@ const requireDutyForUnlock = (req, res, next) => {
   return !duty || hasDuty(req, duty) ? next() : refuse(req, next, duty);
 };
 
-module.exports = { requireDuty, requireDutyForUnlock, hasDuty };
+module.exports = { requireDuty, requireAnyDuty, requireDutyForUnlock, hasDuty };

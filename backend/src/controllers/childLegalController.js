@@ -14,11 +14,9 @@ const { deviceType } = require('../utils/device');
 const { CHILD_SECTIONS } = require('../config/adoptionSensitive');
 const U = require('../services/unlockService');
 
-/** Admin: always open. Staff: only during an unlock session for this child (purpose + QR + Token ID). */
+/** Level 3 through the child record policy: Admin always; Staff only when assigned, during an unlock session. */
 async function childAccess(req, childId) {
-  if (req.user.role === 'Admin') return { unlocked: true, admin: true };
-  const s = await U.sessionFor(req, 'health', childId);
-  return { unlocked: Boolean(s), expires_at: s?.expires_at || null, remaining_seconds: s?.remaining_seconds || 0, purpose: s?.purpose || null };
+  return require('../services/childAccess').sensitiveAccess(req, childId);
 }
 
 const DOC_OPTS = { allowed: ['pdf', 'png', 'jpg'], maxBytes: 10 * MB };
@@ -69,6 +67,9 @@ exports.getCdclaa = async (req, res) => {
  */
 exports.saveCdclaa = async (req, res) => {
   const id = req.params.id;
+  // Level 3 (adoption legal record): Admin, or the assigned Staff member during an unlock session.
+  const gate = await childAccess(req, id);
+  if (!gate.unlocked) throw new HttpError(403, 'Unlock the child record to record the CDCLAA.', { locked: true });
   const number = String(req.body?.number || '').trim();
   const date = String(req.body?.date || '').trim();
   if (!number) throw new HttpError(400, 'CDCLAA number is required.');
@@ -152,7 +153,9 @@ exports.matchable = async (req, res) => {
        FROM tbl_children
       WHERE status = 'Active' AND available_for_adoption = TRUE AND placement_status = 'None' AND cdclaa_verified_at IS NOT NULL
         AND TIMESTAMPDIFF(YEAR, dob, CURDATE()) < ? ORDER BY first_name, last_name`, [Number(env.transitionAge)]);
-  res.json({ success: true, data: rows });
+  // Staff see the first name and last initial (directory level); the full name is in the core record.
+  const P = require('../services/childAccess');
+  res.json({ success: true, data: req.user.role === 'Admin' ? rows : rows.map((r) => ({ ...r, full_name: P.displayName(r), last_initial: r.last_initial })) });
 };
 
 exports.cdclaaSummary = cdclaaSummary;

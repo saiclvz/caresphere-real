@@ -52,6 +52,7 @@ async function authenticate(req, res, next) {
       // Signing out (here, for inactivity) locks sensitive sections again, as on Sign out.
       await pool.query('DELETE FROM tbl_protected_grants WHERE user_id = ?', [user.user_id]);
       await require('../services/unlockService').endForUser(user.user_id);
+      await require('../services/childAccess').endMonitoringForUser(user.user_id, 'signed_out').catch(() => {});
       throw sessionError(`You were signed out after ${IDLE_MINUTES} minutes without activity. Sign in again.`);
     }
     if (req.headers['x-background'] !== '1' && (!activity || activity.stale)) {

@@ -12,7 +12,7 @@ export default function RequireDuty({ duty, children }) {
     <Card className="mx-auto mt-8 max-w-lg p-6 text-center">
       <ShieldAlert className="mx-auto h-8 w-8 text-red-600" aria-hidden />
       <h1 className="mt-2 font-semibold text-navy-900">ACCESS DENIED – You are not authorized to view this information.</h1>
-      <p className="mt-1 text-sm text-slate-600">{DUTY_LABELS[duty] || duty} is not one of your duties. Ask an administrator if you need it.</p>
+      <p className="mt-1 text-sm text-slate-600">{(Array.isArray(duty) ? duty : [duty]).map((d) => DUTY_LABELS[d] || d).join(' or ')} is not one of your duties. Ask an administrator if you need it.</p>
       <Link to="/" className="mt-4 inline-block text-sm font-medium text-brand hover:underline">Back to the dashboard</Link>
     </Card>
   );

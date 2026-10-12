@@ -84,8 +84,8 @@ exports.getOne = async (req, res) => {
   ]);
   // Communication: what the donor was sent (titles only; nothing sensitive is in a notification).
   const [sent] = r.user_id ? await pool.query('SELECT title, created_at, is_read FROM tbl_notifications WHERE user_id = ? AND category = ? ORDER BY created_at DESC LIMIT 50', [r.user_id, 'donations']) : [[]];
-  const audit = isAdmin ? (await pool.query(`SELECT l.action_performed, l.created_at, l.user_role, u.full_name AS user_name FROM tbl_activity_logs l LEFT JOIN tbl_users u ON u.user_id = l.user_id
-      WHERE l.target_entity = ? ORDER BY l.created_at DESC LIMIT 100`, [`Donor #${id}`]))[0] : null;
+  const audit = isAdmin ? (await pool.query(`SELECT l.action_performed, l.timestamp AS created_at, l.user_role, u.full_name AS user_name FROM tbl_activity_logs l LEFT JOIN tbl_users u ON u.user_id = l.user_id
+      WHERE l.target_entity = ? ORDER BY l.log_id DESC LIMIT 100`, [`Donor #${id}`]))[0] : null;
   await logActivity(req, 'VIEW_DONOR_PROFILE', `Donor #${id}`);
   const cash = counted.filter((d) => !d.in_kind);
   const kind = counted.filter((d) => d.in_kind);

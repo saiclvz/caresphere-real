@@ -26,7 +26,7 @@ export default function TransitionSummaryCard({ childId, firstName }) {
             <div><dt className="text-xs text-slate-500">Transition status</dt><dd><Badge tone={TONE[r.display_status]}>{r.display_status}</Badge>{r.next_review_date && <span className="block text-xs text-slate-500">Next review {formatDate(r.next_review_date)}</span>}</dd></div>
             <div><dt className="text-xs text-slate-500">Current stage</dt><dd className="text-navy-900">{r.current_stage || '-'}</dd></div>
             <div><dt className="text-xs text-slate-500">Target transition date</dt><dd className="text-navy-900">{r.target_transition_date ? formatDate(r.target_transition_date) : 'Not set'}</dd></div>
-            <div><dt className="text-xs text-slate-500">Assigned social worker</dt><dd className="text-navy-900">{r.assigned_staff_name || 'Not assigned'}</dd></div>
+            {r.assigned_staff_name && <div><dt className="text-xs text-slate-500">Assigned social worker</dt><dd className="text-navy-900">{r.assigned_staff_name}</dd></div>}
             {'pathway' in r && <div><dt className="text-xs text-slate-500">Transition pathway</dt><dd className="text-navy-900">{r.pathway || 'Not set'}</dd></div>}
             {'aftercare_status' in r && <div><dt className="text-xs text-slate-500">Aftercare status</dt><dd className="text-navy-900">{r.aftercare_status}</dd></div>}
           </dl>

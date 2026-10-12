@@ -2,9 +2,11 @@ const express = require('express');
 const h = require('../utils/asyncHandler');
 const { authenticate, authorize } = require('../middleware/auth');
 const rateLimit = require('../middleware/rateLimit');
-const { requireDuty, requireDutyForUnlock } = require('../middleware/requireDuty');
+const { requireDuty, requireAnyDuty, requireDutyForUnlock } = require('../middleware/requireDuty');
 // Staff duties per area (Admin and Donors pass). See config/staffDuties.js.
 const D_CHILDREN = requireDuty('children');
+const D_ADMISSION = requireDuty('admission');
+const D_CHILD_OR_ADMISSION = requireAnyDuty('children', 'admission');
 const D_HEALTH = requireDuty('health');
 const D_ADOPTION = requireDuty('adoption');
 const D_TRANSITION = requireDuty('transition');
@@ -16,6 +18,7 @@ const { requireHealthAccess } = require('../services/healthAccessService');
 
 const auth = require('../controllers/authController');
 const children = require('../controllers/childController');
+const admissions = require('../controllers/admissionController');
 const adoptions = require('../controllers/adoptionController');
 const transitions = require('../controllers/transitionController');
 const inventory = require('../controllers/inventoryController');
@@ -40,6 +43,8 @@ const stages = require('../controllers/adoptionStageController');
 const archivedDocs = require('../controllers/archivedDocumentController');
 const matching = require('../controllers/matchingController');
 const childLegal = require('../controllers/childLegalController');
+const childAccess = require('../controllers/childAccessController');
+const { monitoringGuard } = require('../services/childAccess');
 
 const router = express.Router();
 const ADMIN = authorize('Admin');
@@ -76,6 +81,8 @@ router.post('/auth/mfa/verify', mfaLimiter, h(auth.mfaVerify));
 
 // Everything below requires a valid session.
 router.use(authenticate);
+// Admin monitoring visits (NACC, DSWD): read-only, selected child records only, no downloads (services/childAccess.js).
+router.use(monitoringGuard);
 
 // ---------- Typed tokens (60 s) for health access ----------
 
@@ -86,19 +93,63 @@ router.get('/dashboard/due-soon', OPS, D_ADOPTION, h(dashboard.dueSoon)); // ado
 // ---------- Children ----------
 router.get('/children/rules', ANY, h(children.rules));
 router.get('/children', OPS, D_CHILDREN, h(children.list));
-router.post('/children', OPS, uploadLimiter, D_CHILDREN, h(children.create));
+// New children come only through the admission workflow (Admission duty); POST /children starts an admission (Step 1).
+router.post('/children', OPS, uploadLimiter, D_ADMISSION, h(admissions.create));
+// ---------- Admissions (services/admission.js -> the child record policy) ----------
+router.get('/admissions', OPS, D_ADMISSION, h(admissions.list));
+router.get('/admissions/assign-options', ADMIN, h(admissions.assignOptions));
+router.post('/admissions', OPS, uploadLimiter, D_ADMISSION, h(admissions.create));
+router.get('/admissions/:id', OPS, D_CHILD_OR_ADMISSION, h(admissions.getOne));
+router.put('/admissions/:id/steps/:step', OPS, D_ADMISSION, h(admissions.saveStep));
+router.post('/admissions/:id/documents/:key', OPS, uploadLimiter, D_ADMISSION, h(admissions.uploadFile));
+router.get('/admissions/:id/files/:fileId', OPS, D_CHILD_OR_ADMISSION, h(admissions.file));
+router.post('/admissions/:id/submit', OPS, D_ADMISSION, h(admissions.submit));
+router.post('/admissions/:id/approve', ADMIN, h(admissions.approve));
+router.post('/admissions/:id/return', ADMIN, h(admissions.returnForCorrection));
+router.post('/admissions/:id/decline', ADMIN, h(admissions.decline));
+// Child record access levels (services/childAccess.js is the one policy for every route below).
+router.post('/children/duplicate-check', OPS, D_CHILD_OR_ADMISSION, h(children.duplicateCheck));
+router.post('/children/:id/intake-complete', OPS, D_CHILDREN, h(children.intakeComplete));
+router.get('/children/:id/care-card', OPS, D_CHILDREN, h(childAccess.getCareCard));
+router.put('/children/:id/care-card', OPS, D_CHILDREN, h(childAccess.saveCareCard));
+router.post('/children/:id/care-card/review', OPS, D_CHILDREN, h(childAccess.reviewCareCard));
+router.get('/children/:id/case-files', OPS, D_CHILDREN, h(children.getCaseFiles));
+router.put('/children/:id/case-files', OPS, D_CHILDREN, h(children.updateCaseFiles));
+router.get('/children/:id/access', OPS, D_CHILDREN, h(childAccess.accessTab));
+router.post('/children/:id/assignments', ADMIN, h(childAccess.addAssignment));
+router.post('/children/:id/access-requests', OPS, D_CHILDREN, h(childAccess.requestAccess));
+router.get('/assignments/staff', ADMIN, h(childAccess.assignableStaff));
+router.post('/assignments/bulk', ADMIN, h(childAccess.bulkAssign));
+router.put('/assignments/:id', ADMIN, h(childAccess.changeAssignment));
+router.post('/assignments/:id/end', ADMIN, h(childAccess.endAssignment));
+router.get('/access-requests', ADMIN, h(childAccess.listRequests));
+router.post('/access-requests/:id/decision', ADMIN, h(childAccess.decideRequest));
+// Emergency access was removed (no new uses). Earlier uses stay recorded and Admin can still review them.
+router.get('/emergency-access', ADMIN, h(childAccess.listEmergency));
+router.post('/emergency-access/:id/review', ADMIN, h(childAccess.reviewEmergency));
+router.get('/reassignment-flags', ADMIN, h(childAccess.flags));
+router.get('/monitoring', ADMIN, h(childAccess.currentMonitoring));
+router.post('/monitoring', ADMIN, h(childAccess.startMonitoring));
+router.post('/monitoring/end', ADMIN, h(childAccess.endMonitoring));
+router.get('/child-access/me', OPS, h(childAccess.me));
+router.get('/child-access/settings', ADMIN, h(childAccess.getSettings));
+router.put('/child-access/settings', ADMIN, h(childAccess.saveSettings));
+router.get('/child-access/overview', ADMIN, h(childAccess.overview));
+router.get('/child-access/would-block', ADMIN, h(childAccess.wouldBlock));
+router.post('/privacy-concerns', OPS, h(childAccess.reportConcern));
+router.get('/privacy-concerns', ADMIN, h(childAccess.listConcerns));
+router.post('/privacy-concerns/:id/review', ADMIN, h(childAccess.reviewConcern));
 router.get('/children/:id', OPS, D_CHILDREN, h(children.getOne));
 router.put('/children/:id', OPS, D_CHILDREN, h(children.update));
 router.delete('/children/:id', ADMIN, D_CHILDREN, h(children.remove));
 router.get('/children/:id/photo', OPS, D_CHILDREN, h(children.photo));
 router.post('/children/:id/photo', OPS, uploadLimiter, D_CHILDREN, h(children.uploadPhoto));
 router.delete('/children/:id/photo', OPS, D_CHILDREN, h(children.removePhoto));
-// Health records + case files: 180-second elevated access, enforced here.
+// Health records (level 3): 180-second elevated access, enforced here. Case files moved to the core record above.
 router.post('/children/:id/health-access', OPS, tokenLimiter, D_HEALTH, h(children.requestHealthAccess));
 router.post('/children/:id/health-access/revoke', OPS, D_HEALTH, h(children.revokeHealthAccess));
 router.get('/children/:id/protected', OPS, requireHealthAccess, D_HEALTH, h(children.getProtected));
 router.put('/children/:id/health', OPS, requireHealthAccess, D_HEALTH, h(children.updateHealth));
-router.put('/children/:id/case-files', OPS, requireHealthAccess, D_HEALTH, h(children.updateCaseFiles));
 
 // ---------- Public-safe child profiles (donors, applicants) ----------
 router.get('/public-children', ANY, h(children.publicList));

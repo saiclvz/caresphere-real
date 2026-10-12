@@ -168,6 +168,7 @@ exports.logout = async (req, res) => {
   // Signing out locks every sensitive section again (protected grants end).
   await require('../services/protectedRecords').revokeGrantsForUser(req.user.user_id).catch(() => {});
   await require('../services/unlockService').endForUser(req.user.user_id).catch(() => {});
+  await require('../services/childAccess').endMonitoringForUser(req.user.user_id, 'signed_out').catch(() => {}); // a monitoring visit ends with sign-out
   await pool.query('INSERT IGNORE INTO tbl_revoked_tokens (jti, expires_at) VALUES (?, FROM_UNIXTIME(?))',
     [req.auth.jti, req.auth.exp]);
   await logActivity(req, 'LOGOUT', `User #${req.user.user_id}`);

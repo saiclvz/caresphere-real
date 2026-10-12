@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Navigate, NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Contact,
   Baby, Boxes, CalendarClock, ChevronDown, ClipboardList, FileHeart, Gift, GraduationCap, HandCoins, HeartHandshake,
@@ -12,10 +12,12 @@ import Logo, { LogoMark } from './Logo';
 import { useApp } from '../context/AppContext';
 import { hasDuty, PAGE_DUTY } from '../lib/duties';
 import ProtectedContent from './ProtectedContent';
+import MonitoringBar from './children/MonitoringBar';
+import useApi from '../hooks/useApi';
 
 // Admin and Staff share the Children Management group.
 const CHILDREN_GROUP = {
-  label: 'Children Management', icon: Baby, match: ['/children', '/adoptions', '/transitions'],
+  label: 'Children Management', icon: Baby, match: ['/children', '/admissions', '/adoptions', '/transitions'],
   items: [
     { to: '/children', label: 'Children', icon: Baby },
     { to: '/adoptions', label: 'Adoption', icon: FileHeart },
@@ -125,7 +127,7 @@ function NavGroup({ group }) {
   );
 }
 
-function Sidebar() {
+function Sidebar({ monitoring }) {
   const { user, logout } = useAuth();
   const { collapsed, orgName, mobileOpen, setMobileOpen } = useApp();
   const location = useLocation();
@@ -140,7 +142,8 @@ function Sidebar() {
   const showFull = !collapsed || mobileOpen;
   // Staff see only the areas in their duties; a group with nothing left is hidden.
   const allowed = (i) => !PAGE_DUTY[i.to] || hasDuty(user, PAGE_DUTY[i.to]);
-  const items = (NAV[user.role] || [])
+  // A monitoring visit (Admin) shows the selected child records only.
+  const items = monitoring ? [{ to: '/children', label: 'Children (monitoring visit)', icon: Baby }] : (NAV[user.role] || [])
     .map((i) => (i.items ? { ...i, items: i.items.filter(allowed) } : i))
     .filter((i) => (i.items ? i.items.length > 0 : allowed(i)));
 
@@ -180,7 +183,7 @@ function Sidebar() {
   );
 }
 
-function Header() {
+function Header({ monitoring }) {
   const { user } = useAuth();
   const { search, setSearch, commitSearch, collapsed, setCollapsed, setMobileOpen } = useApp();
   return (
@@ -202,7 +205,7 @@ function Header() {
       </div>
       <div className="ml-auto flex items-center gap-1.5 sm:gap-3">
         <DisplaySettings />
-        <NotificationBell />
+        {!monitoring && <NotificationBell />}
         <span className="hidden text-sm text-slate-600 sm:inline">{user.full_name}</span>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${ROLE_TONE[user.role]}`}>{user.role}</span>
       </div>
@@ -212,7 +215,7 @@ function Header() {
 
 // Page names for the capture log (the guard now covers every page, so the log says which one).
 const AREA_BY_PATH = [
-  ['/children', 'Child records'], ['/adoptions', 'Adoption records'], ['/transitions', 'Transition records'], ['/transition-reviews', 'Transition records'],
+  ['/children', 'Child records'], ['/admissions', 'Child records'], ['/adoptions', 'Adoption records'], ['/transitions', 'Transition records'], ['/transition-reviews', 'Transition records'],
   ['/protected', 'Protected records'], ['/donations', 'Donor records'], ['/visitors', 'Visitor records'], ['/users', 'Account records'],
   ['/audit-log', 'Audit log'], ['/data-protection', 'Data protection'], ['/applications', 'Your application'], ['/donate', 'Donation'],
   ['/adopt', 'Children available for adoption'], ['/inventory', 'Inventory'], ['/meals', 'Meals'], ['/my-schedule', 'My schedule'],
@@ -222,13 +225,19 @@ const areaFor = (path) => (AREA_BY_PATH.find(([p]) => path === p || path.startsW
 
 export default function Layout() {
   const { collapsed } = useApp();
+  const { user } = useAuth();
   const location = useLocation();
+  // Admin monitoring visit (NACC, DSWD): read-only, selected records only; the server enforces it.
+  const mon = useApi(user.role === 'Admin' ? '/monitoring' : null);
+  const monitoring = mon.data?.data || null;
+  if (monitoring && !location.pathname.startsWith('/children')) return <Navigate to="/children" replace />;
   return (
     <div className="min-h-screen bg-page">
       <a href="#cs-main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70] focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-navy-900 focus:shadow-modal">Skip to main content</a>
-      <Sidebar />
+      <Sidebar monitoring={monitoring} />
       <div className={`transition-[padding] duration-200 ${collapsed ? 'lg:pl-[76px]' : 'lg:pl-64'}`}>
-        <Header />
+        <Header monitoring={monitoring} />
+        {monitoring && <MonitoringBar monitoring={monitoring} adminName={user.full_name} />}
         <main id="cs-main" tabIndex={-1} className="mx-auto max-w-7xl px-4 py-6 focus:outline-none sm:px-6 lg:py-8">
           {/* Every signed-in page is inside the one protection guard, so Staff and Donors get the same
               screenshot deterrents on every page (Admin is exempt by policy; see ProtectedContent). */}

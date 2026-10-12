@@ -65,30 +65,25 @@ async function recordLabel(recordType, recordId) {
 }
 
 /**
- * Need-to-know. Admin: always. Staff: only when assigned, and only while that Staff account is active:
- *  - adoption: the application's assigned staff
- *  - transition_review: the review's assigned staff
- *  - health: the child's case worker
+ * Need-to-know, through the ONE assignment service (services/assignment.js) and policy (services/childAccess.js).
+ * Admin: always. Staff: only while assigned (primary, backup or temporary cover) with an active account:
+ *  - adoption: the application's assignment
+ *  - transition_review: the review's assignment, or the child's case worker assignment
+ *  - health: the child's case worker assignment (never initial or emergency access)
  */
 async function access(req, recordType, recordId) {
   let row;
   if (recordType === 'adoption_application') {
-    [[row]] = await pool.query(
-      `SELECT a.status, a.assigned_staff_id, u.is_active FROM tbl_adoption_applications a
-         LEFT JOIN tbl_users u ON u.user_id = a.assigned_staff_id WHERE a.application_id = ?`, [recordId]);
+    [[row]] = await pool.query('SELECT status FROM tbl_adoption_applications WHERE application_id = ?', [recordId]);
     if (row && row.status === 'Draft') row = null;
   } else if (recordType === 'transition_review') {
-    [[row]] = await pool.query(
-      `SELECT tr.assigned_staff_id, u.is_active FROM tbl_transition_reviews tr
-         LEFT JOIN tbl_users u ON u.user_id = tr.assigned_staff_id WHERE tr.review_id = ?`, [recordId]);
+    [[row]] = await pool.query('SELECT review_id FROM tbl_transition_reviews WHERE review_id = ?', [recordId]);
   } else {
-    [[row]] = await pool.query(
-      `SELECT c.assigned_staff_id, u.is_active FROM tbl_children c
-         LEFT JOIN tbl_users u ON u.user_id = c.assigned_staff_id WHERE c.child_id = ?`, [recordId]);
+    [[row]] = await pool.query('SELECT child_id FROM tbl_children WHERE child_id = ?', [recordId]);
   }
   if (!row) throw new HttpError(404, 'Record not found.');
   if (req.user.role === 'Admin') return { allowed: true };
-  return row.assigned_staff_id === req.user.user_id && row.is_active ? { allowed: true } : { allowed: false, reason: 'not_assigned' };
+  return (await require('./childAccess').isAssigned(req, recordType, recordId)) ? { allowed: true } : { allowed: false, reason: 'not_assigned' };
 }
 
 async function lockedOut(userId) {

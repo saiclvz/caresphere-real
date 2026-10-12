@@ -27,15 +27,9 @@ async function changeActive(req, user, active) {
     await logActivityWith(conn, req, active ? 'REACTIVATE_USER' : 'DEACTIVATE_USER', `User #${user.user_id} (${user.email})`);
     await Notify.toAdmins(conn, 'admin_account_changed', { params: { role: user.role, change: active ? 'reactivated' : 'deactivated', id: user.user_id }, exceptUserId: req.user.user_id });
     if (user.role === 'Donor') await Notify.emit(conn, active ? 'account_reactivated' : 'account_deactivated', { userId: user.user_id });
-    if (user.role === 'Staff' && !active) {
-      const [[c]] = await conn.query(
-        `SELECT (SELECT COUNT(*) FROM tbl_adoption_applications WHERE assigned_staff_id = ? AND status NOT IN ('Draft', 'Closed', 'Declined', 'Withdrawn'))
-              + (SELECT COUNT(*) FROM tbl_transition_reviews WHERE assigned_staff_id = ? AND review_status <> 'Completed')
-              + (SELECT COUNT(*) FROM tbl_children WHERE assigned_staff_id = ? AND status = 'Active') AS n`, [user.user_id, user.user_id, user.user_id]);
-      if (Number(c.n)) {
-        await Notify.toAdmins(conn, 'admin_unassigned', { params: { count: Number(c.n), where: '/adoptions' }, groupKey: `unassigned:user:${user.user_id}`, mode: 'set' });
-      }
-    }
+    // A deactivated Staff account: its unlock sessions end and its records are marked "needs reassignment"
+    // (one assignment service; Admins get one alert with the count).
+    if (user.role === 'Staff' && !active) await require('../services/assignment').staffLostAccess(conn, req, user.user_id, { reason: 'account_deactivated' });
   });
 }
 const { problem: passwordProblem } = require('../utils/passwordPolicy');
@@ -139,7 +133,12 @@ exports.update = async (req, res) => {
     if (fields.role_id !== undefined) {
       const newRole = cleanRole(req.body.role);
       if (newRole === 'Staff' && user.role !== 'Staff') await withTransaction((conn) => User.setDuties(conn, id, DEFAULT_DUTIES, req.user.user_id));
-      if (newRole !== 'Staff' && user.role === 'Staff') await withTransaction((conn) => User.setDuties(conn, id, [], req.user.user_id));
+      if (newRole !== 'Staff' && user.role === 'Staff') {
+        await withTransaction(async (conn) => {
+          await User.setDuties(conn, id, [], req.user.user_id);
+          await require('../services/assignment').staffLostAccess(conn, req, id, { reason: 'duty_removed' });
+        });
+      }
     }
     if (leavingAdmin) {
       await mfa.reset(id);
@@ -212,6 +211,9 @@ exports.setDuties = async (req, res) => {
     await User.setDuties(conn, id, duties, req.user.user_id);
     await logActivityWith(conn, req, `UPDATE_DUTIES (${before.join(', ') || 'none'} -> ${duties.join(', ') || 'none'})`, `User #${id}`);
     await Notify.emit(conn, 'duties_changed', { userId: id, params: { duties: duties.map((d) => DUTIES[d].label).join(', ') || 'none' } });
+    // Losing a records duty: open unlock sessions end and the affected records are marked "needs reassignment".
+    const lost = before.filter((d) => !duties.includes(d) && ['children', 'health', 'adoption', 'transition'].includes(d));
+    if (lost.length) await require('../services/assignment').staffLostAccess(conn, req, id, { reason: 'duty_removed', duties: lost });
   });
   res.json({ success: true, data: await User.findById(id) });
 };
