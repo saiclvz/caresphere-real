@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CareSphere
 
 **A QR Code Integrated Web-Based Dashboard System for Child Registry and Welfare Home Operations Management**
@@ -166,3 +167,6 @@ Run `npm run migrate` again in `backend/`. Migration `003_v2_updates.sql` adds t
 | Browser shows a CORS error | Add the exact origin (scheme + IP + port) to `CORS_ORIGINS` and restart the API |
 | A receipt code is not found | Copy the code printed under the QR image exactly; spaces and line breaks are ignored |
 | "Token expired" right after scanning | Expiry is checked against the server's own clock (Node and MySQL on the same PC), so client clocks don't matter. Make sure MySQL and Node use the same system time, and type the Token ID within 60 seconds |
+=======
+# caresphere-real
+>>>>>>> 5e94504489bba9d84ea5c1e5307a504f930b7c99
