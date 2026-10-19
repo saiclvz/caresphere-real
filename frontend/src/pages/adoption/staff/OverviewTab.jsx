@@ -1,6 +1,7 @@
 import { ArrowRight } from 'lucide-react';
 import { Card } from '../../../components/ui';
 import { StatusChip } from './common';
+import { adoptionLabel } from '../../../lib/adoptionStatus';
 
 /** Overview: documents verified, blocking items with their status, days in this stage, missing answers. Uses the shell (no extra load). */
 export default function OverviewTab({ app, onGo }) {
@@ -11,7 +12,7 @@ export default function OverviewTab({ app, onGo }) {
       <div className="grid gap-3 sm:grid-cols-3">
         <Card className="p-4"><p className="text-xs text-slate-500">Required items verified</p><p className="mt-1 text-2xl font-semibold text-navy-900">{s.verified} <span className="text-base font-normal text-slate-500">of {s.required}</span></p>
           <div className="mt-2 h-1.5 rounded-full bg-slate-100" aria-hidden><div className="h-1.5 rounded-full bg-brand" style={{ width: `${pct}%` }} /></div></Card>
-        <Card className="p-4"><p className="text-xs text-slate-500">Days in this stage</p><p className="mt-1 text-2xl font-semibold text-navy-900">{app.days_in_stage ?? '–'}</p><p className="text-xs text-slate-500">{app.status}</p></Card>
+        <Card className="p-4"><p className="text-xs text-slate-500">Days in this stage</p><p className="mt-1 text-2xl font-semibold text-navy-900">{app.days_in_stage ?? '–'}</p><p className="text-xs text-slate-500">{adoptionLabel(app.status)}</p></Card>
         <Card className="p-4"><p className="text-xs text-slate-500">Missing answers</p><p className="mt-1 text-2xl font-semibold text-navy-900">{app.missing_answers.length}</p>
           {app.missing_answers.length > 0 && <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => onGo('applicant')}>See them in Applicant</button>}</Card>
       </div>

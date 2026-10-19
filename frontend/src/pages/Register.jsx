@@ -22,12 +22,13 @@ function validate(form) {
   else { const p = passwordProblem(form.password, { email: form.email, name: form.full_name }); if (p) e.password = p; }
   if (!form.confirm) e.confirm = 'Confirm password is required.';
   else if (form.confirm !== form.password) e.confirm = 'Passwords do not match.';
+  if (!form.accept) e.accept = 'Read and agree to the Terms and Conditions and the Privacy Policy to create an account.';
   return e;
 }
 
 export default function Register() {
   const { register } = useAuth();
-  const [form, setForm] = useState({ full_name: '', email: '', password: '', confirm: '' });
+  const [form, setForm] = useState({ full_name: '', email: '', password: '', confirm: '', accept: false });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -35,7 +36,7 @@ export default function Register() {
   // Update a field, and re-check only the fields that are already showing an error,
   // so each message clears as soon as the user fixes it.
   const set = (k) => (e) => {
-    const next = { ...form, [k]: e.target.value };
+    const next = { ...form, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value };
     setForm(next);
     setErrors((prev) => {
       if (!Object.keys(prev).length) return prev;
@@ -54,7 +55,7 @@ export default function Register() {
     try {
       await register({
         full_name: form.full_name.trim(), email: form.email.trim(),
-        password: form.password, confirm_password: form.confirm,
+        password: form.password, confirm_password: form.confirm, accept_terms: form.accept === true,
       });
     } catch (err) {
       setError(err);
@@ -83,6 +84,15 @@ export default function Register() {
         <Field label="Confirm password" required error={errors.confirm}>
           <PasswordInput value={form.confirm} onChange={set('confirm')} invalid={!!errors.confirm} autoComplete="new-password" minLength={8} />
         </Field>
+        <div>
+          <label className="flex items-start gap-2.5 text-sm text-slate-700">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-brand" required checked={form.accept} onChange={set('accept')}
+              aria-invalid={!!errors.accept || undefined} aria-describedby={errors.accept ? 'reg-accept-error' : undefined} />
+            <span>I have read and agree to the CareSphere <Link to="/terms" target="_blank" rel="noopener" className="font-medium text-brand underline">Terms and Conditions</Link> and
+              acknowledge the CareSphere <Link to="/privacy" target="_blank" rel="noopener" className="font-medium text-brand underline">Privacy Policy</Link>.</span>
+          </label>
+          {errors.accept && <p id="reg-accept-error" className="mt-1 text-xs text-red-600">{errors.accept}</p>}
+        </div>
         <Button type="submit" className="w-full" size="lg" loading={loading}>Create account</Button>
       </form>
       <p className="mt-6 text-center text-sm text-slate-500">

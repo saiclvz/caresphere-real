@@ -41,7 +41,7 @@ const STAGES = {
   'Order of Adoption issued': { phase: 'finalization', donor: 'The Order of Adoption has been issued.', next: 'The civil registry record will be updated.' },
   'Civil registry updated': { phase: 'finalization', donor: 'The civil registry record has been updated.', next: 'The home will close your case.' },
   Closed: { phase: 'finalization', donor: 'Your adoption case is complete and closed.', next: null },
-  Declined: { phase: null, donor: 'Your application was not approved.', next: 'See the remark from the home for details. You may apply again.' },
+  Declined: { phase: null, donorLabel: 'Rejected', donor: 'Your application was not approved.', next: 'See the remark from the home for details. You may apply again.' },
   Withdrawn: { phase: null, donor: 'You withdrew this application. It stays on file.', next: 'You can start a new application at any time.' },
 };
 const STATUSES = Object.keys(STAGES);

@@ -4,11 +4,12 @@ const Child = require('../models/childModel');
 const access = require('../services/healthAccessService');
 const HttpError = require('../utils/HttpError');
 const { sha256, randomCode } = require('../utils/crypto');
-const { saveUpload, readUpload, deleteUpload, mimeFromKey, MB } = require('../utils/files');
+const { saveUpload, readUpload, discardUnsavedUpload, mimeFromKey, MB } = require('../utils/files');
+const Retained = require('../services/retainedFiles');
 const {
   requireFields, oneOf, requireDate, trimOrNull, toBool, localToday, ageOn, requireText,
 } = require('../utils/validate');
-const { logActivity, logActivityWith } = require('../utils/audit');
+const { logActivity, logActivityWith, logChange, diff } = require('../utils/audit');
 const { readPagination } = require('../utils/pagination');
 const Policy = require('../services/childAccess');
 
@@ -17,6 +18,9 @@ const STATUSES = ['Active', 'Discharged', 'Adopted'];
 // square: profile photos are cropped to a square in the browser; the server checks it too.
 const PHOTO_OPTS = { folder: 'child-photos', allowed: ['jpg', 'png'], maxBytes: 5 * MB, label: 'Profile photo', square: true };
 const OVER_AGE = 'Registration denied. The child exceeds the maximum age requirement.';
+const HEALTH_LABELS = { blood_type: 'Blood type', allergies: 'Allergies', vaccinations: 'Vaccinations', prescriptions: 'Prescriptions', doctor_notes: 'Doctor notes' };
+const CHILD_FIELD_LABELS = { first_name: 'First name', last_name: 'Last name', gender: 'Gender', dob: 'Date of birth', admission_date: 'Admission date',
+  urgent_needs: 'Urgent needs', public_bio: 'Public bio', is_public: 'Shown on the donor portal', available_for_adoption: 'Available for adoption', status: 'Status' };
 
 // Re-check 18+ flags at most every 10 minutes (and at start-up / daily from server.js).
 let lastSync = 0;
@@ -80,7 +84,7 @@ exports.list = async (req, res) => {
   if (!isAdmin && ['unassigned', 'attention'].includes(assigned)) assigned = undefined;
   const monitoring = await Policy.monitoringOf(req);
   const result = await Child.list({ status, search: req.query.q, flagged: toBool(req.query.flagged), paging, sort, assigned, viewerId: req.user.user_id,
-    searchFull: isAdmin, ids: monitoring ? monitoring.child_ids : undefined });
+    searchFull: isAdmin, ids: monitoring ? monitoring.child_ids : undefined, archived: isAdmin && toBool(req.query.archived) });
   const rows = paging ? result.rows : result;
   const data = await Policy.shapeList(req, rows.map((c) => ({ ...c, cdclaa_verified: Boolean(c.cdclaa_verified_at) })));
   await logActivity(req, `CRA_DIRECTORY_VIEWED (list, ${data.length} rows${req.query.q ? ', search' : ''})`, 'Children');
@@ -102,8 +106,8 @@ exports.getOne = async (req, res) => {
   else await logActivity(req, d.core ? 'CRA_CORE_RECORD_OPENED' : 'CRA_DIRECTORY_VIEWED (child page)', `Child ${d.child_id}`);
   const [[pending]] = await require('../config/db').pool.query("SELECT request_id, created_at FROM tbl_child_access_requests WHERE child_id = ? AND requested_by = ? AND status = 'Pending'", [d.child_id, req.user.user_id]);
   data.access = { ...data.access, can: { care_card: d.care_card, core: d.core, sensitive: d.sensitive_assigned || req.user.role === 'Admin', edit_care_card: d.edit_care_card,
-    edit_photo: d.edit_photo, access_tab: d.access_tab, edit: d.core && !d.read_only, emergency: false, request: req.user.role === 'Staff' && d.directory && !d.core },
-  initial: d.initial ? { ends_at: d.initial.ends_at } : null, emergency: d.emergency ? { expires_at: d.emergency.expires_at } : null,
+    edit_photo: d.edit_photo, access_tab: d.access_tab, edit: d.core && !d.read_only, request: req.user.role === 'Staff' && d.directory && !d.core },
+  initial: d.initial ? { ends_at: d.initial.ends_at } : null,
   assignment: d.assignment ? { type: d.assignment.type, ends_at: d.assignment.ends_at } : null, read_only: d.read_only, monitoring: Boolean(d.monitoring),
   pending_request: pending || null, registered_by_me: Boolean(d.initial),
   // Not admitted yet: the page sends the viewer to the admission (Admin or the staff member who created it).
@@ -144,11 +148,6 @@ exports.duplicateCheck = async (req, res) => {
   res.json({ success: true, data: await Policy.duplicateCheck(req, req.body || {}) });
 };
 
-/** POST /api/children/:id/intake-complete - the registering Staff member ends their temporary access. */
-exports.intakeComplete = async (req, res) => {
-  await Policy.intakeComplete(req, req.params.id);
-  res.json({ success: true, message: 'Intake marked complete. You now see the directory only.' });
-};
 
 /**
  * PUT /api/children/:id  (Admin, Staff)
@@ -205,31 +204,57 @@ exports.update = async (req, res) => {
     if (nextStatus !== 'Active') fields.available_for_adoption = 0; // only Active children can be listed
   }
 
+  // What changed, for the audit log (previous and new value; free-text needs and bio only "changed").
+  const changes = diff(child, fields, { labels: CHILD_FIELD_LABELS, sensitive: ['urgent_needs', 'public_bio'] });
   await withTransaction(async (conn) => {
     await Child.update(child.child_id, fields, conn);
     if (discharge) {
       await Child.insertDischarge(conn, { ...discharge, child_id: child.child_id, reported_by: req.user.user_id, previous_status: child.status });
     }
+    const target = `Child ${child.child_id}`;
+    if (discharge) await logChange(conn, req, 'DISCHARGE_CHILD', target, { changes: changes.filter((c) => c.field === 'Status'), reason: 'Discharge details recorded in the discharge history' });
+    else if (fields.status) await logChange(conn, req, `STATUS_${child.status.toUpperCase()}_TO_${fields.status.toUpperCase()}`, target, { changes: changes.filter((c) => c.field === 'Status') });
+    const other = changes.filter((c) => c.field !== 'Status');
+    if (other.length) await logChange(conn, req, 'UPDATE_CHILD', target, { changes: other });
   });
-
-  if (discharge) await logActivity(req, 'DISCHARGE_CHILD', `Child ${child.child_id}`);
-  else if (fields.status) await logActivity(req, `STATUS_${child.status.toUpperCase()}_TO_${fields.status.toUpperCase()}`, `Child ${child.child_id}`);
-  if (Object.keys(fields).some((k) => k !== 'status')) await logActivity(req, 'UPDATE_CHILD', `Child ${child.child_id}`);
   if (fields.dob) await syncFlags(true);
   res.json({ success: true, data: await Child.findById(child.child_id) });
 };
 
-/** DELETE /api/children/:id (Admin) */
+/**
+ * DELETE /api/children/:id { reason } (Admin) - children are never deleted (migration 034). For a record created by
+ * mistake or a duplicate, the child is ARCHIVED: the row and everything linked to it (health, case files, admission,
+ * adoption, transition, uploaded files, audit log) stay; normal lists hide it; Admin can list and restore it.
+ * A child with discharge, adoption, legal or access history, or one still in admission, can't be archived:
+ * change the status (or decline the admission) instead.
+ */
 exports.remove = async (req, res) => {
   const child = await Child.photoPath(req.params.id);
   if (!child) throw new HttpError(404, 'Child record not found.');
+  if (child.archived_at) throw new HttpError(409, 'This child record is already archived.');
+  const reason = String(req.body?.reason || req.query.reason || '').trim();
+  if (reason.length < 5) throw new HttpError(400, 'Give the reason for archiving this record (for example "Duplicate of CS-2026-0003").', { errors: { reason: 'Give the reason (at least 5 characters).' } });
+  if (child.status === 'In admission') throw new HttpError(409, 'This child is still in admission. Decline the admission instead.');
   if (await Child.hasProtectedHistory(req.params.id)) {
-    throw new HttpError(409, 'This child has discharge, adoption or legal records that must be kept. Change the status instead of deleting.');
+    throw new HttpError(409, 'This child has discharge, adoption, legal or access history that must stay in the records. Change the status instead of archiving.');
   }
-  await Child.remove(req.params.id);
-  deleteUpload(child.profile_photo_path);
-  await logActivity(req, 'DELETE_CHILD', `Child ${req.params.id}`);
-  res.json({ success: true, message: 'Child record deleted.' });
+  await withTransaction(async (conn) => {
+    await Child.archive(conn, req.params.id, req.user.user_id, reason.slice(0, 500));
+    await logChange(conn, req, 'ARCHIVE_CHILD', `Child ${req.params.id}`, { reason: reason.slice(0, 500) });
+  });
+  res.json({ success: true, message: 'Child record archived. Nothing was deleted.' });
+};
+
+/** POST /api/children/:id/restore (Admin) - brings an archived child record back to the lists. */
+exports.restore = async (req, res) => {
+  const child = await Child.photoPath(req.params.id);
+  if (!child) throw new HttpError(404, 'Child record not found.');
+  if (!child.archived_at) throw new HttpError(409, 'This child record is not archived.');
+  await withTransaction(async (conn) => {
+    await Child.restore(conn, req.params.id);
+    await logChange(conn, req, 'RESTORE_CHILD', `Child ${req.params.id}`, { reason: String(req.body?.reason || '').trim().slice(0, 500) || null });
+  });
+  res.json({ success: true, data: await Child.findById(req.params.id) });
 };
 
 // ---------------------------------------------------------------- photos
@@ -238,9 +263,14 @@ exports.uploadPhoto = async (req, res) => {
   const child = await Child.photoPath(req.params.id);
   if (!child) throw new HttpError(404, 'Child record not found.');
   const saved = saveUpload(req.body.photo, PHOTO_OPTS);
-  await Child.update(req.params.id, { profile_photo_path: saved.storage_key });
-  deleteUpload(child.profile_photo_path);
-  await logActivity(req, 'UPDATE_CHILD_PHOTO', `Child ${req.params.id}`);
+  try {
+    await withTransaction(async (conn) => {
+      await Child.update(req.params.id, { profile_photo_path: saved.storage_key }, conn);
+      // The previous photo stays on disk, recorded as Replaced (uploaded files are never deleted).
+      await Retained.retain(conn, req, { area: 'child_photo', childId: req.params.id, key: child.profile_photo_path, status: 'Replaced', replacedByKey: saved.storage_key });
+      await logChange(conn, req, 'UPDATE_CHILD_PHOTO', `Child ${req.params.id}`, { changes: [{ field: 'Profile photo', old: child.profile_photo_path ? 'Previous photo (kept)' : null, new: 'New photo', sensitive: false }] });
+    });
+  } catch (err) { discardUnsavedUpload(saved.storage_key); throw err; }
   res.json({ success: true, data: await Child.findById(req.params.id) });
 };
 
@@ -248,9 +278,13 @@ exports.removePhoto = async (req, res) => {
   await Policy.check(req, req.params.id, 'edit_photo', 'remove photo');
   const child = await Child.photoPath(req.params.id);
   if (!child) throw new HttpError(404, 'Child record not found.');
-  await Child.update(req.params.id, { profile_photo_path: null });
-  deleteUpload(child.profile_photo_path);
-  await logActivity(req, 'REMOVE_CHILD_PHOTO', `Child ${req.params.id}`);
+  if (!child.profile_photo_path) throw new HttpError(404, 'This child has no profile photo.');
+  await withTransaction(async (conn) => {
+    await Child.update(req.params.id, { profile_photo_path: null }, conn);
+    // The file stays on disk, recorded as Removed (uploaded files are never deleted).
+    await Retained.retain(conn, req, { area: 'child_photo', childId: req.params.id, key: child.profile_photo_path, status: 'Removed', reason: String(req.body?.reason || '').trim() || null });
+    await logChange(conn, req, 'REMOVE_CHILD_PHOTO', `Child ${req.params.id}`, { changes: [{ field: 'Profile photo', old: 'Photo (kept in the archive)', new: null, sensitive: false }] });
+  });
   res.json({ success: true, data: await Child.findById(req.params.id) });
 };
 
@@ -329,9 +363,11 @@ exports.getProtected = async (req, res) => {
 exports.updateHealth = async (req, res) => {
   await Policy.check(req, req.params.id, 'sensitive', 'update health record');
   const clean = Object.fromEntries(Child.PHI_FIELDS.map((f) => [f, trimOrNull(req.body[f], 5000)]));
+  const before = await Child.getHealth(req.params.id) || {};
   await Child.upsertHealth(req.params.id, clean, req.user.user_id);
   await access.logEvent(req, req.params.id, 'UPDATE', 'Health record');
-  await logActivity(req, 'UPDATE_HEALTH_RECORD', `Child ${req.params.id}`);
+  // Health values are never written to the audit log: only which fields changed.
+  await logChange(null, req, 'UPDATE_HEALTH_RECORD', `Child ${req.params.id}`, { changes: diff(before, clean, { sensitive: Child.PHI_FIELDS, labels: HEALTH_LABELS }) });
   res.json({ success: true, data: await Child.getHealth(req.params.id) });
 };
 
@@ -347,11 +383,14 @@ exports.getCaseFiles = async (req, res) => {
 exports.updateCaseFiles = async (req, res) => {
   const d = await Policy.check(req, req.params.id, 'core', 'edit case files');
   if (d.read_only) throw new HttpError(403, 'Monitoring mode is read-only.');
-  await Child.update(d.child_id, {
+  const next = {
     background_care_info: trimOrNull(req.body.background_care_info, 10000),
     guardian_family_info: trimOrNull(req.body.guardian_family_info, 10000),
-  });
-  await logActivity(req, 'UPDATE_CASE_FILES', `Child ${d.child_id}`);
+  };
+  const before = await Child.getCaseFiles(d.child_id) || {};
+  await Child.update(d.child_id, next);
+  // Case notes are sensitive: the audit log says which fields changed, not their text.
+  await logChange(null, req, 'UPDATE_CASE_FILES', `Child ${d.child_id}`, { changes: diff(before, next, { sensitive: Object.keys(next), labels: { background_care_info: 'Background and care information', guardian_family_info: 'Guardian and family information' } }) });
   res.json({ success: true, data: await Child.getCaseFiles(d.child_id) });
 };
 

@@ -85,7 +85,7 @@ export default function Notifications() {
   const toggleAll = () => setSelected(allShown ? new Set() : new Set(rows.map((r) => r.notification_id)));
 
   const filterBar = (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Field label="Status">
         <select className="input h-10" value={f.status} onChange={(e) => setFilter({ status: e.target.value })}>
           <option value="all">All</option><option value="unread">Unread</option><option value="read">Read</option>
@@ -117,7 +117,7 @@ export default function Notifications() {
         <div className="flex flex-wrap gap-1.5">
           {categories.filter((c) => !c.priority).map((c) => (
             <button key={c.key} type="button" aria-pressed={cats.includes(c.key)} onClick={() => setFilter({ category: toggle(cats, c.key) })}
-              className={`rounded-full px-3 py-1 text-xs font-medium ${cats.includes(c.key) ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{c.label}</button>
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${cats.includes(c.key) ? 'bg-brand text-white' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 hover:text-navy-900'}`}>{c.label}</button>
           ))}
         </div>
       </fieldset>
@@ -127,7 +127,7 @@ export default function Notifications() {
           <div className="flex flex-wrap gap-1.5">
             {['action', 'warning', 'info'].map((p) => (
               <button key={p} type="button" aria-pressed={prios.includes(p)} onClick={() => setFilter({ priority: toggle(prios, p) })}
-                className={`rounded-full px-3 py-1 text-xs font-medium ${prios.includes(p) ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{PRIORITY_LABEL[p]}</button>
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${prios.includes(p) ? 'bg-brand text-white' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 hover:text-navy-900'}`}>{PRIORITY_LABEL[p]}</button>
             ))}
           </div>
         </fieldset>
@@ -174,18 +174,18 @@ export default function Notifications() {
             {rows.map((n) => {
               const Icon = iconFor(n);
               return (
-                <li key={n.notification_id} className={`flex items-start gap-3 px-4 py-3 ${n.is_read ? '' : 'bg-blue-50/50'}`}>
+                <li key={n.notification_id} className={`relative flex min-w-0 items-start gap-3 px-4 py-3.5 ${n.is_read ? '' : 'bg-brand-50/60 before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-brand'}`}>
                   <input type="checkbox" className="mt-1 h-4 w-4 accent-brand" checked={selected.has(n.notification_id)} aria-label={`Select ${n.title}`}
                     onChange={() => setSelected((s) => { const x = new Set(s); if (x.has(n.notification_id)) x.delete(n.notification_id); else x.add(n.notification_id); return x; })} />
                   <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${n.priority === 'action' ? 'text-red-600' : n.priority === 'warning' ? 'text-amber-600' : 'text-slate-500'}`} aria-hidden />
                   <button type="button" onClick={() => openItem(n)} className="min-w-0 flex-1 text-left">
-                    <span className={`block text-sm ${n.is_read ? 'text-slate-700' : 'font-semibold text-navy-900'}`}>{n.title}</span>
-                    <span className="block text-xs text-slate-500">{n.body}</span>
-                    <span className="block text-[11px] text-slate-400" title={formatDateTime(n.created_at)}>{relativeTime(n.created_at)}
+                    <span className={`block break-words text-sm [overflow-wrap:anywhere] ${n.is_read ? 'text-slate-700' : 'font-semibold text-navy-900'}`}>{!n.is_read && <span className="sr-only">Unread: </span>}{n.title}</span>
+                    <span className="mt-0.5 block break-words text-sm text-slate-600 [overflow-wrap:anywhere]">{n.body}</span>
+                    <span className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500" title={formatDateTime(n.created_at)}>{relativeTime(n.created_at)}
                       {isAdmin && n.priority !== 'info' && <> · <Badge tone={n.priority === 'action' ? 'red' : 'amber'}>{PRIORITY_LABEL[n.priority]}</Badge></>}</span>
                   </button>
-                  <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row">
-                    <button type="button" className="text-xs text-brand hover:underline" onClick={() => act(n.is_read ? 'unread' : 'read', [n.notification_id])}>{n.is_read ? 'Mark as unread' : 'Mark as read'}</button>
+                  <div className="flex shrink-0 flex-col items-end gap-1.5 sm:flex-row sm:gap-3">
+                    <button type="button" className="text-xs font-medium text-brand hover:underline" onClick={() => act(n.is_read ? 'unread' : 'read', [n.notification_id])}>{n.is_read ? 'Mark as unread' : 'Mark as read'}</button>
                     <button type="button" className="text-xs text-slate-500 hover:underline" onClick={() => act('dismiss', [n.notification_id])}>Dismiss</button>
                   </div>
                 </li>

@@ -16,25 +16,14 @@ const shape = (r) => ({ ...r, ends_next_day: !!r.ends_next_day, staff_inactive: 
 module.exports = {
   async list({ from, to, userId }) {
     const params = [from, to];
-    let sql = `${SELECT} WHERE s.shift_date BETWEEN ? AND ?`;
+    let sql = `${SELECT} WHERE s.archived_at IS NULL AND s.shift_date BETWEEN ? AND ?`;
     if (userId) { sql += ' AND s.user_id = ?'; params.push(userId); }
     sql += ' ORDER BY s.shift_date, s.start_time, u.full_name';
     const [rows] = await pool.query(sql, params);
     return rows.map(shape);
   },
   async findById(id) {
-    const [rows] = await pool.query(`${SELECT} WHERE s.schedule_id = ?`, [id]);
+    const [rows] = await pool.query(`${SELECT} WHERE s.schedule_id = ? AND s.archived_at IS NULL`, [id]);
     return rows[0] ? shape(rows[0]) : null;
-  },
-  /** Which kinds of records each staff member is assigned (for small icons on shift cards; counts only). */
-  async assignedAreas(userIds) {
-    if (!userIds.length) return {};
-    const [rows] = await pool.query(
-      `SELECT user_id, SUM(kind = 'health') AS health, SUM(kind = 'adoption') AS adoption, SUM(kind = 'transition') AS transition FROM (
-         SELECT assigned_staff_id AS user_id, 'health' AS kind FROM tbl_children WHERE assigned_staff_id IN (?) AND status = 'Active'
-         UNION ALL SELECT assigned_staff_id, 'adoption' FROM tbl_adoption_applications WHERE assigned_staff_id IN (?) AND status NOT IN ('Draft', 'Closed', 'Declined', 'Withdrawn')
-         UNION ALL SELECT assigned_staff_id, 'transition' FROM tbl_transition_reviews WHERE assigned_staff_id IN (?) AND review_status <> 'Completed'
-       ) x GROUP BY user_id`, [userIds, userIds, userIds]);
-    return Object.fromEntries(rows.map((r) => [r.user_id, { health: Number(r.health) > 0, adoption: Number(r.adoption) > 0, transition: Number(r.transition) > 0 }]));
   },
 };

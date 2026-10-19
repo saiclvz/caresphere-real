@@ -116,22 +116,7 @@ exports.decideRequest = async (req, res) => {
   ok(res, await Policy.requestList({ pending: true }), { message: 'Decision saved.' });
 };
 
-// ---------------------------------------------------------------- emergency access
-/** POST /api/children/:id/emergency-access (Staff) { reason, note? } - Care card + critical health summary, 30 minutes. */
-exports.startEmergency = async (req, res) => {
-  res.status(201).json({ success: true, data: await Policy.startEmergency(req, req.params.id, req.body) });
-};
-/** GET /api/children/:id/emergency-access - while it lasts. */
-exports.currentEmergency = async (req, res) => ok(res, await Policy.currentEmergency(req, req.params.id));
-/** POST /api/children/:id/emergency-access/end */
-exports.endEmergency = async (req, res) => { await Policy.endEmergency(req, req.params.id); ok(res, null, { message: 'Emergency access closed.' }); };
-/** GET /api/emergency-access?status=pending (Admin) - "Emergency access to review". */
-exports.listEmergency = async (req, res) => ok(res, await Policy.emergencyList({ pending: req.query.status === 'pending' }));
-/** POST /api/emergency-access/:id/review (Admin) { result: Justified | Not justified, note } */
-exports.reviewEmergency = async (req, res) => {
-  await Policy.reviewEmergency(req, toId(req.params.id), req.body);
-  ok(res, await Policy.emergencyList({ pending: true }), { message: 'Review saved.' });
-};
+// Emergency access was removed (no routes). Earlier uses are listed read-only in the Access tab (Admin).
 
 // ---------------------------------------------------------------- monitoring visits
 exports.startMonitoring = async (req, res) => { res.status(201).json({ success: true, data: await Policy.startMonitoring(req, req.body) }); };
@@ -160,7 +145,8 @@ async function settingsView() {
   const [staff] = await pool.query(
     `SELECT u.user_id, u.full_name FROM tbl_users u JOIN tbl_roles r ON r.role_id = u.role_id JOIN tbl_staff_duties sd ON sd.user_id = u.user_id AND sd.duty = 'children'
       WHERE r.role_name = 'Staff' AND u.is_active = TRUE ORDER BY u.full_name`);
-  return { settings: out, staff };
+  const checklist = require('../config/admission').CHECKLIST.map((c) => ({ key: c.key, label: c.label, condition: c.condition || null }));
+  return { settings: out, staff, admission_checklist: checklist };
 }
 
 /** GET /api/child-access/settings (Admin) */
@@ -179,6 +165,12 @@ exports.saveSettings = async (req, res) => {
     if (typeof def.def === 'number') {
       if (!/^\d{1,4}$/.test(v) || Number(v) < def.min || Number(v) > def.max) { errors[k] = `Enter ${def.min} to ${def.max}.`; continue; }
       v = String(Number(v));
+    }
+    if (def.list) { // admission_required_documents: checklist keys, comma separated
+      const keys = [...new Set(v.split(',').map((x) => x.trim()).filter(Boolean))];
+      const known = require('../config/admission').CHECKLIST.map((c) => c.key);
+      if (keys.some((x) => !known.includes(x))) { errors[k] = 'Choose documents from the admission checklist.'; continue; }
+      v = known.filter((x) => keys.includes(x)).join(',');
     }
     if (k === 'child_default_case_worker_id' && v) {
       if (!current.staff.some((s) => String(s.user_id) === v)) { errors[k] = 'Choose an active Staff member with the Child records duty.'; continue; }
@@ -225,8 +217,8 @@ exports.wouldBlock = async (req, res) => {
 /** GET /api/child-access/me - what the signed-in user can do (monitoring visit, mode). */
 exports.me = async (req, res) => {
   const s = await Policy.settings();
-  ok(res, { mode: s.child_access_mode, monitoring: await Policy.monitoringOf(req), emergency_reasons: L.EMERGENCY_REASONS, assignment_types: L.ASSIGNMENT_TYPES,
-    monitoring_orgs: L.MONITORING_ORGS, privacy_topics: L.PRIVACY_TOPICS, emergency_minutes: s.child_emergency_minutes });
+  ok(res, { mode: s.child_access_mode, monitoring: await Policy.monitoringOf(req), assignment_types: L.ASSIGNMENT_TYPES,
+    monitoring_orgs: L.MONITORING_ORGS, privacy_topics: L.PRIVACY_TOPICS });
 };
 
 /** GET /api/reassignment-flags (Admin) */

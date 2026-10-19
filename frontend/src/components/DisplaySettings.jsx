@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Accessibility, Check } from 'lucide-react';
-import { TEXT_SIZES, useDisplayPrefs } from '../lib/displayPrefs';
+import { SIDEBARS, TEXT_SIZES, THEMES, useDisplayPrefs } from '../lib/displayPrefs';
 
 function Toggle({ label, hint, checked, onChange }) {
   return (
@@ -14,11 +14,28 @@ function Toggle({ label, hint, checked, onChange }) {
   );
 }
 
+/** One setting with a few choices (pressed buttons, so the current choice is announced). */
+function Choice({ legend, options, value, onChange }) {
+  return (
+    <fieldset className="px-2 py-1">
+      <legend className="mb-1.5 text-sm font-medium text-navy-900">{legend}</legend>
+      <div className="grid grid-cols-3 gap-1">
+        {options.map((s) => (
+          <button key={s.value} type="button" aria-pressed={value === s.value} onClick={() => onChange(s.value)}
+            className={`flex items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${value === s.value ? 'border-brand bg-brand text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-brand hover:bg-brand-50'}`}>
+            {value === s.value && <Check className="h-3 w-3" aria-hidden />}{s.label}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 /**
- * Display settings button and panel (header and sign-in pages): text size, reduce motion, higher
- * contrast. Esc or a click outside closes it; focus returns to the button.
+ * Display settings button and panel (header and sign-in pages): text size, theme, sidebar (signed-in pages),
+ * reduce motion, high contrast. Esc or a click outside closes it; focus returns to the button.
  */
-export default function DisplaySettings({ tone = 'light' }) {
+export default function DisplaySettings({ tone = 'light', sidebarOption = false }) {
   const { prefs, update, reset } = useDisplayPrefs();
   const [open, setOpen] = useState(false);
   const btn = useRef(null);
@@ -45,23 +62,17 @@ export default function DisplaySettings({ tone = 'light' }) {
       </button>
       {open && (
         <div ref={panel} id={id} role="dialog" aria-label="Display settings"
-          className="absolute right-0 z-50 mt-2 w-72 animate-slide-down rounded-xl border border-slate-200 bg-white p-3 text-left shadow-modal">
+          className="absolute right-0 z-50 mt-2 max-h-[calc(100vh-5rem)] w-72 max-w-[calc(100vw-1.5rem)] animate-slide-down overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-left shadow-modal">
           <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Display settings</p>
-          <fieldset className="px-2 py-1">
-            <legend className="mb-1.5 text-sm font-medium text-navy-900">Text size</legend>
-            <div className="grid grid-cols-3 gap-1">
-              {TEXT_SIZES.map((s) => (
-                <button key={s.value} type="button" aria-pressed={prefs.textSize === s.value} onClick={() => update({ textSize: s.value })}
-                  className={`flex items-center justify-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${prefs.textSize === s.value ? 'border-brand bg-brand text-white' : 'border-slate-300 text-slate-700 hover:border-brand hover:bg-brand-50'}`}>
-                  {prefs.textSize === s.value && <Check className="h-3 w-3" aria-hidden />}{s.label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          <Choice legend="Text size" options={TEXT_SIZES} value={prefs.textSize} onChange={(v) => update({ textSize: v })} />
+          <Choice legend="Theme" options={THEMES} value={prefs.theme} onChange={(v) => update({ theme: v })} />
+          {sidebarOption && <Choice legend="Sidebar" options={SIDEBARS} value={prefs.sidebar} onChange={(v) => update({ sidebar: v })} />}
           <Toggle label="Reduce motion" hint="Turns off animations and transitions." checked={prefs.reduceMotion} onChange={(v) => update({ reduceMotion: v })} />
-          <Toggle label="Higher contrast" hint="Darker text and borders, underlined links." checked={prefs.contrast} onChange={(v) => update({ contrast: v })} />
+          <Toggle label="High contrast" hint="Strongest text and outlines, underlined links. Works with light and dark." checked={prefs.contrast} onChange={(v) => update({ contrast: v })} />
+          <Toggle label="Underline links" hint="Every link is underlined, not only shown in colour." checked={prefs.underlineLinks} onChange={(v) => update({ underlineLinks: v })} />
+          <Toggle label="Easy-read spacing" hint="More space between lines, words and letters." checked={prefs.easyRead} onChange={(v) => update({ easyRead: v })} />
           <div className="mt-1 flex items-center justify-between border-t border-slate-100 px-2 pt-2">
-            <p className="text-[11px] text-slate-500">Saved on this browser only.</p>
+            <p className="text-xs text-slate-500">Saved on this browser only.</p>
             <button type="button" className="rounded px-1.5 py-0.5 text-xs font-medium text-brand hover:bg-brand-50" onClick={reset}>Reset</button>
           </div>
         </div>

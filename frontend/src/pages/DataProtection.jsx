@@ -4,9 +4,9 @@ import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table, SectionHeader, TAB_ROW, tabClass } from '../components/ui';
 import { formatDateTime } from '../lib/format';
-import { MessageSquareWarning, ShieldCheck } from 'lucide-react';
+import { Lock, MessageSquareWarning, ShieldCheck } from 'lucide-react';
 
 const DSR_TONE = { Open: 'amber', 'In progress': 'blue', Resolved: 'green', Rejected: 'slate' };
 const SEV_TONE = { Low: 'slate', Medium: 'blue', High: 'amber', Serious: 'red' };
@@ -14,6 +14,8 @@ const SEV_TONE = { Low: 'slate', Medium: 'blue', High: 'amber', Serious: 'red' }
 /** Data subject request queue (Admin, Staff): requests must be answered. */
 function RequestsTab() {
   const { toast } = useApp();
+  const { user } = useAuth();
+  const isAdmin = user.role === 'Admin';
   const [status, setStatus] = useState('');
   const { data, loading, error, reload } = useApi(`/privacy-requests${status ? `?status=${encodeURIComponent(status)}` : ''}`);
   const [editing, setEditing] = useState(null);
@@ -22,7 +24,7 @@ function RequestsTab() {
   const [busy, setBusy] = useState(false);
   const rows = data?.data || [];
   const save = async () => {
-    if (['Resolved', 'Rejected'].includes(form.status) && form.response.trim().length < 5) { setFieldError('Write a response to the requester.'); return; }
+    if ((['Resolved', 'Rejected'].includes(form.status) || editing.status === 'Rejected') && form.response.trim().length < 5) { setFieldError(editing.status === 'Rejected' ? 'Write why the request is being reopened.' : 'Write a response to the requester.'); return; }
     setBusy(true);
     try { await api(`/privacy-requests/${editing.request_id}`, { method: 'PUT', body: form }); toast('Request updated.'); setEditing(null); reload(); }
     catch (err) { setFieldError(err.message); } finally { setBusy(false); }
@@ -32,7 +34,7 @@ function RequestsTab() {
       <div className="mb-3 flex flex-wrap gap-2">
         {['', 'Open', 'In progress', 'Resolved', 'Rejected'].map((s) => (
           <button key={s || 'all'} type="button" onClick={() => setStatus(s)} aria-pressed={status === s}
-            className={`rounded-full px-3 py-1 text-sm ${status === s ? 'bg-navy-900 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200'}`}>{s || 'All'}</button>
+            className={`rounded-full px-3 py-1 text-sm ${status === s ? 'bg-brand text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200'}`}>{s || 'All'}</button>
         ))}
       </div>
       <Card>
@@ -46,8 +48,17 @@ function RequestsTab() {
                   <td className="td">{r.requester_name}<p className="text-xs text-slate-500">{r.requester_email}{r.reference_no && ` · ${r.reference_no}`}</p></td>
                   <td className="td max-w-md"><p className="font-medium">{r.kind}</p><p className="whitespace-pre-line text-sm text-slate-600">{r.details}</p>
                     {r.response && <p className="mt-1 text-xs text-slate-500">Reply: {r.response}</p>}</td>
-                  <td className="td"><Badge tone={DSR_TONE[r.status]}>{r.status}</Badge></td>
-                  <td className="td text-right"><Button size="sm" variant="secondary" onClick={() => { setEditing(r); setForm({ status: r.status === 'Open' ? 'In progress' : r.status, response: r.response || '' }); setFieldError(null); }}>Respond</Button></td>
+                  <td className="td">{r.status === 'Rejected'
+                    ? <Badge tone="slate"><Lock className="h-3 w-3" aria-hidden /> Rejected — Locked</Badge>
+                    : <Badge tone={DSR_TONE[r.status]}>{r.status}</Badge>}</td>
+                  <td className="td text-right">
+                    {/* A rejected request is read-only for Staff (the server refuses changes too). Admin can reopen it with a reason. */}
+                    {r.status === 'Rejected' && !isAdmin ? <span className="text-xs text-slate-500">Read-only</span> : (
+                      <Button size="sm" variant="secondary" onClick={() => { setEditing(r); setForm({ status: r.status === 'Open' ? 'In progress' : r.status, response: r.status === 'Rejected' ? '' : r.response || '' }); setFieldError(null); }}>
+                        {r.status === 'Rejected' ? 'Reopen' : 'Respond'}<span className="sr-only"> request from {r.requester_name}</span>
+                      </Button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -59,6 +70,7 @@ function RequestsTab() {
         {editing && (
           <div className="space-y-3">
             <p className="text-sm text-slate-600"><strong>{editing.kind}</strong> from {editing.requester_name}: {editing.details}</p>
+            {editing.status === 'Rejected' && <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">This request was rejected. Reopening it is recorded in the Audit log; write the reason below (the requester sees it).</p>}
             <Field label="Status" required>
               <select className="input" value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}>
                 {['Open', 'In progress', 'Resolved', 'Rejected'].map((s) => <option key={s}>{s}</option>)}
@@ -293,7 +305,7 @@ function ConcernsTab() {
 }
 
 /** Data protection (RA 10173): requests (Admin, Staff), incidents and security events (Admin). */
-export default function DataProtection() {
+export default function DataProtection({ embedded = false }) {
   const { user } = useAuth();
   const isAdmin = user.role === 'Admin';
   const tabs = [['requests', 'Data subject requests'], ...(isAdmin ? [['concerns', 'Privacy concerns'], ['incidents', 'Incident log'], ['events', 'Security events'], ['archived', 'Archived documents']] : [])];
@@ -302,13 +314,17 @@ export default function DataProtection() {
   const [reporting, setReporting] = useState(false);
   return (
     <>
-      <PageHeader title="Data protection" description="Requests from people to see or correct their data, privacy concerns, security incidents, and security events. The Data Protection Officer contact is set in Settings."
-        actions={<Button variant="secondary" onClick={() => setReporting(true)}><MessageSquareWarning className="h-4 w-4" aria-hidden /> Report a privacy concern</Button>} />
+      {(() => {
+        // On its own page (Staff) this is the page title; inside the Audit log (Admin) it is a section of that page.
+        const Header = embedded ? SectionHeader : PageHeader;
+        return <Header title="Data protection" description="Requests from people to see or correct their data, privacy concerns, security incidents, and security events. The Data Protection Officer contact is set in Settings."
+          actions={<Button variant="secondary" onClick={() => setReporting(true)}><MessageSquareWarning className="h-4 w-4" aria-hidden /> Report a privacy concern</Button>} />;
+      })()}
       {reporting && <ReportConcern onClose={() => setReporting(false)} />}
-      <div className="mb-4 inline-flex rounded-lg bg-white p-1 shadow-card" role="tablist">
+      <div className={TAB_ROW} role="tablist" aria-label="Data protection sections">
         {tabs.map(([k, l]) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${tab === k ? 'bg-brand text-white' : 'text-slate-600 hover:text-navy-900'}`}>{l}</button>
+            className={tabClass(tab === k)}>{l}</button>
         ))}
       </div>
       {tab === 'requests' && <RequestsTab />}

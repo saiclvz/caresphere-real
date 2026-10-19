@@ -271,6 +271,9 @@ const NEEDS_REVIEW = ['Pending verification', 'Manual verification required', 'F
  * assigned to them. No ID numbers or names from the ID are returned here (open the application to review).
  */
 async function queue({ staffId = null } = {}) {
+  // Staff: applications they are assigned to through the one assignment service (own rows or the child's).
+  const mine = staffId ? [...await require('./assignment').recordIdsFor(pool, 'adoption_application', staffId)].map(Number) : null;
+  if (mine && !mine.length) return [];
   const [rows] = await pool.query(
     `SELECT v.verification_id, v.application_id, v.kind, v.slot, v.item_type, v.status, v.updated_at, v.created_at,
             a.reference_no, a.status AS application_status, ad.legal_name, a.assigned_staff_id, su.full_name AS assigned_staff_name
@@ -278,9 +281,9 @@ async function queue({ staffId = null } = {}) {
        LEFT JOIN tbl_applicant_details ad ON ad.application_id = a.application_id
        LEFT JOIN tbl_users su ON su.user_id = a.assigned_staff_id AND su.is_active = TRUE
       WHERE v.status IN (?) AND a.status NOT IN ('Draft', 'Declined', 'Withdrawn', 'Closed') AND a.archived_at IS NULL
-        ${staffId ? 'AND a.assigned_staff_id = ? AND su.user_id IS NOT NULL' : ''}
+        ${mine ? 'AND a.application_id IN (?)' : ''}
       ORDER BY FIELD(v.status, 'Flagged for review', 'ID type mismatch', 'Information mismatch') DESC, COALESCE(v.updated_at, v.created_at)`,
-    staffId ? [NEEDS_REVIEW, staffId] : [NEEDS_REVIEW]);
+    mine ? [NEEDS_REVIEW, mine] : [NEEDS_REVIEW]);
   return rows;
 }
 

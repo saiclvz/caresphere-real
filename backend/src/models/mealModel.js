@@ -14,12 +14,12 @@ module.exports = {
       `SELECT m.meal_id, m.meal_type, m.menu_description, m.scheduled_date, m.dietary_tags, m.logged_by,
               u.full_name AS logged_by_name
          FROM tbl_meals m LEFT JOIN tbl_users u ON u.user_id = m.logged_by
-        WHERE m.scheduled_date BETWEEN ? AND ? ${extra}
+        WHERE m.archived_at IS NULL AND m.scheduled_date BETWEEN ? AND ? ${extra}
         ORDER BY m.scheduled_date, FIELD(m.meal_type, 'Breakfast', 'Lunch', 'Snack', 'Dinner')`, params);
     return rows;
   },
   async findById(id) {
-    const [rows] = await pool.query('SELECT meal_id, meal_type, menu_description, scheduled_date, dietary_tags, logged_by FROM tbl_meals WHERE meal_id = ?', [id]);
+    const [rows] = await pool.query('SELECT meal_id, meal_type, menu_description, scheduled_date, dietary_tags, logged_by FROM tbl_meals WHERE meal_id = ? AND archived_at IS NULL', [id]);
     return rows[0] || null;
   },
   async create(m) {
@@ -33,7 +33,8 @@ module.exports = {
       'UPDATE tbl_meals SET meal_type = ?, menu_description = ?, scheduled_date = ?, dietary_tags = ?, logged_by = ? WHERE meal_id = ?',
       [m.meal_type, m.menu_description, m.scheduled_date, m.dietary_tags, m.logged_by, id]);
   },
-  async remove(id) {
-    await pool.query('DELETE FROM tbl_meals WHERE meal_id = ?', [id]);
+  /** Meals are never deleted (migration 034): archived with the reason, hidden from the plan. */
+  async archive(id, userId, reason) {
+    await pool.query('UPDATE tbl_meals SET archived_at = NOW(), archived_by = ?, archive_reason = ? WHERE meal_id = ? AND archived_at IS NULL', [userId, reason, id]);
   },
 };

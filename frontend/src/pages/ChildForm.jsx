@@ -119,7 +119,7 @@ export default function ChildForm({ initial, onClose, onSaved }) {
           {editing && (
             <Field label="Status" hint={statusLocked ? `Only an administrator can change the status of a ${initial.status.toLowerCase()} child.` : 'Adopted is set automatically when an adoption is completed.'}>
               <select className="input" value={form.status} onChange={set('status')} disabled={statusLocked || initial.status === 'Adopted' && !isAdmin}>
-                <option>Active</option>
+                <option value="Active">Admitted</option>
                 <option>Discharged</option>
                 {initial.status === 'Adopted' && <option>Adopted</option>}
               </select>

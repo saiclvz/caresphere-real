@@ -5,6 +5,7 @@ import { useApp } from '../../../context/AppContext';
 import { formatDate, formatDateTime } from '../../../lib/format';
 import { Badge, Button, Card, ErrorNote, Field, Modal, Spinner } from '../../../components/ui';
 import { headersFor } from './common';
+import { adoptionLabel } from '../../../lib/adoptionStatus';
 
 const RESULT = {
   match: [CheckCircle2, 'Match', 'text-emerald-700'],
@@ -156,7 +157,7 @@ function MatchCard({ app, m, canApprove, onAction, busy }) {
           {[...FLOW, 'Trial custody'].map((s, i) => {
             const idx = FLOW.indexOf(m.status);
             const state = i < idx ? 'done' : i === idx ? 'current' : 'next';
-            return <li key={s} className={`rounded-full px-2 py-0.5 ${state === 'done' ? 'bg-emerald-50 text-emerald-800' : state === 'current' ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-500'}`} aria-current={state === 'current' ? 'step' : undefined}>{s}</li>;
+            return <li key={s} className={`rounded-full px-2 py-0.5 ${state === 'done' ? 'bg-emerald-50 text-emerald-800' : state === 'current' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-500'}`} aria-current={state === 'current' ? 'step' : undefined}>{s}</li>;
           })}
         </ol>
       )}
@@ -176,7 +177,7 @@ function MatchCard({ app, m, canApprove, onAction, busy }) {
       )}
       {m.events.length > 0 && (
         <details className="text-xs"><summary className="cursor-pointer text-brand">History ({m.events.length})</summary>
-          <ul className="mt-1 space-y-0.5 text-slate-600">{m.events.map((e, i) => <li key={i}>{formatDateTime(e.at)}: {e.event.replace(/_/g, ' ')}{e.to_status ? ` → ${e.to_status}` : ''}{e.by ? ` (${e.by})` : ''}{e.detail ? ` · ${e.detail}` : ''}</li>)}</ul>
+          <ul className="mt-1 space-y-0.5 text-slate-600">{m.events.map((e, i) => <li key={i}>{formatDateTime(e.at)}: {e.event.replace(/_/g, ' ')}{e.to_status ? ` → ${adoptionLabel(e.to_status)}` : ''}{e.by ? ` (${e.by})` : ''}{e.detail ? ` · ${e.detail}` : ''}</li>)}</ul>
         </details>
       )}
     </div>

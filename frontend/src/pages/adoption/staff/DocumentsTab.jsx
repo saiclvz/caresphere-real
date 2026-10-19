@@ -199,7 +199,7 @@ export default function DocumentsTab({ app, version, initialFilter = 'all', onOp
               <div role="radiogroup" aria-label="Show" className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
                 {FILTERS.map(([k, label]) => (
                   <button key={k} type="button" role="radio" aria-checked={filter === k} onClick={() => setFilter(k)}
-                    className={`rounded-md px-3 py-1 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${filter === k ? 'bg-navy-900 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
+                    className={`rounded-md px-3 py-1 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${filter === k ? 'bg-brand text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
                     {label} <span className="opacity-70">({d.rows.filter((r) => k === 'all' || (k === 'blocking' ? r.blocking : NEEDS_REVIEW.includes(r.status) || r.files.some((f) => NEEDS_REVIEW.includes(f.verification_status) && !f.expired))).length})</span>
                   </button>
                 ))}

@@ -5,10 +5,10 @@ const Donation = require('../models/donationModel');
 exports.summary = async (req, res) => {
   const [[stats]] = await pool.query(
     `SELECT
-       (SELECT COUNT(*) FROM tbl_children WHERE status = 'Active') AS active_children,
-       (SELECT COUNT(*) FROM tbl_inventory WHERE quantity <= min_threshold) AS low_stock,
-       (SELECT COUNT(*) FROM tbl_visitors WHERE DATE(check_in_time) = CURDATE()) AS visitors_today,
-       (SELECT COUNT(*) FROM tbl_visitors WHERE check_out_time IS NULL) AS visitors_on_site`);
+       (SELECT COUNT(*) FROM tbl_children WHERE status = 'Active' AND archived_at IS NULL) AS active_children,
+       (SELECT COUNT(*) FROM tbl_inventory WHERE archived_at IS NULL AND quantity <= min_threshold) AS low_stock,
+       (SELECT COUNT(*) FROM tbl_visitors WHERE archived_at IS NULL AND DATE(check_in_time) = CURDATE()) AS visitors_today,
+       (SELECT COUNT(*) FROM tbl_visitors WHERE archived_at IS NULL AND check_out_time IS NULL) AS visitors_on_site`);
 
   // Same totals as the Donations page (no filters): count = all donations, total = received amounts.
   const donations = await Donation.summary();
@@ -28,16 +28,16 @@ exports.summary = async (req, res) => {
               WHEN TIMESTAMPDIFF(YEAR, dob, CURDATE()) < 13 THEN '7-12'
               ELSE '13+' END AS age_group,
             SUM(gender = 'Male') AS male, SUM(gender = 'Female') AS female
-       FROM tbl_children WHERE status = 'Active'
+       FROM tbl_children WHERE status = 'Active' AND archived_at IS NULL
       GROUP BY age_group
       ORDER BY FIELD(age_group, 'Under 1', '1-3', '4-6', '7-12', '13+')`);
 
   const [lowItems] = await pool.query(
     `SELECT item_id, item_name, category, quantity, min_threshold
-       FROM tbl_inventory WHERE quantity <= min_threshold ORDER BY quantity ASC LIMIT 6`);
+       FROM tbl_inventory WHERE archived_at IS NULL AND quantity <= min_threshold ORDER BY quantity ASC LIMIT 6`);
 
   const [mealsToday] = await pool.query(
-    `SELECT meal_type, menu_description FROM tbl_meals WHERE scheduled_date = CURDATE()
+    `SELECT meal_type, menu_description FROM tbl_meals WHERE archived_at IS NULL AND scheduled_date = CURDATE()
       ORDER BY FIELD(meal_type, 'Breakfast', 'Lunch', 'Snack', 'Dinner')`);
 
   // Fill the last 6 months so the chart has no gaps.
@@ -60,6 +60,8 @@ exports.summary = async (req, res) => {
       age_groups: ageGroups.map((g) => ({ ...g, male: Number(g.male), female: Number(g.female) })),
       low_items: lowItems,
       meals_today: mealsToday,
+      // Admin: admissions waiting for an Admin decision (same count as the Intake page; services/childAccess overview).
+      admissions_to_review: req.user.role === 'Admin' ? Number((await require('../services/childAccess').overview()).admissions_to_review) || 0 : undefined,
     },
   });
 };

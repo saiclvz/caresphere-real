@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileHeart, Plus } from 'lucide-react';
+import { FileHeart, Plus, Lock } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api, qs } from '../api/client';
 import { useApp } from '../context/AppContext';
@@ -9,6 +9,7 @@ import ConfidentialityBanner from '../components/adoption/ConfidentialityBanner'
 import { formatDate } from '../lib/format';
 import AssignedFilter from '../components/AssignedFilter';
 import VerificationQueue from '../components/adoption/VerificationQueue';
+import { adoptionLabel } from '../lib/adoptionStatus';
 
 export const PHASE_TABS = [
   { key: '', label: 'All' }, { key: 'preparation', label: 'Preparation' }, { key: 'matching', label: 'Matching' },
@@ -129,7 +130,7 @@ function Inner() {
           <label className="sr-only" htmlFor="status-filter">Status</label>
           <select id="status-filter" className="input h-10" value={status} onChange={(e) => { setStatus(e.target.value); setBucket(''); }}>
             <option value="">All statuses{phase ? ' in this phase' : ''}</option>
-            {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+            {statuses.map((s) => <option key={s} value={s}>{adoptionLabel(s)}</option>)}
           </select>
         </div>
         <AssignedFilter value={assigned} onChange={setAssigned} />
@@ -157,7 +158,7 @@ function Inner() {
                   <td className="td whitespace-nowrap">{a.days_in_stage != null ? `${a.days_in_stage} day${a.days_in_stage === 1 ? '' : 's'}` : '-'}</td>
                   <td className="td">
                     <div className="flex flex-wrap gap-1">
-                      <Badge tone={statusTone(a.status)}>{a.status}</Badge>
+                      <Badge tone={statusTone(a.status)}>{a.status === 'Declined' && <Lock className="h-3 w-3" aria-label="Locked" />}{adoptionLabel(a.status)}</Badge>
                       {a.open_requests > 0 && <Badge tone="amber">{a.open_requests} requested</Badge>}
                       <DeadlineChip label="Trial ends" d={a.deadlines?.trial_end} />
                       <DeadlineChip label="NACC" d={a.deadlines?.nacc_deadline} />

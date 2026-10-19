@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, FilePlus2, Heart } from 'lucide-react';
 import useApi from '../hooks/useApi';
-import { Spinner } from '../components/ui';
+import { PageHeader, Spinner } from '../components/ui';
 import { formatDate } from '../lib/format';
 import { AFTER_ORDER, applicationPath, isActiveStatus } from './adoption/formLogic';
 import { StatusBadge, THANK_YOU } from './MyApplicationDetail';
@@ -39,23 +39,18 @@ export default function MyApplications() {
 
   return (
     <div className="cs-theme cs-page space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="cs-title text-2xl">My applications</h1>
-          <p className="cs-muted text-sm">Your adoption applications and their status. Every application is reviewed by the home.</p>
-        </div>
-        {!active && !loading && <Link to="/applications/new" className="cs-btn cs-btn-primary"><FilePlus2 className="h-4 w-4" aria-hidden /> Start an application</Link>}
-      </div>
+      <PageHeader title="My applications" description="Your adoption applications and their status. Every application is reviewed by the home."
+        actions={!active && !loading && <Link to="/applications/new" className="cs-btn cs-btn-primary"><FilePlus2 className="h-4 w-4" aria-hidden /> Start an application</Link>} />
 
       {withRequests.map((r) => (
         <div key={r.application_id} className="cs-notice cs-notice-warn flex flex-wrap items-center gap-3" role="status">
-          <AlertTriangle className="h-5 w-5 shrink-0" style={{ color: 'var(--cs-warning)' }} aria-hidden />
+          <AlertTriangle className="h-5 w-5 shrink-0" style={{ color: 'var(--ad-warning)' }} aria-hidden />
           <p className="min-w-0 flex-1 text-sm">The home requested {r.open_requests === 1 ? 'a document' : `${r.open_requests} documents`} for <strong>{r.reference_no}</strong>.</p>
           <Link to={`/applications/${r.application_id}`} className="cs-btn cs-btn-sm cs-btn-primary">Upload documents</Link>
         </div>
       ))}
       {approved.length > 0 && (
-        <div className="cs-notice cs-notice-success flex gap-3"><Heart className="h-5 w-5 shrink-0" style={{ color: 'var(--cs-success)' }} aria-hidden /><p className="text-sm">{THANK_YOU}</p></div>
+        <div className="cs-notice cs-notice-success flex gap-3"><Heart className="h-5 w-5 shrink-0" style={{ color: 'var(--ad-success)' }} aria-hidden /><p className="text-sm">{THANK_YOU}</p></div>
       )}
 
       <section className="cs-card overflow-hidden">
@@ -70,7 +65,7 @@ export default function MyApplications() {
         ) : (
           <ul>
             {rows.map((r) => (
-              <li key={r.application_id} className="border-t first:border-t-0 cs-divider" style={r.unread_notifications > 0 ? { background: 'var(--cs-primary-soft)' } : undefined}>
+              <li key={r.application_id} className="border-t first:border-t-0 cs-divider" style={r.unread_notifications > 0 ? { background: 'var(--ad-primary-soft)' } : undefined}>
                 <Link to={applicationPath(r)} className="flex items-center gap-3 p-4 hover:opacity-90" style={{ color: 'inherit', textDecoration: 'none' }}>
                   <div className="min-w-0 flex-1">
                     <p className="cs-title font-mono">{r.reference_no || 'Draft'}</p>

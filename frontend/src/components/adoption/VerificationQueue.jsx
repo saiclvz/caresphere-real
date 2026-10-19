@@ -3,7 +3,7 @@ import { ShieldCheck } from 'lucide-react';
 import useApi from '../../hooks/useApi';
 import { formatDateTime } from '../../lib/format';
 import { Badge, Card } from '../ui';
-import { statusLabel } from './VerificationList';
+import { StatusIcon, statusLabel } from './VerificationList';
 
 /**
  * IDs and clearances waiting for a person: manual verification, flags and problems to confirm. Admin sees
@@ -31,7 +31,7 @@ export default function VerificationQueue() {
                 <span className="text-slate-600"> · {r.applicant || 'Applicant'} · {r.kind === 'government_id' ? `Government ID (${r.item_type})` : r.item_type}</span>
                 <span className="block text-xs text-slate-500">Waiting since {formatDateTime(r.waiting_since)}{r.assigned_staff_name ? ` · ${r.assigned_staff_name}` : ''}</span>
               </span>
-              <Badge tone={r.status === 'Manual verification required' || r.status === 'Pending verification' ? 'amber' : r.status === 'Flagged for review' || r.status === 'Unable to verify' ? 'amber' : 'red'}>{statusLabel(r)}</Badge>
+              {(() => { const t = ['Manual verification required', 'Pending verification', 'Flagged for review', 'Unable to verify'].includes(r.status) ? 'amber' : 'red'; return <Badge tone={t}><StatusIcon tone={t} />{statusLabel(r)}</Badge>; })()}
             </button>
           </li>
         ))}

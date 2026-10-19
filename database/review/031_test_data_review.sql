@@ -3,8 +3,9 @@
 -- Step 1 only READS. Step 2 is commented out: copy only the lines you want, change the values, and run them in
 -- phpMyAdmin yourself. Nothing is deleted.
 --
--- To VOID a test donation, use the Void button on the Donations page instead of SQL: it records the reason,
--- reverses any stock the donation added, and keeps the donation out of every total.
+-- To VOID a test donation, use the Void button on the Donations page instead of SQL and choose the reason
+-- "Test data": it records the reason, reverses any stock the donation added, keeps the donation (never deleted) and
+-- its audit history, and leaves it out of every total. Only void what you have checked is really test data.
 USE caresphere_db;
 
 -- ---------------------------------------------------------------- 1. find (read-only)

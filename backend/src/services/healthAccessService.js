@@ -12,6 +12,10 @@ const { sha256 } = require('../utils/crypto');
  *  - Only a SHA-256 hash of the token is stored.
  *  - Every issue, denial, view, update, expiry and revocation is written to
  *    tbl_health_data_access_logs.
+ *  - Staff: the unlock session (purpose, QR token, assignment; services/unlockService.js) is the authority. The
+ *    health token only carries the request; it works only while the Staff member's unlock session for this child is
+ *    live, so locking, expiry, an Admin revoking the session or an assignment ending closes health access at once.
+ *    Admin opens health records with full access (logged), without an unlock session.
  */
 const HEADER = 'X-Health-Access';
 
@@ -66,7 +70,17 @@ async function requireHealthAccess(req, res, next) {
       await logEvent(req, childId, 'TOKEN_EXPIRED');
       throw new HttpError(401, 'Health access expired. Unlock the record again.');
     }
-    req.healthAccess = { token_id: grant.token_id, remaining_seconds: Number(grant.remaining) };
+    let remaining = Number(grant.remaining);
+    if (req.user.role !== 'Admin') {
+      const s = await require('./unlockService').sessionFor(req, 'health', childId);
+      if (!s) {
+        await pool.query('UPDATE tbl_health_access_tokens SET revoked = TRUE WHERE token_id = ?', [grant.token_id]);
+        await logEvent(req, childId, 'SESSION_ENDED');
+        throw new HttpError(401, 'The unlock session ended. Unlock the record again.');
+      }
+      remaining = Math.min(remaining, s.remaining_seconds);
+    }
+    req.healthAccess = { token_id: grant.token_id, remaining_seconds: remaining };
     next();
   } catch (err) {
     next(err);

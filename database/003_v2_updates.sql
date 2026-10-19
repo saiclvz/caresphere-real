@@ -11,8 +11,9 @@ SET FOREIGN_KEY_CHECKS = 0;
 -- (The separate Applicant role was merged into Donor. See 004_merge_applicant_into_donor.sql.)
 
 -- ---------------------------------------------------------------- children
+-- (October 2026) the list includes every value added by later migrations, so running all migrations again never narrows it.
 ALTER TABLE tbl_children
-  MODIFY COLUMN status ENUM('Active', 'Discharged', 'Adopted') NOT NULL DEFAULT 'Active',
+  MODIFY COLUMN status ENUM('Active', 'Discharged', 'Adopted', 'In admission') NOT NULL DEFAULT 'Active',
   MODIFY COLUMN qr_created_at TIMESTAMP NULL DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS full_name VARCHAR(101)
       GENERATED ALWAYS AS (CONCAT(first_name, ' ', last_name)) STORED AFTER last_name,

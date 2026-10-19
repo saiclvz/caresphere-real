@@ -23,7 +23,7 @@ exports.list = async (req, res) => {
   const [rows] = await pool.query(
     `SELECT d.document_id, a.reference_no, d.doc_type, d.uploaded_at, d.disposed_at
        FROM tbl_adoption_documents d JOIN tbl_adoption_applications a ON a.application_id = d.application_id
-      WHERE d.archived_at IS NOT NULL ORDER BY d.disposed_at IS NOT NULL, d.uploaded_at`);
+      WHERE d.archived_at IS NOT NULL AND d.doc_type IN (?) ORDER BY d.disposed_at IS NOT NULL, d.uploaded_at`, [Object.keys(TYPE_NAMES)]);
   res.json({
     success: true,
     data: {
@@ -41,8 +41,9 @@ exports.dispose = async (req, res) => {
   if (reason.length < 10) throw new HttpError(400, 'Give the reason for disposal (at least 10 characters).');
   if (reason.length > 500) throw new HttpError(400, 'The reason can be up to 500 characters.');
   await withTransaction(async (conn) => {
-    const [[d]] = await conn.query('SELECT document_id, storage_key, archived_at, disposed_at FROM tbl_adoption_documents WHERE document_id = ? FOR UPDATE', [id]);
-    if (!d || !d.archived_at) throw new HttpError(404, 'Archived document not found. Only archived documents can be disposed of.');
+    const [[d]] = await conn.query('SELECT document_id, doc_type, storage_key, archived_at, disposed_at FROM tbl_adoption_documents WHERE document_id = ? FOR UPDATE', [id]);
+    // Only retired document types (migration 028); removed or replaced copies are kept, never disposed of here.
+    if (!d || !d.archived_at || !TYPE_NAMES[d.doc_type]) throw new HttpError(404, 'Archived document not found. Only archived documents can be disposed of.');
     if (d.disposed_at) throw new HttpError(409, 'This file was already disposed of.');
     await conn.query('UPDATE tbl_adoption_documents SET disposed_at = NOW(), disposed_by = ?, dispose_reason = ? WHERE document_id = ?', [req.user.user_id, reason, id]);
     await logActivityWith(conn, req, `ARCHIVED_DOCUMENT_DISPOSED (#${id})`, 'Data protection');

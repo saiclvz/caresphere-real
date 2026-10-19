@@ -68,7 +68,7 @@ async function existingAround(conn, userIds, dates) {
   const [rows] = await conn.query(
     `SELECT s.schedule_id, s.user_id, s.shift_date, s.start_time, s.end_time, s.ends_next_day, s.area_id, s.note, s.assignment, s.batch_id, a.name AS area_name
        FROM tbl_staff_schedules s LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id
-      WHERE s.user_id IN (?) AND s.shift_date BETWEEN ? AND ?`, [userIds, addDays(sorted[0], -1), addDays(sorted[sorted.length - 1], 1)]);
+      WHERE s.archived_at IS NULL AND s.user_id IN (?) AND s.shift_date BETWEEN ? AND ?`, [userIds, addDays(sorted[0], -1), addDays(sorted[sorted.length - 1], 1)]);
   return rows.map((r) => ({ ...r, shift_date: ymd(r.shift_date), ends_next_day: !!r.ends_next_day }));
 }
 
@@ -100,9 +100,11 @@ async function insertShift(conn, req, s, batchId = null) {
   await notifyShift(conn, 'shift_created', s);
   return r.insertId;
 }
-async function deleteShift(conn, req, before, why = '') {
-  await conn.query('DELETE FROM tbl_staff_schedules WHERE schedule_id = ?', [before.schedule_id]);
-  await logActivityWith(conn, req, `DELETE_SHIFT (user #${before.user_id}: ${describe(before)}${why})`, `Schedule #${before.schedule_id}`);
+/** Shifts are never deleted (migration 034): removing one archives it, with the reason, and it leaves every list. */
+async function deleteShift(conn, req, before, why = '', reason = null) {
+  await conn.query('UPDATE tbl_staff_schedules SET archived_at = NOW(), archived_by = ?, archive_reason = ? WHERE schedule_id = ? AND archived_at IS NULL',
+    [req.user.user_id, String(reason || why.replace(/^[,;\s(]+|[)\s]+$/g, '') || 'Removed from the schedule').slice(0, 500), before.schedule_id]);
+  await logActivityWith(conn, req, `DELETE_SHIFT (archived; user #${before.user_id}: ${describe(before)}${why})`, `Schedule #${before.schedule_id}`);
   await notifyShift(conn, 'shift_removed', before);
 }
 async function updateShift(conn, req, before, s) {
@@ -128,18 +130,18 @@ async function saveOne(req, id, body) {
     const kept = (await existingAround(conn, [v.value.user_id], [v.value.shift_date])).filter((k) => k.schedule_id !== Number(id));
     requireConfirm(warningsFor([v.value], kept, ctx.staff), body.confirm === true);
     if (!id) return insertShift(conn, req, v.value);
-    const [[before]] = await conn.query('SELECT s.*, a.name AS area_name FROM tbl_staff_schedules s LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id WHERE s.schedule_id = ? FOR UPDATE', [id]);
+    const [[before]] = await conn.query('SELECT s.*, a.name AS area_name FROM tbl_staff_schedules s LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id WHERE s.schedule_id = ? AND s.archived_at IS NULL FOR UPDATE', [id]);
     if (!before) throw new HttpError(404, 'Shift not found.');
     await updateShift(conn, req, { ...before, shift_date: ymd(before.shift_date), ends_next_day: !!before.ends_next_day }, v.value);
     return Number(id);
   });
 }
 
-async function removeOne(req, id) {
+async function removeOne(req, id, reason = null) {
   await withTransaction(async (conn) => {
-    const [[before]] = await conn.query('SELECT s.*, a.name AS area_name FROM tbl_staff_schedules s LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id WHERE s.schedule_id = ? FOR UPDATE', [id]);
+    const [[before]] = await conn.query('SELECT s.*, a.name AS area_name FROM tbl_staff_schedules s LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id WHERE s.schedule_id = ? AND s.archived_at IS NULL FOR UPDATE', [id]);
     if (!before) throw new HttpError(404, 'Shift not found.');
-    await deleteShift(conn, req, { ...before, shift_date: ymd(before.shift_date) });
+    await deleteShift(conn, req, { ...before, shift_date: ymd(before.shift_date) }, '', reason);
   });
 }
 
@@ -156,7 +158,7 @@ async function saveDay(req, date, body) {
   if (rows.length > 100) throw new HttpError(400, 'Up to 100 shifts per day.');
   return withTransaction(async (conn) => {
     const ctx = { staff: await activeStaff(conn), areas: await areas(conn) };
-    const [dayRows] = await conn.query('SELECT s.*, a.name AS area_name FROM tbl_staff_schedules s LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id WHERE s.shift_date = ? FOR UPDATE', [date]);
+    const [dayRows] = await conn.query('SELECT s.*, a.name AS area_name FROM tbl_staff_schedules s LEFT JOIN tbl_schedule_areas a ON a.area_id = s.area_id WHERE s.shift_date = ? AND s.archived_at IS NULL FOR UPDATE', [date]);
     const byId = new Map(dayRows.map((r) => [r.schedule_id, { ...r, shift_date: ymd(r.shift_date), ends_next_day: !!r.ends_next_day }]));
     const rowErrors = {};
     const values = rows.map((r, i) => {
@@ -253,7 +255,7 @@ async function copy(req, body) {
     pairs = [...Array(7)].map((_, i) => [addDays(start, i), addDays(start, i + 7)]);
   } else throw new HttpError(400, 'Choose what to copy.');
   const sources = [...new Set(pairs.map(([f]) => f))];
-  const [rows] = await pool.query('SELECT user_id, shift_date, start_time, end_time, ends_next_day, area_id, note FROM tbl_staff_schedules WHERE shift_date IN (?)', [sources]);
+  const [rows] = await pool.query('SELECT user_id, shift_date, start_time, end_time, ends_next_day, area_id, note FROM tbl_staff_schedules WHERE archived_at IS NULL AND shift_date IN (?)', [sources]);
   const planned = pairs.flatMap(([f, t]) => rows.filter((r) => ymd(r.shift_date) === f).map((r) => ({ ...r, shift_date: t, ends_next_day: !!r.ends_next_day })));
   if (!planned.length) throw new HttpError(400, 'There are no shifts to copy.');
   return applyPlan(req, mode === 'day' ? 'copy_day' : 'copy_week', planned, {

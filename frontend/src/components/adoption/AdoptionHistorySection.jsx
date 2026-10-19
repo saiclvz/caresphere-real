@@ -5,6 +5,7 @@ import { api } from '../../api/client';
 import { unlockHeaders } from '../../lib/grants';
 import { formatDate, formatDateTime } from '../../lib/format';
 import { Badge, Card, ErrorNote, Spinner } from '../ui';
+import { adoptionLabel } from '../../lib/adoptionStatus';
 
 /**
  * Child page: adoption status history. Fetched separately; for Staff the server only returns it while
@@ -34,7 +35,7 @@ export default function AdoptionHistorySection({ childId }) {
             <li key={a.application_id} className="rounded-lg border border-slate-200 p-3 text-sm">
               <div className="flex items-center justify-between gap-2">
                 <Link to={`/adoptions/${a.application_id}`} className="font-medium text-brand hover:underline">{a.reference_no}</Link>
-                <Badge>{a.status}</Badge>
+                <Badge>{adoptionLabel(a.status)}</Badge>
               </div>
               <p className="text-xs text-slate-500">{a.applicant} · {TYPE[a.application_type] || a.application_type} · submitted {formatDate(a.submitted_at)}</p>
               {a.summary && (

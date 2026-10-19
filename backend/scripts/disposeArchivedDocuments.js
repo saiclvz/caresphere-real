@@ -26,7 +26,9 @@ const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i ==
     const [rows] = await conn.query(
       `SELECT d.document_id, a.reference_no, d.doc_type, d.uploaded_at, d.storage_key FROM tbl_adoption_documents d
          JOIN tbl_adoption_applications a ON a.application_id = d.application_id
-        WHERE d.archived_at IS NOT NULL AND d.disposed_at IS NULL AND d.archived_at <= NOW() - INTERVAL ? DAY ORDER BY d.uploaded_at`, [days]);
+        WHERE d.archived_at IS NOT NULL AND d.disposed_at IS NULL AND d.archived_at <= NOW() - INTERVAL ? DAY
+          AND d.doc_type IN ('divorce_or_death_certificate', 'child_abuse_clearance', 'fingerprint_clearance')
+        ORDER BY d.uploaded_at`, [days]); // retired types only (028); removed or replaced copies are kept
     console.log(`${rows.length} archived document(s) not yet disposed of${days ? ` (archived at least ${days} days ago)` : ''}:`);
     rows.forEach((r) => console.log(`  #${r.document_id}  ${r.reference_no || 'Draft'}  ${r.doc_type}  uploaded ${new Date(r.uploaded_at).toISOString().slice(0, 10)}`));
     if (!confirm) { console.log('\nDry run: nothing was changed. Add --confirm --reason "..." --admin-email ... to dispose of these.'); return; }

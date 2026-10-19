@@ -14,7 +14,7 @@ const FROM = `FROM tbl_visitors v
 
 /** Every filter except visit type, combined with AND. */
 function baseWhere({ dateFrom, dateTo, timeFrom, timeTo, meal, openOnly, search } = {}) {
-  const where = [];
+  const where = ['v.archived_at IS NULL']; // archived visits (migration 034) are kept but not listed
   const params = [];
   if (dateFrom) { where.push('v.check_in_time >= ?'); params.push(`${dateFrom} 00:00:00`); }
   if (dateTo) { where.push('v.check_in_time < (? + INTERVAL 1 DAY)'); params.push(dateTo); }
@@ -80,7 +80,7 @@ module.exports = {
   },
 
   async findById(id) {
-    const [rows] = await pool.query(`SELECT ${COLS} ${FROM} WHERE v.visitor_id = ?`, [id]);
+    const [rows] = await pool.query(`SELECT ${COLS} ${FROM} WHERE v.visitor_id = ? AND v.archived_at IS NULL`, [id]);
     if (!rows[0]) return null;
     return (await attachItems(rows))[0];
   },

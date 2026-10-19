@@ -42,11 +42,12 @@ exports.exportXlsx = async (req, res) => {
     { header: 'When', key: 'at', width: 21 }, { header: 'Category', key: 'category', width: 24 }, { header: 'User', key: 'user_name', width: 24 },
     { header: 'Role', key: 'user_role', width: 10 }, { header: 'Action', key: 'label', width: 44 }, { header: 'Event code', key: 'code', width: 40 },
     { header: 'Record', key: 'record', width: 20 }, { header: 'Device', key: 'device', width: 10 }, { header: 'Detail', key: 'detail', width: 44 },
+    { header: 'Result', key: 'result', width: 10 }, { header: 'Reason', key: 'reason', width: 40 }, { header: 'Changes', key: 'changes_text', width: 60 },
   ];
   ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
   rows.forEach((r) => ws.addRow({ ...r, category: label[r.category] || r.category, record: r.record?.label || '' }));
-  ws.autoFilter = { from: 'A1', to: 'I1' };
+  ws.autoFilter = { from: 'A1', to: 'L1' };
   await logActivity(req, `EXPORT_AUDIT_LOG (${rows.length} rows; ${A.describeFilters(req.query)})`, 'Audit log');
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="CareSphere-Audit-Log-${localToday()}.xlsx"`);
@@ -66,7 +67,7 @@ exports.complianceReport = async (req, res) => {
     `SELECT SUM(status = 'Active') AS active, SUM(status = 'Discharged') AS discharged, SUM(status = 'Adopted') AS adopted,
             SUM(status = 'Active' AND TIMESTAMPDIFF(YEAR, dob, CURDATE()) >= 18) AS transition_flagged,
             SUM(status = 'Active' AND NOT EXISTS (SELECT 1 FROM tbl_health_history h WHERE h.child_id = c.child_id)) AS missing_health
-       FROM tbl_children c`);
+       FROM tbl_children c WHERE c.archived_at IS NULL`);
   const phi = await one(
     `SELECT SUM(event = 'TOKEN_ISSUED') AS grants, SUM(event = 'VIEW') AS views, SUM(event = 'UPDATE') AS updates,
             SUM(event = 'TOKEN_DENIED') AS denied, SUM(event = 'TOKEN_EXPIRED') AS expired
@@ -79,9 +80,9 @@ exports.complianceReport = async (req, res) => {
     [...p, require('../config/adoptionWorkflow').ACTIVE.filter((x) => x !== 'Draft'), ...p]);
   const discharges = await one('SELECT COUNT(*) AS count FROM tbl_child_discharge_history WHERE discharge_date BETWEEN ? AND ?', p);
   const inventory = await one(
-    `SELECT COUNT(*) AS total, SUM(quantity <= min_threshold) AS low FROM tbl_inventory`);
+    `SELECT COUNT(*) AS total, SUM(quantity <= min_threshold) AS low FROM tbl_inventory WHERE archived_at IS NULL`);
   const [lowItems] = await pool.query(
-    'SELECT item_name, quantity, min_threshold FROM tbl_inventory WHERE quantity <= min_threshold ORDER BY quantity');
+    'SELECT item_name, quantity, min_threshold FROM tbl_inventory WHERE archived_at IS NULL AND quantity <= min_threshold ORDER BY quantity');
   const donations = await one(
     `SELECT SUM(${Donation.COUNTED_SQL}) AS count, COALESCE(SUM(CASE WHEN ${Donation.COUNTED_SQL} AND d.payment_method <> 'In-kind' THEN d.amount END), 0) AS total,
             SUM(d.status IN ('Pending', 'Pending verification')) AS pending,
@@ -89,8 +90,8 @@ exports.complianceReport = async (req, res) => {
        FROM tbl_donations d WHERE DATE(d.created_at) BETWEEN ? AND ?`, p);
   const visitors = await one(
     `SELECT COUNT(*) AS count, SUM(check_out_time IS NULL) AS open
-       FROM tbl_visitors WHERE DATE(check_in_time) BETWEEN ? AND ?`, p);
-  const meals = await one('SELECT COUNT(*) AS count FROM tbl_meals WHERE scheduled_date BETWEEN ? AND ?', p);
+       FROM tbl_visitors WHERE archived_at IS NULL AND DATE(check_in_time) BETWEEN ? AND ?`, p);
+  const meals = await one('SELECT COUNT(*) AS count FROM tbl_meals WHERE archived_at IS NULL AND scheduled_date BETWEEN ? AND ?', p);
 
   // The audit section follows the Activity log filters (period = From/To, or this month).
   const auditQuery = { ...req.query, from, to };

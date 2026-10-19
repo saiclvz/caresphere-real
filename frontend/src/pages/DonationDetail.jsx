@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, Check, Download, FileText, Pencil, Upload } from 'lucide-react';
 import useApi from '../hooks/useApi';
-import { api, download } from '../api/client';
+import { api, downloadSigned, signedUrl } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Skeleton, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Notice, Skeleton, Table, TAB_ROW, tabClass } from '../components/ui';
+import { ClaimMessageModal, DecideModal, VerifyClaimModal } from '../components/donations/ClaimActions';
 import DocumentViewer from '../components/DocumentViewer';
 import AllocationEditor, { allocationBody } from '../components/donations/AllocationEditor';
 import { checkFile, readFile, MB } from '../lib/files';
@@ -24,7 +25,7 @@ function Stepper({ steps }) {
         {steps.map((s, i) => (
           <li key={s.label} className="flex items-center gap-1">
             <span aria-current={s.state === 'current' ? 'step' : undefined} className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
-              s.state === 'completed' ? 'bg-emerald-50 text-emerald-800' : s.state === 'current' ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-500'}`}>
+              s.state === 'completed' ? 'bg-emerald-50 text-emerald-800' : s.state === 'current' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-500'}`}>
               {s.state === 'completed' ? <Check className="h-3 w-3" aria-hidden /> : <span aria-hidden>{i + 1}</span>} {s.label}
               <span className="sr-only">({s.state})</span>
             </span>
@@ -115,11 +116,85 @@ function ItemValueModal({ d, line, onClose, reload }) {
   );
 }
 
-function Overview({ d, isAdmin, reload, onAllocation, onCorrection, onVoid }) {
+const CLAIM_TONE = { Reported: 'amber', 'Details requested': 'amber', 'Awaiting approval': 'blue', Verified: 'green', 'Not matched': 'red', Withdrawn: 'slate', 'Legacy cancelled': 'slate' };
+
+/** The donor's report and the home's check: reported and verified amounts are separate and never overwritten. */
+function ClaimPanel({ d, onClaim }) {
+  const c = d.claim;
+  const pending = c.approvals.find((x) => x.status === 'Pending');
+  return (
+    <Card className="p-4 lg:col-span-2">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 font-semibold text-navy-900">Donor report <Badge tone={CLAIM_TONE[c.claim_status]}>{c.status_label}</Badge>{c.stale && <Badge tone="amber">Stale</Badge>}{c.legacy && <Badge tone="slate">From an old payment</Badge>}</h3>
+        <div className="flex flex-wrap gap-1.5">
+          {c.can_verify && <Button size="sm" onClick={() => onClaim('verify')}>Verify</Button>}
+          {c.can_decide && <Button size="sm" onClick={() => onClaim('decide')}>Review approval</Button>}
+          {c.can_request_details && <Button size="sm" variant="secondary" onClick={() => onClaim('details')}>Request details</Button>}
+          {c.can_not_match && <Button size="sm" variant="secondary" onClick={() => onClaim('not_matched')}>Not matched</Button>}
+          {c.can_reopen && <Button size="sm" variant="secondary" onClick={() => onClaim('reopen')}>Reopen</Button>}
+          {c.verifier && <Button size="sm" variant="ghost" onClick={() => onClaim('note')}>Internal note</Button>}
+        </div>
+      </div>
+      {c.separation_problem && ['Reported', 'Details requested', 'Awaiting approval'].includes(c.claim_status) && <Notice tone="info" className="mb-3">{c.separation_problem}</Notice>}
+      {!c.verifier && <p className="mb-2 text-xs text-slate-500">Verifying needs the Donations: cash verification duty.</p>}
+      <div className="grid gap-4 md:grid-cols-2">
+        <dl className="divide-y divide-slate-100">
+          <Row label="Reported amount"><span className="tabular-nums">{formatMoney(c.reported_amount)}</span> <span className="text-xs text-slate-500">(never counted)</span></Row>
+          <Row label="Reference"><span className="font-mono">{c.reference}</span></Row>
+          <Row label="Sent">{formatDateTime(c.sent_at)}</Row>
+          <Row label="Sender">{c.sender_hint}</Row>
+          <Row label="Donor's note">{c.donor_note}</Row>
+          <Row label="Reported">{formatDateTime(c.reported_at)}{c.consent_at ? ' · privacy consent given' : ''}</Row>
+        </dl>
+        <dl className="divide-y divide-slate-100">
+          <Row label="Verified amount">{c.verified_amount === null ? <span className="text-slate-500">Not verified</span> : <span className="font-semibold tabular-nums text-navy-900">{formatMoney(c.verified_amount)}</span>}</Row>
+          <Row label="Reference in the home account">{c.verified_reference && <span className="font-mono">{c.verified_reference}</span>}</Row>
+          <Row label="Received in the account">{c.verified_received_on ? formatDate(c.verified_received_on) : null}</Row>
+          <Row label="Verified by">{c.verified_by_name ? `${c.verified_by_name} · ${formatDateTime(c.verified_at)}` : null}</Row>
+          {c.amount_diff_reason && <Row label="Why the amount differs">{c.amount_diff_reason}</Row>}
+          {c.message_to_donor && <Row label="Message to the donor">{c.message_to_donor}</Row>}
+        </dl>
+      </div>
+      {pending && <p className="mt-3 text-sm text-slate-700"><AlertTriangle className="mr-1 inline h-4 w-4 text-amber-700" aria-hidden />{pending.kind === 'amount_difference' ? 'Amount differs: an administrator approves' : 'Above the segregation-of-duties amount: a second verifier approves'} ({formatMoney(pending.verified_amount)}, checked by {pending.requested_by_name}).</p>}
+      {c.notes.length > 0 && (
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Messages and notes</h4>
+          <ul className="mt-1 space-y-1 text-sm">{c.notes.map((n) => <li key={n.note_id}><Badge tone={n.author_role === 'internal' ? 'slate' : n.author_role === 'donor' ? 'blue' : 'green'}>{n.author_role === 'internal' ? 'Internal' : n.author_role === 'donor' ? 'Donor' : 'To the donor'}</Badge> <span className="text-navy-900">{n.note}</span> <span className="text-xs text-slate-500">{n.by_name}, {formatDateTime(n.created_at)}</span></li>)}</ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Cash (or a statement deposit) above the dual-control amount: a second person confirms it was received. */
+function DualControlPanel({ d, reload }) {
+  const { toast } = useApp();
+  const [busy, setBusy] = useState(false);
+  const confirm = async () => {
+    setBusy(true);
+    try { await api(`/donations/${d.donation_id}/confirm-cash`, { method: 'POST' }); toast('Cash confirmed.'); reload(); }
+    catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  };
+  return (
+    <Card className={`p-4 lg:col-span-2 ${d.dual_control.status === 'Waiting' ? 'border-amber-200' : ''}`}>
+      <h3 className="font-semibold text-navy-900">Second-person check {d.dual_control.status === 'Waiting' ? <Badge tone="amber">Waiting</Badge> : <Badge tone="green">Confirmed</Badge>}</h3>
+      {d.dual_control.status === 'Waiting' ? (
+        <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-slate-600">
+          <span>Above the dual-control amount: it is not counted and has no acknowledgment until someone who did not record it confirms the cash was received.</span>
+          {d.dual_control.can_confirm ? <Button size="sm" loading={busy} onClick={confirm}>Confirm the cash</Button> : <span className="text-xs text-slate-500">You recorded it, so someone else must confirm it.</span>}
+        </div>
+      ) : <p className="mt-1 text-sm text-slate-600">A second person confirmed the cash.</p>}
+    </Card>
+  );
+}
+
+function Overview({ d, isAdmin, reload, onAllocation, onCorrection, onVoid, onClaim }) {
   const a = useAction(d, reload);
   const pendingVoid = d.void_requests.find((r) => r.status === 'Pending');
   return (
     <div className="grid gap-4 lg:grid-cols-2">
+      {d.claim && <ClaimPanel d={d} onClaim={onClaim} />}
+      {d.dual_control && <DualControlPanel d={d} reload={reload} />}
       <Card className="p-4">
         <h3 className="mb-1 font-semibold text-navy-900">Details</h3>
         <dl className="divide-y divide-slate-100">
@@ -131,7 +206,8 @@ function Overview({ d, isAdmin, reload, onAllocation, onCorrection, onVoid }) {
           <Row label="Recorded">{formatDateTime(d.created_at)}</Row>
           <Row label="Received">{d.received_at ? formatDateTime(d.received_at) : null}</Row>
           {d.visit && <Row label="Linked visit">{formatDateTime(d.visit.check_in_time)}</Row>}
-          {d.payment && <Row label="Payment">{d.payment.method_name}{d.payment.transfer_reference ? ` · reference ${d.payment.transfer_reference}` : ''}{d.payment.transfer_date ? ` · ${formatDate(d.payment.transfer_date)}` : ''}</Row>}
+          {d.ack_no && <Row label="Acknowledgment no."><span className="font-mono">{d.ack_no}</span></Row>}
+          {d.legacy_payment && <Row label="Old online payment"><span className="text-slate-600">{d.legacy_payment.method_name} · {d.legacy_payment.gateway} {d.legacy_payment.status}{d.legacy_payment.mapped_as ? ` → ${d.legacy_payment.mapped_as}` : ''} (read-only record from before QR donations)</span></Row>}
           <Row label="Receipt code"><span className="break-all font-mono text-xs">{d.qr_receipt_code}</span></Row>
           {d.status === 'Voided' && <Row label="Voided"><span className="text-red-700">{d.void_reason}{d.void_note ? `: ${d.void_note}` : ''}</span> · {formatDateTime(d.voided_at)}</Row>}
         </dl>
@@ -324,7 +400,7 @@ function DocumentsTab({ d, options, reload, onView }) {
         <div className="flex flex-wrap items-end gap-2">
           {d.status === 'Accepted' && !latest && !d.allocation_problems.length && <Button loading={a.busy === 'ack'} onClick={() => a.run('ack', '/acknowledgment', 'POST', {}, 'Acknowledgment issued.')}>Generate acknowledgment</Button>}
           {latest && d.status !== 'Voided' && <>
-            <Button variant="secondary" onClick={() => download(`/donations/${d.donation_id}/receipt`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`).catch((e) => toast(e.message, 'error'))}><Download className="h-4 w-4" aria-hidden /> Download</Button>
+            <Button variant="secondary" onClick={() => downloadSigned(`/donations/${d.donation_id}/receipt/link`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`).catch((e) => toast(e.message, 'error'))}><Download className="h-4 w-4" aria-hidden /> Download</Button>
             <Field label="Reason to reissue" error={a.errors.reason} className="min-w-[14rem] flex-1"><input className="input" maxLength={255} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
             <Button variant="secondary" loading={a.busy === 'reissue'} onClick={() => a.run('reissue', '/acknowledgment', 'POST', { reason }, 'Acknowledgment reissued.')}>Reissue</Button>
           </>}
@@ -332,12 +408,11 @@ function DocumentsTab({ d, options, reload, onView }) {
       </Card>
       <Card className="space-y-3 p-4">
         <h3 className="font-semibold text-navy-900">Documents</h3>
-        {d.payment?.has_proof && <p className="text-sm"><button type="button" className="font-medium text-brand hover:underline" onClick={() => onView({ label: 'Proof of transfer (from the donor)', path: `/payments/${d.payment.payment_id}/proof` })}>Proof of transfer from the donor</button></p>}
         {d.documents.length === 0 ? <p className="text-sm text-slate-500">No documents uploaded.</p> : (
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">{d.documents.map((x) => (
             <li key={x.document_id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-              <span className="flex items-center gap-2"><FileText className="h-4 w-4 text-slate-400" aria-hidden /><span><span className="font-medium text-navy-900">{x.label}</span> <span className="text-xs text-slate-500">{options.document_kinds?.[x.kind]} · {x.uploaded_by_name}, {formatDate(x.uploaded_at)}</span></span></span>
-              <Button size="sm" variant="secondary" onClick={() => onView({ label: x.label, path: `/donations/${d.donation_id}/documents/${x.document_id}` })}>View<span className="sr-only"> {x.label}</span></Button>
+              <span className="flex items-center gap-2"><FileText className="h-4 w-4 text-slate-400" aria-hidden /><span><span className="font-medium text-navy-900">{x.label}</span> <span className="text-xs text-slate-500">{x.kind_label || options.document_kinds?.[x.kind]} · {x.uploaded_by_name}, {formatDate(x.uploaded_at)}</span>{x.duplicate && <Badge tone="amber">Same file as on another donation</Badge>}</span></span>
+              <Button size="sm" variant="secondary" onClick={() => signedUrl(`/donations/${d.donation_id}/documents/${x.document_id}/link`).then((url) => onView({ label: x.label, path: url })).catch((e) => toast(e.message, 'error'))}>View<span className="sr-only"> {x.label}</span></Button>
             </li>))}</ul>
         )}
         {d.status !== 'Voided' && (
@@ -362,7 +437,6 @@ const NEXT_TO = { Received: 'Received', 'Under inspection': 'Under inspection', 
 
 export default function DonationDetail() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useApp();
   const isAdmin = user.role === 'Admin';
@@ -388,7 +462,14 @@ export default function DonationDetail() {
   const next = d.next_action;
   const doNext = async () => {
     if (!next) return;
-    if (next.key === 'verify_transfer') return navigate('/donations');
+    if (next.key === 'verify_claim') return d.claim?.can_verify ? setModal('verify') : toast(d.claim?.separation_problem || 'Verifying needs the Donations: cash verification duty.', 'error');
+    if (next.key === 'approve_claim') return d.claim?.can_decide ? setModal('decide') : toast('Another verifier or an administrator must approve this.', 'error');
+    if (next.key === 'confirm_cash') {
+      setBusy(true);
+      try { await api(`/donations/${d.donation_id}/confirm-cash`, { method: 'POST' }); toast('Cash confirmed.'); reload(); }
+      catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+      return;
+    }
     if (next.key === 'allocation') return setModal('allocation');
     if (next.key === 'acknowledge') {
       setBusy(true);
@@ -423,14 +504,14 @@ export default function DonationDetail() {
       </div>
       {d.status === 'Voided' && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-800" role="status">Voided: {d.void_reason}{d.void_note ? ` (${d.void_note})` : ''}. It stays on record and is left out of every total.</p>}
       <Stepper steps={d.stepper} />
-      <div role="tablist" aria-label="Donation sections" className="relative mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+      <div role="tablist" aria-label="Donation sections" className={TAB_ROW}>
         {shownTabs.map(([k, l]) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k} id={`dtab-${k}`} aria-controls={`dpanel-${k}`} onClick={() => setTab(k)}
-            className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${tab === k ? 'border-brand text-navy-900' : 'border-transparent text-slate-500 hover:text-navy-900'}`}>{l}</button>
+            className={tabClass(tab === k)}>{l}</button>
         ))}
       </div>
       <div role="tabpanel" id={`dpanel-${tab}`} aria-labelledby={`dtab-${tab}`}>
-        {tab === 'overview' && <Overview d={d} isAdmin={isAdmin} reload={reload} onAllocation={() => setModal('allocation')} onCorrection={() => setModal('correction')} onVoid={() => setModal('void')} />}
+        {tab === 'overview' && <Overview d={d} isAdmin={isAdmin} reload={reload} onAllocation={() => setModal('allocation')} onCorrection={() => setModal('correction')} onVoid={() => setModal('void')} onClaim={setModal} />}
         {tab === 'donor' && <DonorTab d={d} />}
         {tab === 'items' && <ItemsTab d={d} onEdit={(l) => setModal({ item: l })} />}
         {tab === 'inventory' && <InventoryTab d={d} programs={options.programs} reload={reload} />}
@@ -455,6 +536,15 @@ export default function DonationDetail() {
       {modal === 'correction' && <CorrectionModal d={d} programs={options.programs} onClose={() => setModal(null)} reload={reload} />}
       {modal === 'void' && <VoidDialog d={d} options={options} isAdmin={isAdmin} onClose={() => setModal(null)} onDone={(m) => { setModal(null); toast(m); reload(); }} />}
       {modal?.item && <ItemValueModal d={d} line={modal.item} onClose={() => setModal(null)} reload={reload} />}
+      {modal === 'verify' && d.claim && (
+        <VerifyClaimModal claim={{ ...d.claim, donation_id: d.donation_id, donation_no: d.donation_no, method: d.payment_method, amount: d.claim.reported_amount }} onClose={() => setModal(null)}
+          onDone={(r) => { setModal(null); toast(r?.status === 'Awaiting approval' ? 'Recorded. It is waiting for approval before it counts.' : 'Verified. It now counts in the totals.'); reload(); }}
+          onNotMatched={() => setModal('not_matched')} onRequestDetails={() => setModal('details')} />
+      )}
+      {['not_matched', 'details', 'reopen', 'note'].includes(modal) && <ClaimMessageModal claim={d} kind={modal} onClose={() => setModal(null)} onDone={() => { setModal(null); toast('Saved.'); reload(); }} />}
+      {modal === 'decide' && d.claim?.approvals.find((x) => x.status === 'Pending') && (
+        <DecideModal approval={d.claim.approvals.find((x) => x.status === 'Pending')} donationNo={d.donation_no} onClose={() => setModal(null)} onDone={(x) => { setModal(null); toast(x === 'approve' ? 'Approved. It now counts in the totals.' : 'Declined. The report is back in To verify.'); reload(); }} />
+      )}
       <Modal open={rejecting} onClose={() => setRejecting(false)} size="sm" title={`Reject ${d.donation_no}?`}
         footer={<><Button variant="secondary" onClick={() => setRejecting(false)}>Cancel</Button><Button variant="danger" loading={busy} onClick={async () => { await step('Rejected', rejectNote.trim()); setRejecting(false); }}>Reject</Button></>}>
         <Field label="Reason" required hint="For example, the items were not usable."><textarea className="input" rows={2} maxLength={255} value={rejectNote} onChange={(e) => setRejectNote(e.target.value)} /></Field>

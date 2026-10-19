@@ -3,18 +3,24 @@ const env = require('../config/env');
 const { pool } = require('../config/db');
 const HttpError = require('../utils/HttpError');
 const { logSecurityEvent } = require('../utils/audit');
+const cookies = require('../utils/sessionCookies');
 
 // Idle timeout (RA 10175): a session with no activity for this long is signed out.
 const IDLE_MINUTES = Math.max(5, Number(process.env.SESSION_IDLE_MINUTES) || 30);
 
-/** Verifies the Bearer JWT, checks the denylist, and loads the live user record. */
+/**
+ * Verifies the session (the HttpOnly cookie set at sign-in; a Bearer header is accepted for non-browser tools),
+ * checks the CSRF header on cookie-authenticated changes, the denylist, and loads the live user record.
+ */
 const sessionError = (message) => Object.assign(new HttpError(401, message), { session: true });
 
 async function authenticate(req, res, next) {
   try {
     const header = req.headers.authorization || '';
-    const [scheme, token] = header.split(' ');
-    if (scheme !== 'Bearer' || !token) throw sessionError('Sign in to continue.');
+    const [scheme, bearer] = header.split(' ');
+    const fromCookie = cookies.readCookies(req)[cookies.SESSION];
+    const token = scheme === 'Bearer' && bearer ? bearer : fromCookie;
+    if (!token) throw sessionError('Sign in to continue.');
 
     let decoded;
     try {
@@ -23,11 +29,17 @@ async function authenticate(req, res, next) {
       throw sessionError('Your session has expired. Sign in again.');
     }
 
+    // A change made with the cookie must carry the CSRF header bound to this session (a Bearer header can't be sent
+    // by another site, so it needs none).
+    if (token === fromCookie && !(scheme === 'Bearer' && bearer) && !cookies.csrfOk(req, decoded.jti)) {
+      throw Object.assign(new HttpError(403, 'Refresh the page and try again.'), { csrf: true });
+    }
+
     const [revoked] = await pool.query('SELECT 1 FROM tbl_revoked_tokens WHERE jti = ? LIMIT 1', [decoded.jti]);
     if (revoked.length) throw sessionError('You have been signed out. Sign in again.');
 
     const [rows] = await pool.query(
-      `SELECT u.user_id, u.full_name, u.email, u.is_active, r.role_name,
+      `SELECT u.user_id, u.full_name, u.email, u.is_active, r.role_name, u.must_change_password,
               UNIX_TIMESTAMP(u.tokens_valid_after) AS valid_after
          FROM tbl_users u JOIN tbl_roles r ON r.role_id = u.role_id
         WHERE u.user_id = ?`,
@@ -74,7 +86,15 @@ async function authenticate(req, res, next) {
       const [duties] = await pool.query('SELECT duty FROM tbl_staff_duties WHERE user_id = ?', [user.user_id]);
       req.user.duties = duties.map((d) => d.duty);
     }
-    req.auth = { jti: decoded.jti, exp: decoded.exp, iat: decoded.iat };
+    req.auth = { jti: decoded.jti, exp: decoded.exp, iat: decoded.iat, mfa: decoded.mfa === true, via: token === fromCookie ? 'cookie' : 'bearer' };
+    // A temporary password set by an Admin must be changed before anything else.
+    if (user.must_change_password) {
+      req.user.must_change_password = true;
+      const p = String(req.originalUrl || req.url || '').split('?')[0];
+      if (!['/api/auth/me', '/api/auth/password', '/api/auth/logout'].includes(p)) {
+        return next(Object.assign(new HttpError(403, 'Change your temporary password to continue.'), { mustChangePassword: true }));
+      }
+    }
     next();
   } catch (err) {
     next(err);

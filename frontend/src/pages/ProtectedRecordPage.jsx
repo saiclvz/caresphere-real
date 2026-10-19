@@ -7,6 +7,7 @@ import { useApp } from '../context/AppContext';
 import { Button, Card, ErrorNote, Field, Spinner } from '../components/ui';
 import { formatDateTime } from '../lib/format';
 import { DocumentPages } from '../components/DocumentViewer';
+import { RA11642Sec39 } from '../lib/laws';
 
 /**
  * Shows the record in the protected viewer (rendered pages, no browser PDF viewer, no file URL), with the
@@ -107,7 +108,7 @@ function ProtectedRecordInner() {
   const notice = (
     <div className="flex gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900" role="note">
       <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
-      <p><strong>Confidential protected record.</strong> Access is limited by RA 11642 Section 39 and the Data Privacy Act. Every view and download is recorded with your name and the time.</p>
+      <p><strong>Confidential protected record.</strong> Access is limited by <RA11642Sec39 /> and the Data Privacy Act. Every view and download is recorded with your name and the time.</p>
     </div>
   );
   const sealedFields = (

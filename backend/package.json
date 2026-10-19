@@ -10,7 +10,9 @@
     "migrate": "node scripts/migrate.js",
     "create-admin": "node scripts/createAdmin.js",
     "reset-mfa": "node scripts/resetMfa.js",
-    "gen-keys": "node scripts/generateKeys.js"
+    "gen-keys": "node scripts/generateKeys.js",
+    "map-legacy-payments": "node scripts/mapLegacyPayments.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18.0.0"

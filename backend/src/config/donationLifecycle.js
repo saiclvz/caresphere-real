@@ -48,7 +48,7 @@ const PROGRAM_KEYWORDS = {
   'General support': ['general support', 'general', 'operations', 'children in our care'],
 };
 
-const VOID_REASONS = ['Entered by mistake', 'Duplicate entry', 'Payment not received', 'Other'];
+const VOID_REASONS = ['Entered by mistake', 'Duplicate entry', 'Payment not received', 'Test data', 'Other'];
 const DONOR_TYPES = ['Individual', 'Organization'];
 const DOCUMENT_KINDS = { delivery_receipt: 'Delivery receipt', proof_of_transfer: 'Proof of transfer', photo: 'Donation photo', other: 'Other document' };
 const CORRECTABLE = ['amount', 'purpose', 'payment_method'];

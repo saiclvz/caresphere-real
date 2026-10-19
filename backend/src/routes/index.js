@@ -36,7 +36,8 @@ const dashboard = require('../controllers/dashboardController');
 const compliance = require('../controllers/complianceController');
 const notifications = require('../controllers/notificationController');
 const unlock = require('../controllers/unlockController');
-const payments = require('../controllers/paymentController');
+const claimsCtl = require('../controllers/donationClaimController');
+const { limits: claimLimits } = require('../services/claimSettings');
 const protectedRecords = require('../controllers/protectedRecordController');
 const adoptionDetail = require('../controllers/adoptionDetailController');
 const stages = require('../controllers/adoptionStageController');
@@ -48,6 +49,14 @@ const { monitoringGuard } = require('../services/childAccess');
 
 const router = express.Router();
 const ADMIN = authorize('Admin');
+/** Logs a non-Admin attempt at an admission decision (the ADMIN guard after it refuses with 403). */
+const ADMISSION_DECISION = (verb) => async (req, res, next) => {
+  if (req.user && req.user.role !== 'Admin') {
+    await require('../utils/audit').logDenied(req, `ADMISSION_${verb.toUpperCase()}_DENIED (not Admin)`, `Child ${String(req.params.id).slice(0, 50)}`,
+      `${req.user.full_name || `User #${req.user.user_id}`} (${req.user.role}) attempted to ${verb === 'verify' ? 'verify a document of' : verb} an admission. Only an Admin may do this.`);
+  }
+  next();
+};
 const OPS = authorize('Admin', 'Staff');
 // Donor accounts include the adoption-applicant features (Adopt a Child, My applications).
 const DONOR = authorize('Donor');
@@ -60,6 +69,13 @@ const captureLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, message: 'Too m
 const tokenLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, message: 'Too many verification attempts. Wait a minute and try again.' });
 const mfaLimiter = rateLimit({ windowMs: 5 * 60 * 1000, max: 15, message: 'Too many verification attempts. Wait 5 minutes and try again.' });
 const verifyLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, message: 'Too many receipt checks. Wait a minute and try again.' });
+// Receipt checks from everyone together (a distributed guess attempt still hits this).
+const verifyGlobalLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, key: 'global', message: 'Receipt checking is busy. Wait a minute and try again.' });
+const reauthLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: 'user', message: 'Too many attempts. Wait 15 minutes and try again.' });
+// Donation reports per network address per hour (Settings: donation_claim_ip_hourly_limit); per-donor limits are in the service.
+const claimIpLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: async () => (await claimLimits()).donation_claim_ip_hourly_limit, message: 'Too many donation reports from this network. Please try again later.' });
+const claimUserLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, key: 'user', message: 'Please wait a minute before trying again.' });
+const fileLimiter = rateLimit({ windowMs: 60 * 1000, max: 120, key: 'user', message: 'Too many file requests. Wait a minute.' });
 const uploadLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, message: 'Too many uploads. Wait a minute and try again.' });
 // ID scan: the page asks for results every few seconds while a photo is scanned; PhilSys Check results are recorded by hand.
 const idScanLimiter = rateLimit({ windowMs: 60 * 1000, max: 60, message: 'Too many requests. Wait a minute and try again.' });
@@ -78,6 +94,9 @@ router.put('/auth/password', authenticate, h(auth.changePassword));
 router.post('/auth/mfa/setup/start', mfaLimiter, h(auth.mfaSetupStart));
 router.post('/auth/mfa/setup/confirm', mfaLimiter, h(auth.mfaSetupConfirm));
 router.post('/auth/mfa/verify', mfaLimiter, h(auth.mfaVerify));
+
+// Public (signed out): the home's contact details for the footer, Privacy Policy and Terms pages.
+router.get('/public/contact', h(settings.publicContact));
 
 // Everything below requires a valid session.
 router.use(authenticate);
@@ -104,12 +123,14 @@ router.put('/admissions/:id/steps/:step', OPS, D_ADMISSION, h(admissions.saveSte
 router.post('/admissions/:id/documents/:key', OPS, uploadLimiter, D_ADMISSION, h(admissions.uploadFile));
 router.get('/admissions/:id/files/:fileId', OPS, D_CHILD_OR_ADMISSION, h(admissions.file));
 router.post('/admissions/:id/submit', OPS, D_ADMISSION, h(admissions.submit));
-router.post('/admissions/:id/approve', ADMIN, h(admissions.approve));
-router.post('/admissions/:id/return', ADMIN, h(admissions.returnForCorrection));
-router.post('/admissions/:id/decline', ADMIN, h(admissions.decline));
+// Admin decisions. A non-Admin attempt is refused (403) and written to the Activity log as DENIED.
+router.post('/admissions/:id/approve', ADMISSION_DECISION('approve'), ADMIN, h(admissions.approve));
+router.post('/admissions/:id/return', ADMISSION_DECISION('return'), ADMIN, h(admissions.returnForCorrection));
+router.post('/admissions/:id/decline', ADMISSION_DECISION('decline'), ADMIN, h(admissions.decline));
+router.post('/admissions/:id/documents/:key/verify', ADMISSION_DECISION('verify'), ADMIN, h(admissions.verifyDocument)); // reviewing Admin (never the creator)
+router.post('/admissions/:id/withdraw', OPS, D_ADMISSION, h(admissions.withdraw)); // creator or Admin: Not Admitted, reason required
 // Child record access levels (services/childAccess.js is the one policy for every route below).
 router.post('/children/duplicate-check', OPS, D_CHILD_OR_ADMISSION, h(children.duplicateCheck));
-router.post('/children/:id/intake-complete', OPS, D_CHILDREN, h(children.intakeComplete));
 router.get('/children/:id/care-card', OPS, D_CHILDREN, h(childAccess.getCareCard));
 router.put('/children/:id/care-card', OPS, D_CHILDREN, h(childAccess.saveCareCard));
 router.post('/children/:id/care-card/review', OPS, D_CHILDREN, h(childAccess.reviewCareCard));
@@ -124,9 +145,7 @@ router.put('/assignments/:id', ADMIN, h(childAccess.changeAssignment));
 router.post('/assignments/:id/end', ADMIN, h(childAccess.endAssignment));
 router.get('/access-requests', ADMIN, h(childAccess.listRequests));
 router.post('/access-requests/:id/decision', ADMIN, h(childAccess.decideRequest));
-// Emergency access was removed (no new uses). Earlier uses stay recorded and Admin can still review them.
-router.get('/emergency-access', ADMIN, h(childAccess.listEmergency));
-router.post('/emergency-access/:id/review', ADMIN, h(childAccess.reviewEmergency));
+// Emergency access was removed: no routes. Earlier uses are kept read-only (Access tab, Admin).
 router.get('/reassignment-flags', ADMIN, h(childAccess.flags));
 router.get('/monitoring', ADMIN, h(childAccess.currentMonitoring));
 router.post('/monitoring', ADMIN, h(childAccess.startMonitoring));
@@ -141,7 +160,8 @@ router.get('/privacy-concerns', ADMIN, h(childAccess.listConcerns));
 router.post('/privacy-concerns/:id/review', ADMIN, h(childAccess.reviewConcern));
 router.get('/children/:id', OPS, D_CHILDREN, h(children.getOne));
 router.put('/children/:id', OPS, D_CHILDREN, h(children.update));
-router.delete('/children/:id', ADMIN, D_CHILDREN, h(children.remove));
+router.delete('/children/:id', ADMIN, D_CHILDREN, h(children.remove)); // archives (never deletes), reason required
+router.post('/children/:id/restore', ADMIN, D_CHILDREN, h(children.restore));
 router.get('/children/:id/photo', OPS, D_CHILDREN, h(children.photo));
 router.post('/children/:id/photo', OPS, uploadLimiter, D_CHILDREN, h(children.uploadPhoto));
 router.delete('/children/:id/photo', OPS, D_CHILDREN, h(children.removePhoto));
@@ -293,17 +313,34 @@ router.get('/inventory', OPS, D_INVENTORY, h(inventory.list));
 router.get('/inventory/low-stock-count', OPS, D_INVENTORY, h(inventory.lowStockCount));
 router.post('/inventory', OPS, D_INVENTORY, h(inventory.create));
 router.put('/inventory/:id', OPS, D_INVENTORY, h(inventory.update));
-router.delete('/inventory/:id', OPS, D_INVENTORY, h(inventory.remove));
+router.get('/inventory/options', OPS, D_INVENTORY, h(inventory.options));
+router.get('/inventory/reports', OPS, D_INVENTORY, h(inventory.reports));
+router.get('/inventory/:id/movements', OPS, D_INVENTORY, h(inventory.history));
+router.post('/inventory/:id/movements', OPS, D_INVENTORY, h(inventory.movement)); // Stock in / out / Adjustment / Disposal, reason required
+router.post('/inventory/:id/adjust', OPS, D_INVENTORY, h(inventory.adjust)); // the - / + buttons: same body as /movements
+router.delete('/inventory/:id', OPS, D_INVENTORY, h(inventory.remove)); // archives (never deletes), reason required
+router.post('/inventory/:id/restore', ADMIN, D_INVENTORY, h(inventory.restore));
 
 // ---------- Donations ----------
 router.get('/donations', OPS, D_DONATIONS, h(donations.list));
+// QR donations: the To verify queue and verification (Admin, or Staff with Donations + Donations: cash verification;
+// the service checks the second duty and the separation of duties).
+router.get('/donations/to-verify', OPS, D_DONATIONS, h(claimsCtl.queue));
+router.post('/donations/approvals/:id', OPS, D_DONATIONS, h(claimsCtl.decide));
+router.get('/reconciliation', OPS, D_DONATIONS, h(claimsCtl.reconciliation));
+router.post('/reconciliation/imports', OPS, uploadLimiter, D_DONATIONS, h(claimsCtl.importStatement));
+router.post('/reconciliation/lines/:id/convert', OPS, D_DONATIONS, h(claimsCtl.convertLine));
+router.post('/reconciliation/lines/:id/dismiss', OPS, D_DONATIONS, h(claimsCtl.dismissLine));
+router.get('/cash-counts', OPS, D_DONATIONS, h(claimsCtl.cashCounts));
+router.post('/cash-counts', OPS, D_DONATIONS, h(claimsCtl.submitCashCount));
+router.post('/cash-counts/:id/sign-off', ADMIN, h(claimsCtl.signOffCashCount));
 router.get('/donations/options', OPS, D_DONATIONS, h(donations.options));
 router.get('/donations/methods', OPS, D_DONATIONS, h(donations.methods));
 router.get('/donations/donors', OPS, D_DONATIONS, h(donations.donors));
 router.get('/donations/inventory-items', OPS, D_DONATIONS, h(donations.inventoryItems));
 router.get('/donations/export', OPS, D_DONATIONS, h(donations.exportCsv));
 router.get('/donations/reports', OPS, D_DONATIONS, h(donations.reports));
-router.get('/donations/verify/:code', OPS, verifyLimiter, D_DONATIONS, h(donations.verify));
+router.get('/donations/verify/:code', OPS, verifyLimiter, verifyGlobalLimiter, D_DONATIONS, h(donations.verify));
 router.post('/donations', OPS, D_DONATIONS, h(donations.create));
 router.get('/donations/:id', OPS, D_DONATIONS, h(donations.getOne));
 router.put('/donations/:id', OPS, D_DONATIONS, h(donations.update));
@@ -316,11 +353,20 @@ router.put('/donations/:id/items/:lineId', OPS, D_DONATIONS, h(donations.updateI
 router.post('/donations/:id/distributions', OPS, D_DONATIONS, h(donations.distribute));
 router.post('/donations/:id/utilization', OPS, D_DONATIONS, h(donations.utilize));
 router.post('/donations/:id/void', ADMIN, D_DONATIONS, h(donations.voidDonation));
+router.post('/donations/:id/verify', OPS, D_DONATIONS, h(claimsCtl.verify));
+router.post('/donations/:id/not-matched', OPS, D_DONATIONS, h(claimsCtl.notMatched));
+router.post('/donations/:id/request-details', OPS, D_DONATIONS, h(claimsCtl.requestDetails));
+router.post('/donations/:id/reopen', OPS, D_DONATIONS, h(claimsCtl.reopen));
+router.post('/donations/:id/claim-notes', OPS, D_DONATIONS, h(claimsCtl.internalNote));
+router.post('/donations/:id/confirm-cash', OPS, D_DONATIONS, h(claimsCtl.confirmCash));
 router.post('/donations/:id/void-request', OPS, D_DONATIONS, h(donations.requestVoid));
 router.post('/donations/:id/void-request/decline', ADMIN, D_DONATIONS, h(donations.declineVoid));
 router.post('/donations/:id/documents', OPS, uploadLimiter, D_DONATIONS, h(donations.uploadDocument));
-router.get('/donations/:id/documents/:docId', OPS, D_DONATIONS, h(donations.viewDocument));
-router.get('/donations/:id/receipt', ANY, D_DONATIONS, h(donations.receipt));
+router.get('/donations/:id/documents/:docId/link', OPS, D_DONATIONS, h(donations.documentLink));
+// The acknowledgment PDF: a signed link first (donors only their own; checked again when the file is sent).
+router.get('/donations/:id/receipt/link', ANY, D_DONATIONS, h(donations.receiptLink));
+// Files (donation documents and proofs, QR images, acknowledgments): only through short-lived signed links.
+router.get('/files/:token', ANY, fileLimiter, h(claimsCtl.file));
 // Donations are never deleted: DELETE /donations/:id is gone (Void instead).
 router.get('/donor-records', OPS, D_DONATIONS, h(donorRecords.list));
 router.get('/donor-records/duplicates', OPS, D_DONATIONS, h(donorRecords.duplicates));
@@ -333,18 +379,26 @@ router.get('/donor/needed-stocks', DONOR, h(donor.neededStocks));
 router.get('/donor/child-needs', DONOR, h(donor.childNeeds));
 router.get('/donor/history', DONOR, h(donor.history));
 router.post('/donor/donations', DONOR, h(donor.donate));
-// Donor payments: e-wallets through PayMongo, bank transfer with proof (the webhook is in server.js, raw body).
-const paymentLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 20, message: 'Too many payment attempts. Please wait a few minutes.' });
-router.get('/payments/options', DONOR, h(payments.options));
-router.post('/payments/checkout', DONOR, paymentLimiter, h(payments.checkout));
-router.post('/payments/bank', DONOR, paymentLimiter, h(payments.bank));
-router.get('/donor/payments', DONOR, h(payments.mine));
-router.get('/donor/payments/:id', DONOR, h(payments.mineOne));
-router.get('/payments', OPS, D_DONATIONS, h(payments.list));
-router.post('/payments/:id/verify', OPS, D_DONATIONS, h(payments.verify));
-router.get('/payments/:id/proof', REVIEWERS, D_DONATIONS, h(payments.proof));
-router.get('/payment-methods', ADMIN, h(payments.methods));
-router.put('/payment-methods/:id', ADMIN, h(payments.updateMethod));
+// QR donations (no online payment processing): the donor gives through the home's QR codes in their own app, then
+// reports it here. The report waits for the home to verify it; it is never counted before that.
+router.get('/donor/donate-options', DONOR, h(claimsCtl.donateOptions));
+router.post('/donor/donation-reports', DONOR, claimUserLimiter, claimIpLimiter, uploadLimiter, h(claimsCtl.report));
+router.post('/donor/donation-reports/:id/withdraw', DONOR, claimUserLimiter, h(claimsCtl.withdraw));
+router.post('/donor/donation-reports/:id/info', DONOR, claimUserLimiter, uploadLimiter, h(claimsCtl.addInfo));
+router.post('/donor/qr-problems', DONOR, claimUserLimiter, h(claimsCtl.reportQrProblem));
+// Settings > Payment QR (Admin only; changes need re-authentication and, with two or more Admins, a second Admin).
+router.post('/auth/reauth', ADMIN, reauthLimiter, mfaLimiter, h(claimsCtl.reauth));
+router.get('/payment-qr', ADMIN, h(claimsCtl.qrList));
+router.get('/payment-qr/sheet', ADMIN, h(claimsCtl.qrSheet));
+router.post('/payment-qr/preview', ADMIN, uploadLimiter, h(claimsCtl.qrPreview));
+router.post('/payment-qr/changes', ADMIN, uploadLimiter, h(claimsCtl.qrRequestChange));
+router.post('/payment-qr/changes/:id/approve', ADMIN, h(claimsCtl.qrApprove));
+router.post('/payment-qr/changes/:id/reject', ADMIN, h(claimsCtl.qrReject));
+router.post('/payment-qr/changes/:id/cancel', ADMIN, h(claimsCtl.qrCancel));
+router.put('/payment-qr/methods/:id', ADMIN, h(claimsCtl.qrUpdateMethod));
+router.post('/payment-qr/methods/:id/confirm', ADMIN, h(claimsCtl.qrConfirm));
+router.get('/payment-qr/methods/:id/versions', ADMIN, h(claimsCtl.qrVersions));
+router.post('/payment-qr/problems/:id/resolve', ADMIN, h(claimsCtl.qrResolveProblem));
 
 // ---------- Visitors (manual log, no QR) ----------
 router.get('/visitors/filter-options', OPS, D_VISITORS, h(visitors.filterOptions));

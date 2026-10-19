@@ -31,7 +31,11 @@ const GENERIC = "That token isn't valid or has expired.";
 const NOT_ASSIGNED = "You're not assigned to this record. Ask an Admin to assign you.";
 
 const ipOf = (req) => (req.ip || '').replace(/^::ffff:/, '').slice(0, 45);
-const tokenHash = (t) => sha256(`unlock:${t}`);
+// Token IDs are short (typed by hand), so their hash is keyed with a server secret: a copy of the database alone
+// can't be used to work out a live Token ID.
+const PEPPER = Buffer.from(crypto.hkdfSync('sha256', Buffer.isBuffer(require('../config/env').qrKey) ? require('../config/env').qrKey : Buffer.from(String(require('../config/env').qrKey || 'caresphere')),
+  Buffer.from('caresphere'), Buffer.from('unlock-token-v2'), 32)).toString('hex');
+const tokenHash = (t) => sha256(`unlock:${PEPPER}:${t}`);
 const jtiOf = (req) => req.auth?.jti || null;
 
 async function logEvent(req, { recordType, recordId, event, purpose = null, detail = null, userId }) {
@@ -205,6 +209,14 @@ async function sessionFor(req, recordType, recordId) {
        FROM tbl_unlock_sessions WHERE grant_hash = ? AND user_id = ? AND record_type = ? AND record_id = ?`,
     [sha256(secret), req.user.user_id, recordType, String(recordId)]);
   if (!s || s.ended_at || (s.session_jti || null) !== jtiOf(req)) return null;
+  // Need-to-know is checked again on every use: if the assignment ended (or the account lost the duty) the open
+  // session ends now, not when its timer runs out.
+  const still = req.user.role === 'Admin' ? { allowed: true } : await access(req, recordType, recordId).catch(() => ({ allowed: false }));
+  if (!still.allowed) {
+    const [r] = await pool.query("UPDATE tbl_unlock_sessions SET ended_at = NOW(), end_reason = 'revoked' WHERE session_id = ? AND ended_at IS NULL", [s.session_id]);
+    if (r.affectedRows) await logEvent(req, { recordType, recordId, event: 'session_revoked', purpose: s.purpose, detail: 'no longer assigned' });
+    return null;
+  }
   if (Number(s.remaining) <= 0) {
     const [r] = await pool.query("UPDATE tbl_unlock_sessions SET ended_at = NOW(), end_reason = 'expired' WHERE session_id = ? AND ended_at IS NULL", [s.session_id]);
     if (r.affectedRows) await logEvent(req, { recordType, recordId, event: 'session_expired', purpose: s.purpose });

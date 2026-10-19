@@ -336,7 +336,7 @@ async function matchingData(req, app) {
   if (!active) {
     const [rows] = await pool.query(
       `SELECT child_id, full_name, TIMESTAMPDIFF(YEAR, dob, CURDATE()) AS age FROM tbl_children
-        WHERE status = 'Active' AND available_for_adoption = TRUE AND TIMESTAMPDIFF(YEAR, dob, CURDATE()) < ? ORDER BY first_name, last_name`, [Number(env.transitionAge)]);
+        WHERE status = 'Active' AND archived_at IS NULL AND available_for_adoption = TRUE AND TIMESTAMPDIFF(YEAR, dob, CURDATE()) < ? ORDER BY first_name, last_name`, [Number(env.transitionAge)]);
     for (const r of rows) {
       const { blocks: cb } = await M.childBlocks(pool, r.child_id);
       children.push({ child_id: r.child_id, full_name: r.full_name, age: r.age, ready: cb.length === 0, blocks: cb.map((b) => b.message) });
@@ -388,7 +388,7 @@ async function workflowTab(req, app) {
     const [rows] = await pool.query(
       `SELECT c.child_id, c.full_name, TIMESTAMPDIFF(YEAR, c.dob, CURDATE()) AS age, c.available_for_adoption, e.status AS eligibility
          FROM tbl_children c LEFT JOIN tbl_child_adoption_eligibility e ON e.child_id = c.child_id
-        WHERE c.status = 'Active' AND TIMESTAMPDIFF(YEAR, c.dob, CURDATE()) < 18 ORDER BY c.full_name`).catch(() => [[]]);
+        WHERE c.status = 'Active' AND c.archived_at IS NULL AND TIMESTAMPDIFF(YEAR, c.dob, CURDATE()) < 18 ORDER BY c.full_name`).catch(() => [[]]);
     children = rows.map((r) => ({ child_id: r.child_id, full_name: r.full_name, age: r.age, available: !!r.available_for_adoption, eligibility: r.eligibility || null }));
   }
   return {

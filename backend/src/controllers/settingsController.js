@@ -11,10 +11,27 @@ exports.get = async (req, res) => {
     : { org_name: all.org_name, dpo_name: all.dpo_name, dpo_email: all.dpo_email, dpo_phone: all.dpo_phone } });
 };
 
+/** GET /api/public/contact (no sign-in) - only the contact details meant for the public footer and legal pages. */
+exports.publicContact = async (req, res) => {
+  const all = await Settings.getAll();
+  const pick = (k) => (all[k] && String(all[k]).trim()) || null;
+  res.json({ success: true, data: { org_name: pick('org_name') || 'CareSphere', org_address: pick('org_address'), org_contact: pick('org_contact'),
+    dpo_name: pick('dpo_name'), dpo_email: pick('dpo_email'), dpo_phone: pick('dpo_phone') } });
+};
+
 exports.update = async (req, res) => {
   const updates = Object.entries(req.body || {}).filter(([k]) => Settings.ALLOWED.includes(k));
   if (!updates.length) throw new HttpError(400, 'No recognised settings were provided.');
-  for (const [k, v] of updates) {
+  const { SETTING_KEYS } = require('../config/donationClaims');
+  const { clean } = require('../services/claimSettings');
+  for (const entry of updates) {
+    const [k, v] = entry;
+    if (SETTING_KEYS.includes(k)) {
+      const r = clean(k, v);
+      if (r.error) throw new HttpError(400, r.error);
+      entry[1] = r.value;
+      continue;
+    }
     if (String(v).length > 1000) throw new HttpError(400, `${k} is too long.`);
     if (k === 'default_min_threshold' && !/^\d{1,6}$/.test(String(v))) {
       throw new HttpError(400, 'Default minimum threshold must be a whole number.');
@@ -33,9 +50,23 @@ exports.update = async (req, res) => {
       entry[1] = String(v).split(',').map((x) => x.trim()).filter((x) => DOCUMENTS[x] || STAGE_DOCUMENTS[x]).join(',');
     }
   }
+  // Donation controls sent back unchanged (a form that saves every field) need nothing extra; a real change needs the
+  // password and two-step code again (X-Reauth), spent in the same transaction.
+  const current = await Settings.getAll();
+  for (let i = updates.length - 1; i >= 0; i -= 1) {
+    const [k, v] = updates[i];
+    if (SETTING_KEYS.includes(k) && String(current[k] ?? '').trim() === String(v).trim()) updates.splice(i, 1);
+  }
+  if (!updates.length) { res.json({ success: true, data: current }); return; }
   await withTransaction(async (conn) => {
+    if (updates.some(([k]) => SETTING_KEYS.includes(k))) await require('../services/reauth').consume(conn, req, 'donation_controls');
     for (const [k, v] of updates) await Settings.set(k, String(v).trim(), req.user.user_id, conn);
   });
   await logActivity(req, `UPDATE_SETTINGS (${updates.map(([k]) => k).join(', ')})`, 'Settings');
+  // Donation controls are high-risk: every Admin hears about a change.
+  if (updates.some(([k]) => SETTING_KEYS.includes(k))) {
+    const Notify = require('../services/notifications');
+    await Notify.toAdmins(require('../config/db').pool, 'admin_donation_controls_changed', { params: { keys: updates.filter(([k]) => SETTING_KEYS.includes(k)).map(([k]) => k.replace(/_/g, ' ')).join(', ') }, exceptUserId: req.user.user_id, groupKey: `donation_settings:${Date.now()}` }).catch(() => {});
+  }
   res.json({ success: true, data: await Settings.getAll() });
 };

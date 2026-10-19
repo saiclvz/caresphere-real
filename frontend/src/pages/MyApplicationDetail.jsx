@@ -122,7 +122,7 @@ export default function MyApplicationDetail() {
       {app.match_notice && <div className="cs-notice cs-notice-info" role="status">{app.match_notice}</div>}
 
       {AFTER_ORDER.includes(app.status) && (
-        <div className="cs-notice cs-notice-success flex gap-3"><Heart className="h-5 w-5 shrink-0" style={{ color: 'var(--cs-success)' }} aria-hidden /><p>{THANK_YOU}</p></div>
+        <div className="cs-notice cs-notice-success flex gap-3"><Heart className="h-5 w-5 shrink-0" style={{ color: 'var(--ad-success)' }} aria-hidden /><p>{THANK_YOU}</p></div>
       )}
 
       {app.status === 'Draft' && (
@@ -135,7 +135,7 @@ export default function MyApplicationDetail() {
       {openRequests.length > 0 && (
         <section className="cs-notice cs-notice-warn space-y-3" aria-labelledby="requests-title">
           <div className="flex gap-3">
-            <AlertTriangle className="h-5 w-5 shrink-0" style={{ color: 'var(--cs-warning)' }} aria-hidden />
+            <AlertTriangle className="h-5 w-5 shrink-0" style={{ color: 'var(--ad-warning)' }} aria-hidden />
             <div>
               <h2 id="requests-title" className="cs-title">The home requested {openRequests.length === 1 ? 'a document' : `${openRequests.length} documents`}</h2>
               <p className="text-sm">Upload {openRequests.length === 1 ? 'it' : 'them'} below. This notice stays until you upload or the home closes the request.</p>
@@ -175,7 +175,7 @@ export default function MyApplicationDetail() {
               <ul className="space-y-2">
                 {upcoming.map((i) => (
                   <li key={i.interview_id} className="flex gap-3 text-sm">
-                    <CalendarClock className="h-5 w-5 shrink-0" style={{ color: 'var(--cs-primary)' }} aria-hidden />
+                    <CalendarClock className="h-5 w-5 shrink-0" style={{ color: 'var(--ad-primary)' }} aria-hidden />
                     <span><span className="cs-title">{i.kind}</span>, {formatDateTime(i.scheduled_at)}{i.details && <span className="cs-muted block">{i.details}</span>}</span>
                   </li>
                 ))}

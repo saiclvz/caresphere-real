@@ -2,7 +2,9 @@ const { pool } = require('../config/db');
 
 // dpo_*: Data Protection Officer contact (RA 10173), shown in the privacy notice.
 const ALLOWED = ['org_name', 'org_address', 'org_contact', 'receipt_footer', 'default_min_threshold', 'dpo_name', 'dpo_email', 'dpo_phone',
-  'access_log_retention_months', 'staff_download_doc_types', 'default_allocation_text', 'notification_retention_days', 'id_scan_retention_days'];
+  'access_log_retention_months', 'staff_download_doc_types', 'default_allocation_text', 'notification_retention_days', 'id_scan_retention_days',
+  // QR donations: limits and controls (config/donationClaims.js; validated in services/claimSettings.js)
+  ...require('../config/donationClaims').SETTING_KEYS];
 
 module.exports = {
   ALLOWED,

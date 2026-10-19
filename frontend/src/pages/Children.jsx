@@ -1,155 +1,30 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Baby, Eye, GraduationCap, KeyRound, Plus, ShieldAlert, Siren, UserPlus, Users } from 'lucide-react';
+import { Baby, ClipboardList, Eye, GraduationCap, UserPlus } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api, qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
-import { formatDate, formatDateTime } from '../lib/format';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner, Table, FilterChips, IconButton } from '../components/ui';
+import { formatDate } from '../lib/format';
 import Pagination, { usePageState } from '../components/Pagination';
-import { AssignmentModal, ReviewEmergency } from '../components/children/AccessPanels';
-import { chipOf } from '../lib/childAccess';
+import { AssignmentModal } from '../components/children/AccessPanels';
 import { hasDuty } from '../lib/duties';
-import { ADMISSION_TONE } from './AdmissionPage';
 
 export const STATUS_TONE = { Active: 'green', Discharged: 'slate', Adopted: 'blue' };
+/** tbl_children.status 'Active' is shown as "Admitted" (the child is in care). */
+export const CHILD_STATUS_LABEL = { Active: 'Admitted', Discharged: 'Discharged', Adopted: 'Adopted' };
+/** Default: admitted children (in care). Discharged and Adopted stay as history; admissions are on the Intake page;
+ * young people turning 18 are on the Transitions page. */
 const TABS = [
-  { key: '', label: 'All' },
-  { key: 'Active', label: 'Active' },
+  { key: 'Active', label: 'Admitted' },
   { key: 'Discharged', label: 'Discharged' },
   { key: 'Adopted', label: 'Adopted' },
-  { key: 'flagged', label: 'Transition Review (18+)' },
+  { key: 'all', label: 'All records' },
 ];
 
 /** Sort options. Default: most recent activity. Age only for Admin, and only when chosen. */
 const SORTS = [['recent', 'Most recent activity'], ['registered', 'Date added (newest)'], ['case', 'Record number'], ['name', 'Name (A to Z)']];
-
-/** Admin: what needs attention (counts only). */
-function AccessAlerts({ onPanel }) {
-  const { data } = useApi('/child-access/overview');
-  const o = data?.data;
-  if (!o) return null;
-  const items = [
-    { n: o.unassigned, label: 'without a case worker', to: '/children?assigned=unassigned', Icon: Users },
-    { n: o.needs_reassignment, label: 'need reassignment', to: '/children?assigned=attention', Icon: AlertTriangle },
-    { n: o.access_requests, label: 'access requests', panel: 'requests', Icon: KeyRound },
-    { n: o.emergency_to_review, label: 'emergency access to review', panel: 'emergency', Icon: Siren },
-    { n: o.covers_ending, label: 'temporary covers ending within 3 days', Icon: UserPlus },
-    { n: o.privacy_concerns, label: 'privacy concerns', to: '/data-protection?tab=concerns', Icon: ShieldAlert },
-  ].filter((x) => x.n > 0);
-  return (
-    <div className="mb-4 space-y-2">
-      {o.mode === 'log_only' && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Child record access is in <strong>Log only</strong> mode: nothing is blocked yet, and what would be blocked is recorded. <Link to="/settings#child-access" className="font-medium underline">Review and switch to Enforce in Settings</Link>.
-        </p>
-      )}
-      {items.length > 0 && (
-        <div className="flex flex-wrap gap-2" aria-label="Needs attention">
-          {items.map((x) => {
-            const body = <><x.Icon className="h-4 w-4" aria-hidden /> <strong className="tabular-nums">{x.n}</strong> {x.label}</>;
-            const cls = 'inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-sm text-navy-900 ring-1 ring-slate-200 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand';
-            return x.to ? <Link key={x.label} to={x.to} className={cls}>{body}</Link>
-              : x.panel ? <button key={x.label} type="button" className={cls} onClick={() => onPanel(x.panel)}>{body}</button>
-                : <span key={x.label} className={cls}>{body}</span>;
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const ADMIN_FILTERS = [['Pending Approval', 'Waiting for review'], ['Needs Correction', 'Returned for correction'], ['Draft', 'Drafts'], ['Declined', 'Declined'], ['all', 'All']];
-
-/**
- * Admin: "Admissions for Review". Staff with the Admission duty: "My admissions" (the ones they started).
- * Creating a child record does not mean owning it: the list only shows admissions, never the case record.
- */
-function AdmissionsPanel({ isAdmin }) {
-  const navigate = useNavigate();
-  const [status, setStatus] = useState(isAdmin ? 'Pending Approval' : 'all');
-  const { data, loading, error, reload } = useApi(`/admissions${qs({ status })}`);
-  const all = data?.data || [];
-  const rows = isAdmin ? all : all.filter((r) => r.admission_status !== 'Admitted');
-  const counts = data?.meta?.counts || {};
-  const title = isAdmin ? 'Admissions for Review' : 'My admissions';
-  return (
-    <Card className="mb-4" id="admissions">
-      <div className="flex flex-wrap items-center gap-2 px-4 pt-4">
-        <h2 className="mr-auto font-semibold text-navy-900">{title}{isAdmin && counts['Pending Approval'] ? <Badge tone="amber" className="ml-2">{counts['Pending Approval']} waiting</Badge> : null}</h2>
-        {isAdmin && (
-          <div className="flex flex-wrap gap-1" role="tablist" aria-label="Admission status">
-            {ADMIN_FILTERS.map(([k, l]) => (
-              <button key={k} type="button" role="tab" aria-selected={status === k} onClick={() => setStatus(k)}
-                className={`rounded-full px-3 py-1 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${status === k ? 'bg-navy-900 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>{l}</button>
-            ))}
-          </div>
-        )}
-      </div>
-      {loading && !data ? <Spinner /> : error ? <div className="p-4"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (
-        <p className="p-4 text-sm text-slate-500">{isAdmin ? (status === 'Pending Approval' ? 'No admissions are waiting for review.' : 'No admissions in this view.') : 'No admissions in progress. Use New Admission to start one.'}</p>
-      ) : (
-        <Table label={title}>
-          <thead className="bg-slate-50"><tr>
-            <th className="th">Case number</th><th className="th">Child name</th>{isAdmin && <th className="th">Created by</th>}<th className="th">Date submitted</th><th className="th">Status</th><th className="th"><span className="sr-only">Action</span></th>
-          </tr></thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.map((r) => {
-              const canOpen = isAdmin || ['Draft', 'Pending Approval', 'Needs Correction'].includes(r.admission_status);
-              const action = isAdmin ? (r.admission_status === 'Pending Approval' ? 'Review' : 'Open') : ['Draft', 'Needs Correction'].includes(r.admission_status) ? 'Continue' : 'View';
-              return (
-                <tr key={r.child_id}>
-                  <td className="td whitespace-nowrap font-mono text-sm">{r.child_id}</td>
-                  <td className="td">{r.name}{r.decision_note && <p className="max-w-sm text-xs text-slate-500">{r.admission_status === 'Declined' ? 'Reason' : 'To correct'}: {r.decision_note}</p>}</td>
-                  {isAdmin && <td className="td text-sm">{r.created_by_name}</td>}
-                  <td className="td whitespace-nowrap text-sm">{r.submitted_at ? formatDateTime(r.submitted_at) : <span className="text-slate-400">Not submitted</span>}</td>
-                  <td className="td"><Badge tone={ADMISSION_TONE[r.admission_status]}>{r.admission_status}</Badge></td>
-                  <td className="td text-right">{canOpen && <Button size="sm" variant={action === 'Review' ? 'primary' : 'secondary'} onClick={() => navigate(`/admissions/${encodeURIComponent(r.child_id)}`)}>{action}<span className="sr-only"> admission {r.child_id}</span></Button>}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
-      )}
-    </Card>
-  );
-}
-
-/** Admin queues: access requests and "Emergency access to review". */
-function AdminQueue({ panel, onClose }) {
-  const { toast } = useApp();
-  const { data, loading, error, reload } = useApi(panel === 'emergency' ? '/emergency-access?status=pending' : '/access-requests?status=pending');
-  const [reviewing, setReviewing] = useState(null);
-  const rows = data?.data || [];
-  return (
-    <Card className="mb-4">
-      <div className="flex items-center justify-between px-4 pt-4">
-        <h2 className="font-semibold text-navy-900">{panel === 'emergency' ? 'Emergency access to review' : 'Access requests'}</h2>
-        <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
-      </div>
-      {loading && !data ? <Spinner /> : error ? <div className="p-4"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? <p className="p-4 text-sm text-slate-500">Nothing waiting.</p> : (
-        <Table label={panel === 'emergency' ? 'Emergency access to review' : 'Access requests'}>
-          <thead className="bg-slate-50"><tr><th className="th">When</th><th className="th">Child</th><th className="th">Staff</th><th className="th">Reason</th><th className="th"><span className="sr-only">Actions</span></th></tr></thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.map((r) => (
-              <tr key={r.emergency_id || r.request_id}>
-                <td className="td whitespace-nowrap text-xs">{formatDateTime(r.started_at || r.created_at)}</td>
-                <td className="td"><Link className="font-mono text-brand hover:underline" to={`/children/${encodeURIComponent(r.child_id)}?tab=access`}>{r.child_id}</Link></td>
-                <td className="td">{r.user_name || r.requested_by_name}</td>
-                <td className="td max-w-xs text-sm">{r.reason}{r.note ? `: ${r.note}` : ''}</td>
-                <td className="td text-right">{panel === 'emergency'
-                  ? <Button size="sm" onClick={() => setReviewing(r)}>Review<span className="sr-only"> emergency access on {r.child_id}</span></Button>
-                  : <Link to={`/children/${encodeURIComponent(r.child_id)}?tab=access`} className="text-sm font-medium text-brand hover:underline">Decide<span className="sr-only"> request on {r.child_id}</span></Link>}</td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      )}
-      {reviewing && <ReviewEmergency item={reviewing} onClose={() => setReviewing(null)} onDone={() => { setReviewing(null); toast('Review saved.'); reload(); }} />}
-    </Card>
-  );
-}
 
 /** Admin: start a read-only monitoring visit (NACC, DSWD, other reviewers) for chosen records. */
 function MonitoringModal({ onClose }) {
@@ -196,18 +71,18 @@ export default function Children() {
   const isAdmin = user.role === 'Admin';
   const [params, setParams] = useSearchParams();
   const setParam = (k, v) => setParams((p) => { const n = new URLSearchParams(p); if (v) n.set(k, v); else n.delete(k); return n; }, { replace: true });
-  const tab = params.get('status') || '';
+  const tabs = [...TABS, ...(isAdmin ? [{ key: 'archived', label: 'Archived' }] : [])];
+  const tab = tabs.some((t) => t.key === params.get('status')) ? params.get('status') : 'Active';
   const assigned = params.get('assigned') || '';
-  const panel = params.get('panel') || '';
   const canDirectory = hasDuty(user, 'children');
-  const canAdmit = hasDuty(user, 'admission');
+  const canAdmit = user.role === 'Staff' && hasDuty(user, 'admission'); // Staff submit admissions; Admin reviews them on Intake
   const [monitoring, setMonitoring] = useState(false);
   const [limit, setLimit] = useState(20);
   const [sort, setSort] = useState('recent');
   const [selected, setSelected] = useState([]);
   const [bulk, setBulk] = useState(false);
   const [page, setPage] = usePageState(JSON.stringify({ tab, query, limit, sort, assigned }));
-  const filter = tab === 'flagged' ? { flagged: 1 } : { status: tab };
+  const filter = tab === 'archived' ? { archived: 1 } : tab === 'all' ? {} : { status: tab };
   const { data, loading, error, reload } = useApi(canDirectory ? `/children${qs({ ...filter, q: query, assigned, sort, page, limit })}` : null);
   const staff = useApi(isAdmin ? '/assignments/staff?record_type=child' : null);
   const rows = data?.data || [];
@@ -215,31 +90,28 @@ export default function Children() {
   const changePage = (p) => { setPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const sorts = isAdmin ? [...SORTS, ['age', 'Age (youngest first)']] : SORTS;
   const allSelected = rows.length > 0 && rows.every((r) => selected.includes(r.child_id));
+  const open = (id) => navigate(`/children/${encodeURIComponent(id)}`);
 
   return (
     <>
       <PageHeader title="Children"
-        description="Every child in care, most recent activity first. You see each record at your access level: the directory for everyone with the duty, the core record when you are assigned."
+        description="Directory of admitted children. Admissions not yet approved are on the Intake page."
         actions={!monitoringOn && <>
           {isAdmin && <Button variant="secondary" onClick={() => setMonitoring(true)}><Eye className="h-4 w-4" aria-hidden /> Monitoring visit</Button>}
-          {canAdmit && <Button onClick={() => navigate('/admissions/new')}><Plus className="h-4 w-4" aria-hidden /> New Admission</Button>}
+          {(canAdmit || isAdmin) && <Button variant="secondary" onClick={() => navigate('/children/intake')}><ClipboardList className="h-4 w-4" aria-hidden /> Intake</Button>}
         </>} />
 
-      {isAdmin && !monitoringOn && <AccessAlerts onPanel={(p) => setParam('panel', p)} />}
-      {isAdmin && panel && panel !== 'admissions' && !monitoringOn && <AdminQueue panel={panel} onClose={() => setParam('panel', '')} />}
-      {(isAdmin || canAdmit) && !monitoringOn && <AdmissionsPanel isAdmin={isAdmin} />}
-      {!canDirectory && <p className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">You can start and complete admissions. The children directory needs the Child records duty.</p>}
+      {/* Security state, not a statistic: shown to Admin only while child record access is not enforced. */}
+      {isAdmin && !monitoringOn && data?.meta?.mode === 'log_only' && (
+        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Child record access is in <strong>Log only</strong> mode: nothing is blocked yet, and what would be blocked is recorded. <Link to="/settings#child-access" className="font-medium underline">Review and switch to Enforce in Settings</Link>.
+        </p>
+      )}
+      {!canDirectory && <p className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">You can start and complete admissions on the <Link to="/children/intake" className="font-medium text-brand underline">Intake</Link> page. The children directory needs the Child records duty.</p>}
       {canDirectory && <>
 
       <div className="mb-4 flex flex-wrap items-end gap-2">
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter by status">
-          {TABS.map((t) => (
-            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => setParam('status', t.key)}
-              className={`rounded-full px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${tab === t.key ? 'bg-navy-900 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <FilterChips label="Filter by status" value={tab} onChange={(k) => setParam('status', k)} options={tabs.map((t) => ({ key: t.key, label: t.label }))} />
         <div className="ml-auto flex flex-wrap items-end gap-2">
           <Field label="Assigned" className="w-56">
             <select className="input h-9" value={assigned} onChange={(e) => setParam('assigned', e.target.value)}>
@@ -265,6 +137,14 @@ export default function Children() {
         </div>
       )}
 
+      {/* Phones: the table header (with its select-all box) is hidden while rows show as cards, so it is offered here. */}
+      {isAdmin && !monitoringOn && rows.length > 0 && (
+        <label className="mb-2 flex items-center gap-2 text-sm text-slate-700 sm:hidden">
+          <input type="checkbox" className="h-4 w-4 accent-brand" checked={allSelected}
+            onChange={() => setSelected(allSelected ? selected.filter((id) => !rows.some((r) => r.child_id === id)) : [...new Set([...selected, ...rows.map((r) => r.child_id)])])} />
+          Select all on this page
+        </label>
+      )}
       <Card>
         {loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (
           query ? <NoMatches /> : <EmptyState icon={Baby} title="No children in this view" description={assigned === 'me' ? 'No records are assigned to you.' : 'Admitted children appear here once an Admin approves their admission.'} />
@@ -273,32 +153,32 @@ export default function Children() {
             <thead className="bg-slate-50"><tr>
               {isAdmin && !monitoringOn && <th className="th w-8"><input type="checkbox" className="h-4 w-4 accent-brand" aria-label="Select all on this page" checked={allSelected}
                 onChange={() => setSelected(allSelected ? selected.filter((id) => !rows.some((r) => r.child_id === id)) : [...new Set([...selected, ...rows.map((r) => r.child_id)])])} /></th>}
-              <th className="th">Case number</th><th className="th">Name</th><th className="th">Status</th>
-              {isAdmin && <th className="th">Case worker</th>}<th className="th">Access</th><th className="th">Last activity</th>
+              <th className="th">Case number</th><th className="th">Child</th><th className="th">Status</th>
+              <th className="th">Case worker</th><th className="th">Date added</th><th className="th"><span className="sr-only">Actions</span></th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100">
-              {rows.map((c) => {
-                const chip = chipOf(c.access);
-                return (
-                  <tr key={c.child_id} className="cursor-pointer hover:bg-slate-50" onClick={() => navigate(`/children/${c.child_id}`)}>
-                    {isAdmin && !monitoringOn && <td className="td" onClick={(e) => e.stopPropagation()}><input type="checkbox" className="h-4 w-4 accent-brand" aria-label={`Select ${c.child_id}`} checked={selected.includes(c.child_id)}
-                      onChange={() => setSelected((s) => (s.includes(c.child_id) ? s.filter((x) => x !== c.child_id) : [...s, c.child_id]))} /></td>}
-                    <td className="td whitespace-nowrap font-mono text-sm">{c.child_id}</td>
-                    <td className="td">
-                      <Link to={`/children/${c.child_id}`} onClick={(e) => e.stopPropagation()} className="font-medium text-navy-900 hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">{c.display_name}</Link>
-                    </td>
-                    <td className="td">
-                      <div className="flex flex-wrap gap-1">
-                        <Badge tone={STATUS_TONE[c.status]}>{c.status}</Badge>
-                        {c.transition_flag && <Badge tone="amber"><GraduationCap className="h-3 w-3" aria-hidden /> 18+</Badge>}
-                      </div>
-                    </td>
-                    {isAdmin && <td className="td text-sm">{c.case_worker?.name || <span className="text-amber-700">Unassigned</span>}</td>}
-                    <td className="td"><Badge tone={chip.tone}><chip.Icon className="h-3 w-3" aria-hidden /> {chip.label}</Badge></td>
-                    <td className="td whitespace-nowrap text-sm">{c.updated_at ? formatDate(c.updated_at) : '-'}</td>
-                  </tr>
-                );
-              })}
+              {rows.map((c) => (
+                <tr key={c.child_id} className="cursor-pointer hover:bg-slate-50" onClick={() => open(c.child_id)}>
+                  {isAdmin && !monitoringOn && <td className="td" onClick={(e) => e.stopPropagation()}><input type="checkbox" className="h-4 w-4 accent-brand" aria-label={`Select ${c.child_id}`} checked={selected.includes(c.child_id)}
+                    onChange={() => setSelected((s) => (s.includes(c.child_id) ? s.filter((x) => x !== c.child_id) : [...s, c.child_id]))} /></td>}
+                  <td className="td whitespace-nowrap font-mono text-sm">{c.child_id}</td>
+                  <td className="td">
+                    <Link to={`/children/${encodeURIComponent(c.child_id)}`} onClick={(e) => e.stopPropagation()} className="font-medium text-navy-900 hover:text-brand focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">{c.display_name}</Link>
+                  </td>
+                  <td className="td">
+                    <div className="flex flex-wrap gap-1">
+                      <Badge tone={STATUS_TONE[c.status]}>{CHILD_STATUS_LABEL[c.status] || c.status}</Badge>
+                      {c.transition_flag && <Badge tone="amber"><GraduationCap className="h-3 w-3" aria-hidden /> 18+</Badge>}
+                    </div>
+                  </td>
+                  {/* Who is assigned is Admin information; Staff only see whether they themselves are assigned. */}
+                  <td className="td text-sm">{isAdmin ? (c.case_worker?.name || <span className="text-amber-700">Unassigned</span>) : c.case_worker?.you ? 'You' : <span className="text-slate-400">-</span>}</td>
+                  <td className="td whitespace-nowrap text-sm">{c.created_at ? formatDate(c.created_at) : '-'}</td>
+                  <td className="td whitespace-nowrap text-right text-sm" onClick={(e) => e.stopPropagation()}>
+                    <IconButton icon={Eye} tone="brand" label={`View ${c.child_id}`} to={`/children/${encodeURIComponent(c.child_id)}`} />
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </Table>
         )}

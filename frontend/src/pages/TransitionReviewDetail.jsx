@@ -33,7 +33,7 @@ function Stepper({ stages, selected, onSelect, isAdmin }) {
                 title={open ? s.label : 'Complete the earlier stages first'}
                 className={`relative z-10 flex w-full flex-col items-center gap-1.5 rounded-lg px-1 pb-1 text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${open ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
                 <span className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ring-4 ring-page ${
-                  s.state === 'completed' ? 'bg-emerald-500 text-white' : s.state === 'current' ? 'bg-navy-900 text-white' : 'border border-slate-300 bg-white text-slate-500'} ${sel ? 'outline outline-2 outline-offset-2 outline-brand' : ''}`}>
+                  s.state === 'completed' ? 'bg-emerald-500 text-white' : s.state === 'current' ? 'bg-brand text-white' : 'border border-slate-300 bg-white text-slate-500'} ${sel ? 'outline outline-2 outline-offset-2 outline-brand' : ''}`}>
                   {s.state === 'completed' ? <Check className="h-4 w-4" aria-hidden /> : s.state === 'pending' && !isAdmin ? <Lock className="h-3.5 w-3.5" aria-hidden /> : i + 1}
                 </span>
                 <span className={`text-xs leading-tight ${sel ? 'font-semibold text-navy-900' : s.state === 'pending' ? 'text-slate-400' : 'text-slate-700'}`}>{s.label}</span>

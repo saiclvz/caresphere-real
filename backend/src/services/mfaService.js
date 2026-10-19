@@ -227,11 +227,20 @@ async function backupCodesLeft(userId) {
   return Number(r.n);
 }
 
-/** Step-up check for sensitive admin actions (e.g. resetting someone's MFA). */
+/**
+ * Step-up check for sensitive admin actions (resetting someone's MFA, Payment QR re-authentication). A code is
+ * accepted once (TOTP steps can't be replayed, backup codes are spent) and MAX_ATTEMPTS wrong codes within
+ * 15 minutes block step-up for that user (counted here, on top of the route rate limits).
+ */
+const stepUpFailures = new Map();
 async function verifyStepUp(userId, code) {
+  const since = Date.now() - 15 * 60 * 1000;
+  const recent = (stepUpFailures.get(userId) || []).filter((t) => t > since);
+  if (recent.length >= MAX_ATTEMPTS) throw new HttpError(429, 'Too many incorrect codes. Wait 15 minutes and try again.');
   const parsed = readCode(code);
   let used = null;
   await withTransaction(async (conn) => { used = await checkUserCode(conn, userId, parsed); });
+  if (!used) { recent.push(Date.now()); stepUpFailures.set(userId, recent); }
   return used;
 }
 

@@ -77,6 +77,15 @@ function saveUpload(file, { folder, allowed, maxBytes, label, square = false }) 
   return { storage_key: key, mime_type: type.mime, size_bytes: buffer.length, original_name: original, sha256 };
 }
 
+/** Stores bytes the server produced itself (for example a re-encoded image): encrypted, random name. */
+function saveBuffer(buffer, { folder, ext, mime, name }) {
+  const dir = path.join(env.uploadDir, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  const key = `${folder}/${crypto.randomBytes(16).toString('hex')}.${ext}.enc`;
+  fs.writeFileSync(path.join(env.uploadDir, key), encryptBuffer(buffer, env.phiKey), { mode: 0o600 });
+  return { storage_key: key, mime_type: mime, size_bytes: buffer.length, original_name: name || `file.${ext}`, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+}
+
 /** True / false when the stored file still matches its recorded SHA-256; null when no hash was recorded. */
 function verifyUpload(key, expectedSha256) {
   if (!expectedSha256) return null;
@@ -100,7 +109,12 @@ function readUpload(key) {
   return decryptBuffer(fs.readFileSync(full), env.phiKey);
 }
 
-function deleteUpload(key) {
+/**
+ * Only for a file that was saved a moment ago and never recorded, because the database step that would have
+ * recorded it failed (the transaction rolled back). Files that belong to a record are never removed: a replaced
+ * or removed file stays on disk and is marked in the database instead (migration 034).
+ */
+function discardUnsavedUpload(key) {
   if (!key) return;
   try { fs.unlinkSync(resolveKey(key)); } catch { /* already gone */ }
 }
@@ -136,4 +150,4 @@ function mimeFromKey(key) {
 const MB = 1024 * 1024;
 
 module.exports = {
-  imageSize, verifyUpload, saveUpload, readUpload, deleteUpload, secureDeleteUpload, mimeFromKey, MB };
+  saveBuffer, imageSize, verifyUpload, saveUpload, readUpload, discardUnsavedUpload, secureDeleteUpload, mimeFromKey, MB };

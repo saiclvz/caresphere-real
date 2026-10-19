@@ -3,7 +3,7 @@ import { Pencil, Plus } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, ErrorNote, Field, Modal, Spinner } from './ui';
+import { Badge, Button, Card, ErrorNote, Field, Modal, Spinner, Table, IconButton } from './ui';
 
 const FIELD_LABELS = { full_name: 'Full name', date_of_birth: 'Date of birth', id_number: 'ID number', address: 'Address', date_issued: 'Date issued', expiry_date: 'Expiry date' };
 const joinList = (a) => (Array.isArray(a) ? a.join(', ') : '');
@@ -66,23 +66,23 @@ export default function IdTypesSettings() {
         <Button size="sm" onClick={() => { setSaveError(null); setEditing({ isNew: true, form: toForm(null) }); }}><Plus className="h-4 w-4" aria-hidden /> Add ID type</Button>
       </div>
       {loading && !d ? <Spinner /> : error ? <ErrorNote error={error} onRetry={reload} /> : (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs text-slate-500"><tr><th className="py-1 pr-3 font-medium">ID type</th><th className="py-1 pr-3 font-medium">Number format</th><th className="py-1 pr-3 font-medium">Back</th><th className="py-1 pr-3 font-medium">Expires</th><th className="py-1 pr-3 font-medium">QR / MRZ</th><th className="py-1 pr-3 font-medium">Verification</th><th className="py-1" /></tr></thead>
+        <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
+          <Table label="ID types">
+            <thead className="bg-slate-50"><tr><th className="th">ID type</th><th className="th">Number format</th><th className="th">Back</th><th className="th">Expires</th><th className="th">QR / MRZ</th><th className="th">Verification</th><th className="th"><span className="sr-only">Actions</span></th></tr></thead>
             <tbody className="divide-y divide-slate-100">
               {d.types.map((t) => (
                 <tr key={t.key}>
-                  <td className="py-1.5 pr-3"><span className="font-medium text-navy-900">{t.key}</span>{!t.active && <Badge className="ml-2">Off</Badge>}<span className="block text-xs text-slate-500">{t.label}</span></td>
-                  <td className="py-1.5 pr-3 text-xs">{t.example || (t.number_regex ? <code>{t.number_regex}</code> : <span className="text-slate-400">not checked</span>)}</td>
-                  <td className="py-1.5 pr-3">{t.needsBack ? 'Required' : 'Optional'}</td>
-                  <td className="py-1.5 pr-3">{t.expires ? 'Yes' : 'No'}</td>
-                  <td className="py-1.5 pr-3">{t.machine === 'none' ? '–' : `${t.machine.toUpperCase()} (${t.machineSide})`}</td>
-                  <td className="py-1.5 pr-3 text-xs">{d.adapters.find((a) => a.key === t.adapter)?.label || t.adapter}</td>
-                  <td className="py-1.5 text-right"><button type="button" className="rounded p-1 text-slate-500 hover:text-navy-900" aria-label={`Edit ${t.key}`} onClick={() => { setSaveError(null); setEditing({ isNew: false, form: toForm(t) }); }}><Pencil className="h-4 w-4" /></button></td>
+                  <td className="td"><span className="font-medium text-navy-900">{t.key}</span>{!t.active && <Badge className="ml-2">Off</Badge>}<span className="block text-xs text-slate-500">{t.label}</span></td>
+                  <td className="td text-xs">{t.example || (t.number_regex ? <code>{t.number_regex}</code> : <span className="text-slate-400">not checked</span>)}</td>
+                  <td className="td">{t.needsBack ? 'Required' : 'Optional'}</td>
+                  <td className="td">{t.expires ? 'Yes' : 'No'}</td>
+                  <td className="td">{t.machine === 'none' ? '–' : `${t.machine.toUpperCase()} (${t.machineSide})`}</td>
+                  <td className="td text-xs">{d.adapters.find((a) => a.key === t.adapter)?.label || t.adapter}</td>
+                  <td className="td text-right"><IconButton icon={Pencil} label={`Edit ${t.key}`} onClick={() => { setSaveError(null); setEditing({ isNew: false, form: toForm(t) }); }} /></td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         </div>
       )}
 

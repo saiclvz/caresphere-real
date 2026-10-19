@@ -170,6 +170,29 @@ function shape(r) {
   };
 }
 
+/**
+ * Result, reason and changed fields (migration 034) for the activity rows of a page. Entries written before 034
+ * have no result (they were successful actions) and no field details.
+ */
+async function withDetails(rows) {
+  const ids = rows.filter((r) => r.src === 'activity').map((r) => r.id);
+  const shaped = rows.map(shape);
+  if (!ids.length) return shaped;
+  const [meta] = await pool.query('SELECT log_id, result, reason FROM tbl_activity_logs WHERE log_id IN (?)', [ids]).catch(() => [[]]);
+  const [changes] = await pool.query('SELECT log_id, field_name, old_value, new_value, is_sensitive FROM tbl_activity_log_changes WHERE log_id IN (?) ORDER BY change_id', [ids]).catch(() => [[]]);
+  const m = new Map(meta.map((x) => [x.log_id, x]));
+  return shaped.map((s, i) => {
+    const r = rows[i];
+    if (r.src !== 'activity') return { ...s, result: 'SUCCESS', reason: null, changes: [] };
+    const x = m.get(r.id);
+    return {
+      ...s, result: x?.result || 'SUCCESS', reason: x?.reason || null,
+      changes: changes.filter((c) => c.log_id === r.id).map((c) => ({ field: c.field_name, old: c.is_sensitive ? null : c.old_value, new: c.is_sensitive ? null : c.new_value, sensitive: !!c.is_sensitive })),
+    };
+  });
+}
+const changeText = (r) => (r.changes || []).map((c) => (c.sensitive ? `${c.field}: changed` : `${c.field}: ${c.old ?? '(empty)'} -> ${c.new ?? '(empty)'}`)).join('; ');
+
 // ---------------------------------------------------------------- queries
 
 async function list(q, { page, limit }) {
@@ -179,7 +202,7 @@ async function list(q, { page, limit }) {
   const totalPages = Math.max(1, Math.ceil(Number(total) / limit));
   const current = Math.min(page, totalPages);
   const [rows] = await pool.query(`${o.sql} ORDER BY y.at DESC, y.id DESC LIMIT ? OFFSET ?`, [...o.params, limit, (current - 1) * limit]);
-  return { rows: rows.map(shape), pagination: { page: current, limit, total: Number(total), total_pages: totalPages } };
+  return { rows: await withDetails(rows), pagination: { page: current, limit, total: Number(total), total_pages: totalPages } };
 }
 
 /** Entry counts per category for the selected date range (the Category dropdown). */
@@ -206,7 +229,7 @@ async function users() {
 async function all(q, cap = 20000) {
   const o = outer(readFilters(q));
   const [rows] = await pool.query(`${o.sql} ORDER BY y.at DESC, y.id DESC LIMIT ?`, [...o.params, cap]);
-  return rows.map(shape);
+  return (await withDetails(rows)).map((r) => ({ ...r, changes_text: changeText(r) }));
 }
 
 /** Readable summary of the filters (for export logs and report headers): values only, never names. */

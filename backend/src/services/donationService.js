@@ -19,7 +19,8 @@ const DUPLICATE_WINDOW_MINUTES = 10;
 
 /** Unique, signed receipt code. It is printed as text under the receipt's QR code. */
 function makeReceiptCode() {
-  const base = `CSR-${Date.now().toString(36).toUpperCase()}-${randomCode(3)}`;
+  // 120 random bits (separate from the sequential donation and acknowledgment numbers) plus a 96-bit signature.
+  const base = `CSR-${randomCode(15)}`;
   return `${base}.${hmac(base, env.receiptKey).slice(0, 16)}`;
 }
 
@@ -36,8 +37,8 @@ async function moveStock(conn, { itemId, change, type, donationId, userId, lotId
   }
   await conn.query('UPDATE tbl_inventory SET quantity = ?, last_updated_by = ? WHERE item_id = ?', [after, userId, itemId]);
   await conn.query(
-    `INSERT INTO tbl_inventory_movements (item_id, movement_type, change_qty, quantity_after, donation_id, created_by, lot_id, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [itemId, type, change, after, donationId, userId, lotId, note ? String(note).slice(0, 255) : null]);
+    `INSERT INTO tbl_inventory_movements (item_id, movement_type, change_qty, quantity_before, quantity_after, donation_id, created_by, lot_id, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [itemId, type, change, item.quantity, after, donationId, userId, lotId, note ? String(note).slice(0, 255) : null]);
   // Crossing into low stock notifies Admin and Staff in this same transaction.
   if (item.quantity > item.min_threshold && after <= item.min_threshold) await require('./notifications').lowStock(conn);
   return { item_id: itemId, item_name: item.item_name, quantity: Math.abs(change) };
@@ -83,15 +84,16 @@ async function recordDonation(req, d) {
     const lines = [];
     for (const line of d.items || []) {
       if (line.new_item) {
-        const [[exists]] = await conn.query('SELECT item_id FROM tbl_inventory WHERE LOWER(item_name) = LOWER(?) LIMIT 1 FOR UPDATE', [line.new_item.item_name]);
+        const [[exists]] = await conn.query('SELECT item_id, archived_at FROM tbl_inventory WHERE LOWER(item_name) = LOWER(?) LIMIT 1 FOR UPDATE', [line.new_item.item_name]);
+        if (exists?.archived_at) throw new HttpError(409, `An archived inventory item is named "${line.new_item.item_name}". Ask an Admin to restore it, then pick it from the list.`);
         if (exists) throw new HttpError(409, `An inventory item named "${line.new_item.item_name}" already exists. Pick it from the list instead.`);
         const [res] = await conn.query(
           `INSERT INTO tbl_inventory (item_name, category, quantity, min_threshold, is_needed_by_donors, last_updated_by)
            VALUES (?, ?, 0, ?, FALSE, ?)`, [line.new_item.item_name, line.new_item.category, line.new_item.min_threshold, userId]);
         lines.push({ ...line, itemId: res.insertId, name: line.new_item.item_name });
       } else {
-        const [[it]] = await conn.query('SELECT item_name FROM tbl_inventory WHERE item_id = ?', [line.item_id]);
-        if (!it) throw new HttpError(400, 'One of the inventory items no longer exists. Refresh and try again.');
+        const [[it]] = await conn.query('SELECT item_name FROM tbl_inventory WHERE item_id = ? AND archived_at IS NULL', [line.item_id]);
+        if (!it) throw new HttpError(400, 'One of the inventory items no longer exists or was archived. Refresh and try again.');
         lines.push({ ...line, itemId: line.item_id, name: it.item_name });
       }
     }
@@ -101,6 +103,10 @@ async function recordDonation(req, d) {
     const donorRef = walkIn
       ? await LC.donorForWalkIn(conn, { name: d.walk_in_name, contact: d.walk_in_contact, type: d.walk_in_kind || 'Individual' }, userId)
       : await LC.donorForAccount(conn, d.donor, userId);
+    // ---- dual control: cash above the threshold waits for a second person (not counted, no acknowledgment)
+    const cashControls = require('./cashControls');
+    const dual = d.payment_method === 'Cash' && await cashControls.needsDualControl(conn, Math.round(Number(d.amount) * 100));
+    const firstStatus = dual ? 'Pending' : 'Received';
     const donationId = await Donation.insertWith(conn, {
       donor_id: walkIn ? null : d.donor.user_id,
       donor_type: d.donor_type,
@@ -111,7 +117,7 @@ async function recordDonation(req, d) {
       source: d.visit_id ? 'visitors_page' : 'donations_page',
       amount: d.amount,
       payment_method: d.payment_method,
-      status: 'Received',
+      status: firstStatus,
       item_description: d.description,
       reason_category: null,
       is_general: true,
@@ -122,8 +128,9 @@ async function recordDonation(req, d) {
       is_anonymous: d.anonymous,
       purpose: d.purpose,
     });
-    const donation = { donation_id: donationId, status: 'Received', payment_method: d.payment_method, amount: d.amount };
-    await LC.history(conn, donationId, null, 'Received', d.visit_id ? 'Recorded from a visit' : 'Recorded by staff', userId);
+    await conn.query('UPDATE tbl_donations SET recorded_by = ?, dual_control = ? WHERE donation_id = ?', [userId, dual ? 'Waiting' : null, donationId]);
+    const donation = { donation_id: donationId, status: firstStatus, payment_method: d.payment_method, amount: d.amount, dual_control: dual ? 'Waiting' : null };
+    await LC.history(conn, donationId, null, firstStatus, `${d.visit_id ? 'Recorded from a visit' : 'Recorded by staff'}${dual ? '; waiting for a second person to confirm the cash' : ''}`, userId);
 
     // ---- in-kind lines, lots and stock, locked in item order so two entries can't deadlock
     const items = [];
@@ -138,7 +145,9 @@ async function recordDonation(req, d) {
 
     // ---- allocation lines; a complete cash allocation accepts the donation now
     await LC.setAllocation(conn, req, donation, d.allocation, { purpose: d.purpose });
-    if (!LC.isInKind(donation) && !(await LC.allocationProblems(conn, donation)).length) {
+    if (dual) await cashControls.askSecondPerson(conn, req, donationId);
+    if (d.payment_method === 'Cash') await cashControls.afterCashRecorded(conn, req, donationId);
+    if (!dual && !LC.isInKind(donation) && !(await LC.allocationProblems(conn, donation)).length) {
       await LC.setStatus(conn, req, donation, 'Accepted', 'Allocation recorded with the donation');
     }
 

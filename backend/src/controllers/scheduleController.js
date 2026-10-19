@@ -7,12 +7,10 @@ const { logActivity } = require('../utils/audit');
 
 const range = (req) => ({ from: requireDate(req.query.from, 'from'), to: requireDate(req.query.to, 'to') });
 
-/** GET /api/schedules?from=&to= (Admin) - the week, with flags and assigned-area icons (no record details). */
+/** GET /api/schedules?from=&to= (Admin) - the week, with flags (deactivated account, not Staff, unmatched area). */
 exports.list = async (req, res) => {
   const userId = req.query.user_id ? toInt(req.query.user_id, 'user_id', { min: 1 }) : undefined;
-  const rows = await Schedule.list({ ...range(req), userId });
-  const areas = await Schedule.assignedAreas([...new Set(rows.map((r) => r.user_id))]);
-  res.json({ success: true, data: rows.map((r) => ({ ...r, assigned_areas: areas[r.user_id] || null })) });
+  res.json({ success: true, data: await Schedule.list({ ...range(req), userId }) });
 };
 
 /** GET /api/schedules/mine (Admin, Staff) - the signed-in user's own shifts, read-only. */
@@ -31,8 +29,9 @@ exports.update = async (req, res) => {
 };
 /** DELETE /api/schedules/:id (Admin) */
 exports.remove = async (req, res) => {
-  await S.removeOne(req, toInt(req.params.id, 'id', { min: 1 }));
-  res.json({ success: true, message: 'Shift deleted.' });
+  const reason = String(req.body?.reason || req.query.reason || '').trim().slice(0, 500) || null;
+  await S.removeOne(req, toInt(req.params.id, 'id', { min: 1 }), reason);
+  res.json({ success: true, message: 'Shift removed. It is kept in the archive.' });
 };
 
 /** PUT /api/schedules/day/:date (Admin) { rows: [...], removed: [ids], confirm } - the whole day in one transaction. */
@@ -83,7 +82,7 @@ exports.updateArea = async (req, res) => {
 /** GET /api/schedule-areas/unmapped (Admin) - shift area texts that match no area, with how many shifts use each. */
 exports.unmapped = async (req, res) => {
   const [rows] = await pool.query(
-    "SELECT TRIM(assignment) AS text, COUNT(*) AS shifts FROM tbl_staff_schedules WHERE area_id IS NULL GROUP BY TRIM(assignment) ORDER BY shifts DESC");
+    "SELECT TRIM(assignment) AS text, COUNT(*) AS shifts FROM tbl_staff_schedules WHERE area_id IS NULL AND archived_at IS NULL GROUP BY TRIM(assignment) ORDER BY shifts DESC");
   res.json({ success: true, data: rows.map((r) => ({ ...r, shifts: Number(r.shifts) })) });
 };
 /** POST /api/schedule-areas/map (Admin) { text, area_id } - links those shifts to an area. Their original text is kept. */

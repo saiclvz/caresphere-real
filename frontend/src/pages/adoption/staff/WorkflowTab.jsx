@@ -57,13 +57,13 @@ export function CaseStepper({ stages, selected, onSelect }) {
                   selPhase === p.key ? 'border-brand ring-1 ring-brand' : p.state === 'blocked' ? 'border-red-200' : 'border-slate-200'} ${onSelect ? 'hover:bg-slate-50' : ''}`}>
                 <span className="flex items-center gap-2">
                   <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                    p.state === 'completed' ? 'bg-emerald-100 text-emerald-700' : p.state === 'current' ? 'bg-navy-900 text-white' : p.state === 'blocked' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'}`}>
+                    p.state === 'completed' ? 'bg-emerald-100 text-emerald-700' : p.state === 'current' ? 'bg-brand text-white' : p.state === 'blocked' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'}`}>
                     {p.state === 'completed' ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> : p.state === 'blocked' ? <Lock className="h-3 w-3" aria-hidden /> : i + 1}</span>
                   <span className="text-sm font-semibold leading-tight text-navy-900">{p.label}</span>
                 </span>
                 <span className="flex gap-0.5" aria-hidden>
                   {p.list.map((s) => <span key={s.key} title={`${s.label}: ${STATE_WORD[s.state]}`} className={`h-1.5 flex-1 rounded-full ${
-                    s.state === 'completed' ? 'bg-emerald-500' : s.state === 'current' ? 'bg-navy-900' : s.state === 'blocked' ? 'bg-red-300' : 'bg-slate-200'}`} />)}
+                    s.state === 'completed' ? 'bg-emerald-500' : s.state === 'current' ? 'bg-brand' : s.state === 'blocked' ? 'bg-red-300' : 'bg-slate-200'}`} />)}
                 </span>
                 <span className="text-xs text-slate-500">{p.done} of {p.list.length} done{p.state === 'current' || p.state === 'blocked' ? ` · ${STATE_WORD[p.state]}` : ''}</span>
               </Tag>

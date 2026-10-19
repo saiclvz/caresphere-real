@@ -33,7 +33,8 @@ export default function ProtectedRecord({ child }) {
   const tokenRef = useRef(null);
   tokenRef.current = access?.token || null;
 
-  const headers = () => ({ 'X-Health-Access': tokenRef.current });
+  // Staff: the unlock session is the authority; the health token only works together with it.
+  const headers = () => ({ 'X-Health-Access': tokenRef.current, ...(isAdmin ? {} : unlockHeaders('health', child.child_id)) });
 
   const lock = useCallback(async (message) => {
     const token = tokenRef.current;
@@ -58,10 +59,10 @@ export default function ProtectedRecord({ child }) {
 
   const openWithToken = useCallback(async (token) => {
     tokenRef.current = token;
-    const rec = await api(`/children/${child.child_id}/protected`, { headers: { 'X-Health-Access': token } });
+    const rec = await api(`/children/${child.child_id}/protected`, { headers: { 'X-Health-Access': token, ...(isAdmin ? {} : unlockHeaders('health', child.child_id)) } });
     setData(rec.data);
     setAccess({ token, seconds: rec.data.remaining_seconds, key: Date.now() });
-  }, [child.child_id]);
+  }, [child.child_id, isAdmin]);
   const open = async (body) => {
     const res = await api(`/children/${child.child_id}/health-access`, { method: 'POST', body });
     await openWithToken(res.data.access_token);
@@ -100,7 +101,7 @@ export default function ProtectedRecord({ child }) {
     return (
       <Card className="p-6">
         <div className="flex flex-col items-center text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-navy-900"><Lock className="h-5 w-5 text-white" /></div>
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand"><Lock className="h-5 w-5 text-white" /></div>
           <p className="mt-3 font-semibold text-navy-900">Health record is locked</p>
           <p className="mt-1 max-w-sm text-sm text-slate-500">
             {isAdmin ? 'Administrators have full access. Opening them is recorded.'
@@ -111,7 +112,8 @@ export default function ProtectedRecord({ child }) {
           </div>
           {isAdmin
             ? <Button className="mt-4" onClick={() => open({}).catch((err) => toast(err.message, 'error'))}><KeyRound className="h-4 w-4" /> Open (Admin full access)</Button>
-            : child.assigned_staff_id === user.user_id
+            // The server decides (the ONE child assignment: primary, backup or temporary cover). No second assignment for Health.
+            : child.access?.can?.sensitive
               ? <Button className="mt-4" onClick={() => setAskToken(true)}><ScanLine className="h-4 w-4" /> Unlock sensitive sections</Button>
               : <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700" role="status">You're not assigned to this record. Ask an Admin to assign you.</p>}
         </div>

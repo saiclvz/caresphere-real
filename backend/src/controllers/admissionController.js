@@ -7,7 +7,7 @@ const Admission = require('../services/admission');
 
 exports.list = async (req, res) => {
   const out = await Admission.list(req, req.query);
-  res.json({ success: true, data: out.rows, meta: { counts: out.counts } });
+  res.json({ success: true, data: out.rows, meta: { counts: out.counts, stale_days: out.stale_days } });
 };
 
 exports.getOne = async (req, res) => {
@@ -57,6 +57,18 @@ exports.returnForCorrection = async (req, res) => {
 exports.decline = async (req, res) => {
   const r = await Admission.decline(req, req.params.id, req.body || {});
   res.json({ success: true, message: r.message });
+};
+
+exports.verifyDocument = async (req, res) => {
+  const r = await Admission.verifyDocument(req, req.params.id, String(req.params.key), req.body || {});
+  res.json({ success: true, data: await Admission.detail(req, req.params.id), message: r.message });
+};
+
+exports.withdraw = async (req, res) => {
+  const r = await Admission.withdraw(req, req.params.id, req.body || {});
+  // The creator's admission access ends with the withdrawal: Admin gets the updated record, Staff only the message.
+  const data = await Admission.detail(req, req.params.id).catch((e) => { if (e.status === 403) return null; throw e; });
+  res.json({ success: true, data, message: r.message });
 };
 
 exports.assignOptions = async (req, res) => {

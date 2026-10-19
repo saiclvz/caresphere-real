@@ -84,6 +84,17 @@ async function updateRequest(req, id, body) {
   if (['Resolved', 'Rejected'].includes(status) && response.length < 5) throw new HttpError(400, 'Write a response to the requester when resolving or rejecting.');
   if (response.length > 3000) throw new HttpError(400, 'The response can be up to 3000 characters.');
   const done = ['Resolved', 'Rejected'].includes(status);
+  // A rejected request is locked for Staff: they can't change the status or the decision. Only an Admin can
+  // reopen it (the separate authorized step); every change stays in the Audit log.
+  const [[cur]] = await pool.query('SELECT status FROM tbl_data_subject_requests WHERE request_id = ?', [id]);
+  if (!cur) throw new HttpError(404, 'Request not found.');
+  if (cur.status === 'Rejected' && req.user.role !== 'Admin') {
+    await require('../utils/audit').logActivity(req, 'DATA_SUBJECT_REQUEST_EDIT_DENIED (rejected, locked)', `Request #${id}`);
+    throw new HttpError(403, 'This request was rejected and is locked. Only an administrator can reopen it.', { locked: true });
+  }
+  if (cur.status === 'Rejected' && status !== 'Rejected' && response.length < 5) {
+    throw new HttpError(400, 'Write why the rejected request is being reopened (it is recorded and shown to the requester).');
+  }
   const [res] = await pool.query(
     `UPDATE tbl_data_subject_requests SET status = ?, response = COALESCE(?, response),
             resolved_at = ${done ? 'NOW()' : 'NULL'}, resolved_by = ${done ? '?' : 'NULL'} WHERE request_id = ?`,

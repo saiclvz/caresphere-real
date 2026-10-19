@@ -5,12 +5,14 @@ import { Spinner } from './components/ui';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Landing from './pages/Landing';
+import { PrivacyPolicy, Terms } from './pages/Legal';
 import Logo from './components/Logo';
 import Dashboard from './pages/Dashboard';
 import DonorDashboard from './pages/DonorDashboard';
 import DonorHistory from './pages/DonorHistory';
 import Children from './pages/Children';
 import ChildDetail from './pages/ChildDetail';
+import Intake from './pages/Intake';
 import AdmissionPage from './pages/AdmissionPage';
 import Inventory from './pages/Inventory';
 import Donations from './pages/Donations';
@@ -33,7 +35,7 @@ import AdoptChild from './pages/AdoptChild';
 import AdoptionForm, { StartApplication } from './pages/AdoptionForm';
 import MyApplicationDetail from './pages/MyApplicationDetail';
 import TransitionReviewDetail from './pages/TransitionReviewDetail';
-import DonateResult from './pages/DonateResult';
+import ChangeTemporaryPassword from './pages/ChangeTemporaryPassword';
 import Notifications from './pages/Notifications';
 import NotificationSettings from './pages/NotificationSettings';
 import ProtectedRecordPage from './pages/ProtectedRecordPage';
@@ -80,10 +82,15 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/" element={<Landing />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<Terms />} />
         <Route path="*" element={<ToLogin />} />
       </Routes>
     );
   }
+
+  // A temporary password set by an Admin: choose your own first (the server refuses everything else until then).
+  if (user.must_change_password) return <ChangeTemporaryPassword />;
 
   const ops = ['Admin', 'Staff'];
   const admin = ['Admin'];
@@ -93,10 +100,13 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<AfterLogin />} />
       <Route path="/register" element={<Navigate to="/" replace />} />
+      <Route path="/privacy" element={<PrivacyPolicy />} />
+      <Route path="/terms" element={<Terms />} />
       <Route element={<Layout />}>
         <Route index element={home} />
         <Route path="donate" element={<RequireRole roles={donor}><ProtectedArea area="Donation"><Donate /></ProtectedArea></RequireRole>} />
-        <Route path="donate/result" element={<RequireRole roles={donor}><DonateResult /></RequireRole>} />
+        {/* The online-payment return page was removed (CareSphere no longer processes payments); old links land on the history. */}
+        <Route path="donate/result" element={<Navigate to="/donations/history" replace />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="notifications/settings" element={<NotificationSettings />} />
         <Route path="donations/history" element={<RequireRole roles={donor}><ProtectedArea area="Your donations"><DonorHistory /></ProtectedArea></RequireRole>} />
@@ -116,6 +126,7 @@ export default function App() {
         <Route path="data-protection" element={<RequireRole roles={ops}><ProtectedArea area="Data protection"><DataProtection /></ProtectedArea></RequireRole>} />
         <Route path="transitions" element={<RequireRole roles={ops}><RequireDuty duty="transition"><ProtectedArea area="Transition records"><Transitions /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="children" element={<RequireRole roles={ops}><RequireDuty duty={['children', 'admission']}><ProtectedArea area="Child records"><Children /></ProtectedArea></RequireDuty></RequireRole>} />
+        <Route path="children/intake" element={<RequireRole roles={ops}><RequireDuty duty="admission"><ProtectedArea area="Child records"><Intake /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="admissions/:id" element={<RequireRole roles={ops}><RequireDuty duty={['children', 'admission']}><ProtectedArea area="Child records"><AdmissionPage /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="children/:id" element={<RequireRole roles={ops}><RequireDuty duty="children"><ProtectedArea area="Child records"><ChildDetail /></ProtectedArea></RequireDuty></RequireRole>} />
         <Route path="inventory" element={<RequireRole roles={ops}><RequireDuty duty="inventory"><Inventory /></RequireDuty></RequireRole>} />

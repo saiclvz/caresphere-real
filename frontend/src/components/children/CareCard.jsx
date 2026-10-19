@@ -42,7 +42,7 @@ export default function CareCard({ childId }) {
   if (error) {
     return (
       <Card className="p-5">
-        <h2 className="mb-2 flex items-center gap-2 font-semibold text-navy-900"><HeartPulse className="h-4 w-4 text-rose-600" aria-hidden /> Care card</h2>
+        <h2 className="mb-2 flex items-center gap-2 font-semibold text-navy-900"><HeartPulse className="h-4 w-4 text-red-600" aria-hidden /> Care card</h2>
         {error.status === 403 ? <p className="text-sm text-slate-600">The Care card is shown to staff on shift. Your access does not include it right now.</p> : <ErrorNote error={error} onRetry={reload} />}
       </Card>
     );
@@ -62,7 +62,7 @@ export default function CareCard({ childId }) {
   return (
     <Card className="p-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 font-semibold text-navy-900"><HeartPulse className="h-4 w-4 text-rose-600" aria-hidden /> Care card</h2>
+        <h2 className="flex items-center gap-2 font-semibold text-navy-900"><HeartPulse className="h-4 w-4 text-red-600" aria-hidden /> Care card</h2>
         <div className="flex flex-wrap items-center gap-2">
           {card.review_due && <Badge tone="amber">Review due</Badge>}
           {card.can_edit && !editing && <>

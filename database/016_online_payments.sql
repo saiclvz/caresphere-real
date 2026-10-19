@@ -85,8 +85,9 @@ CREATE TABLE IF NOT EXISTS tbl_payment_webhook_events (
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
+-- (October 2026) the list includes every value added by later migrations, so running all migrations again never narrows it.
 ALTER TABLE tbl_donations
-  MODIFY COLUMN status ENUM('Pending', 'Received', 'Cancelled', 'Pending verification', 'Rejected') NOT NULL DEFAULT 'Received';
+  MODIFY COLUMN status ENUM('Pending', 'Pending verification', 'Received', 'Under inspection', 'Accepted', 'Acknowledged', 'Allocated', 'Partially distributed', 'Fully distributed', 'Closed', 'Rejected', 'Voided', 'Cancelled') NOT NULL DEFAULT 'Received';
 
 INSERT IGNORE INTO tbl_settings (setting_key, setting_value) VALUES
   ('default_allocation_text', 'General support for the children in our care');

@@ -10,10 +10,10 @@ const AGE = 'TIMESTAMPDIFF(YEAR, c.dob, CURDATE())';
 
 const LIST_COLS = `c.child_id, c.first_name, c.last_name, c.full_name, c.gender, c.dob, c.admission_date, c.created_at,
   c.public_ref, c.admission_status, c.assigned_staff_id, (SELECT full_name FROM tbl_users WHERE user_id = c.assigned_staff_id AND is_active = TRUE) AS assigned_staff_name, c.status, c.urgent_needs, c.public_bio, c.is_public, c.available_for_adoption, c.placement_status,
-  c.cdclaa_number, c.cdclaa_date, c.cdclaa_verified_at, c.updated_at,
+  c.cdclaa_number, c.cdclaa_date, c.cdclaa_verified_at, c.updated_at, c.archived_at, c.archive_reason,
   (c.profile_photo_path IS NOT NULL) AS has_photo,
   ${AGE} AS age,
-  (${AGE} >= ${Number(env.transitionAge)} AND c.status = 'Active') AS transition_flag,
+  (${AGE} >= ${Number(env.transitionAge)} AND c.status = 'Active' AND c.archived_at IS NULL) AS transition_flag,
   tr.review_status AS transition_status, tr.review_id AS transition_review_id`;
 
 // Encrypted at rest (AES-256-GCM, PHI key); only returned with a health-access token.
@@ -52,9 +52,11 @@ module.exports = {
    * name; Staff search only by case number and first name (search results carry directory fields only).
    * ids: limit to these children (a monitoring visit).
    */
-  async list({ status, search, flagged, paging, sort = 'recent', assigned, viewerId, searchFull = false, ids } = {}) {
+  async list({ status, search, flagged, paging, sort = 'recent', assigned, viewerId, searchFull = false, ids, archived = false } = {}) {
     const where = [];
     const params = [];
+    // Archived records (migration 034) are kept but hidden; Admin can list them on their own.
+    where.push(archived ? 'c.archived_at IS NOT NULL' : 'c.archived_at IS NULL');
     // Children still in admission (not approved yet) never appear in the Children list (see Admissions).
     if (status) { where.push('c.status = ?'); params.push(status); } else where.push("c.status <> 'In admission'");
     if (flagged) where.push(`${AGE} >= ${Number(env.transitionAge)} AND c.status = 'Active'`);
@@ -72,11 +74,11 @@ module.exports = {
         OR (c.assigned_staff_id = ? AND NOT EXISTS (SELECT 1 FROM tbl_record_assignments a2 WHERE a2.record_type = 'child' AND a2.record_id = c.child_id)))`;
     };
     if (assigned === 'unassigned') {
-      where.push('(c.assigned_staff_id IS NULL OR NOT EXISTS (SELECT 1 FROM tbl_users au WHERE au.user_id = c.assigned_staff_id AND au.is_active = TRUE))');
+      // One assignment service: no active primary, backup or temporary assignment (active account), old column included.
+      const taken = [...await require('../services/assignment').recordIdsFor(pool, 'child', null)];
+      if (taken.length) { where.push('c.child_id NOT IN (?)'); params.push(taken); }
     } else if (assigned === 'me' && viewerId) {
-      const cond = assignedTo(viewerId);
-      where.push(`(${cond} OR EXISTS (SELECT 1 FROM tbl_child_initial_access ia WHERE ia.child_id = c.child_id AND ia.user_id = ? AND ia.ended_at IS NULL AND ia.ends_at > NOW()))`);
-      params.push(viewerId);
+      where.push(assignedTo(viewerId));
     } else if (assigned && /^\d+$/.test(String(assigned))) {
       where.push(assignedTo(Number(assigned)));
     } else if (assigned === 'attention') {
@@ -108,7 +110,7 @@ module.exports = {
   },
 
   async photoPath(id) {
-    const [rows] = await pool.query('SELECT profile_photo_path, is_public, available_for_adoption, status FROM tbl_children WHERE child_id = ?', [id]);
+    const [rows] = await pool.query('SELECT profile_photo_path, is_public, available_for_adoption, status, archived_at FROM tbl_children WHERE child_id = ?', [id]);
     return rows[0] || null;
   },
 
@@ -144,19 +146,14 @@ module.exports = {
   },
 
   /**
-   * Deletes a child. The "whole child record" protected entry is created automatically the first
-   * time staff open the child's page; when no token was ever issued for it, it goes with the child.
+   * Children are never deleted (migration 034). Archiving keeps the row and everything linked to it (health, case
+   * files, admission, adoption, transition, audit log); normal lists hide it and Admin can restore it.
    */
-  async remove(id) {
-    await withTransaction(async (conn) => {
-      await conn.query(
-        `DELETE g FROM tbl_protected_grants g JOIN tbl_protected_records r ON r.record_id = g.record_id
-          WHERE r.child_id = ? AND r.record_type = 'child_record'`, [id]);
-      await conn.query(
-        `DELETE r FROM tbl_protected_records r LEFT JOIN tbl_protected_tokens t ON t.record_id = r.record_id
-          WHERE r.child_id = ? AND r.record_type = 'child_record' AND t.token_id IS NULL`, [id]);
-      await conn.query('DELETE FROM tbl_children WHERE child_id = ?', [id]);
-    });
+  async archive(conn, id, userId, reason) {
+    await conn.query('UPDATE tbl_children SET archived_at = NOW(), archived_by = ?, archive_reason = ? WHERE child_id = ? AND archived_at IS NULL', [userId, reason, id]);
+  },
+  async restore(conn, id) {
+    await conn.query('UPDATE tbl_children SET archived_at = NULL, archived_by = NULL, archive_reason = NULL WHERE child_id = ?', [id]);
   },
 
   /** Records that must be kept: discharge, adoption, CDCLAA, sealed records, releases, or tokens issued for the child. */
@@ -261,7 +258,7 @@ module.exports = {
     return withTransaction(async (conn) => {
       const [due] = await conn.query(
         `SELECT c.child_id FROM tbl_children c LEFT JOIN tbl_transition_reviews tr ON tr.child_id = c.child_id
-          WHERE c.status = 'Active' AND ${AGE} >= ? AND tr.review_id IS NULL FOR UPDATE`, [env.transitionAge]);
+          WHERE c.status = 'Active' AND c.archived_at IS NULL AND ${AGE} >= ? AND tr.review_id IS NULL FOR UPDATE`, [env.transitionAge]);
       if (!due.length) return 0;
       // The review goes to the child's assigned case worker when that account is active (Admin can change it).
       await conn.query(
@@ -289,7 +286,7 @@ module.exports = {
    * marked as available for adoption (Adopt a Child).
    */
   async publicList({ search, forAdoption = false, paging } = {}) {
-    const where = ["c.status = 'Active'"];
+    const where = ["c.status = 'Active'", 'c.archived_at IS NULL'];
     const params = [];
     // Adopt a Child: Available, verified CDCLAA, not already placed.
     if (forAdoption) where.push('c.available_for_adoption = TRUE', 'c.cdclaa_verified_at IS NOT NULL', "c.placement_status = 'None'", `${AGE} < ${Number(env.transitionAge)}`);

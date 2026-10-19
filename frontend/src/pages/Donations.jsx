@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Ban, Download, Eye, FileSpreadsheet, HandCoins, Package, Pencil, Plus, ScanLine, SlidersHorizontal, Users, Wallet } from 'lucide-react';
 import useApi from '../hooks/useApi';
-import { api, download, qs } from '../api/client';
+import { api, download, downloadSigned, qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, PageHeader, Spinner, Table, TAB_ROW, tabClass } from '../components/ui';
 import Pagination from '../components/Pagination';
 import VerifyReceiptModal from '../components/VerifyReceiptModal';
 import DonationForm from '../components/DonationForm';
 import DonationSummary from './DonationReports';
-import BankTransferQueue from '../components/BankTransferQueue';
+import ToVerifyQueue from '../components/donations/ToVerifyQueue';
+import Reconciliation from '../components/donations/Reconciliation';
+import CashCounts from '../components/donations/CashCounts';
+import { canVerifyDonations } from '../lib/duties';
 import { formatDateTime, formatMoney } from '../lib/format';
 import { SOURCE_LABEL, SOURCE_TONE, allocationText, statusMeta, typeMethod, inKindTotal } from '../lib/donations';
 
@@ -171,7 +174,10 @@ export default function Donations() {
   const isAdmin = user.role === 'Admin';
   const [params, setParams] = useSearchParams();
   const f = Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) || '']));
-  const summary = params.get('view') === 'summary';
+  const verifier = canVerifyDonations(user);
+  const VIEWS = [['list', 'Donations'], ...(verifier ? [['verify', 'To verify'], ['reconciliation', 'Reconciliation']] : []), ['cash', 'Cash count'], ['summary', 'Summary']];
+  const view = VIEWS.some(([k]) => k === params.get('view')) ? params.get('view') : 'list';
+  const summary = view === 'summary';
   const [tick, setTick] = useState(0);
   const setF = (patch, keepPage = false) => setParams((p) => {
     const n = new URLSearchParams(p);
@@ -184,7 +190,7 @@ export default function Donations() {
   const [more, setMore] = useState(() => MORE_KEYS.some((k) => f[k]));
   const rangeError = f.date === 'custom' && f.date_from && f.date_to && f.date_from > f.date_to ? 'From must be on or before To.' : null;
   const apiQuery = Object.fromEntries(Object.entries({ ...f, page: f.page || '1', limit: f.limit || '20' }).filter(([, v]) => v));
-  const { data, loading, error, reload } = useApi(rangeError || summary ? null : `/donations${qs(apiQuery)}`);
+  const { data, loading, error, reload } = useApi(rangeError || view !== 'list' ? null : `/donations${qs(apiQuery)}`);
   const optionsApi = useApi('/donations/options');
   const options = optionsApi.data?.data || { methods: [], statuses: [], programs: [], void_reasons: [], donor_types: [], can_see_donors: false };
   const [adding, setAdding] = useState(false);
@@ -196,12 +202,12 @@ export default function Donations() {
   const shown = data?.meta?.shown ?? 0;
   const filtered = FILTER_KEYS.filter((k) => !['page', 'limit'].includes(k)).some((k) => f[k] && !(k === 'date' && f[k] === 'all'));
   const clear = () => { setSearch(''); setParams(summary ? { view: 'summary' } : {}, { replace: true }); };
-  const showView = (v) => setParams((p) => { const n = new URLSearchParams(p); if (v === 'summary') n.set('view', 'summary'); else n.delete('view'); n.delete('page'); return n; }, { replace: true });
+  const showView = (v) => setParams((p) => { const n = new URLSearchParams(v === 'summary' ? p : v === 'list' ? p : ''); if (v === 'list') n.delete('view'); else n.set('view', v); n.delete('page'); n.delete('queue'); return n; }, { replace: true });
   const dateQuery = Object.fromEntries(Object.entries({ date: f.date || 'all', date_from: f.date === 'custom' ? f.date_from : '', date_to: f.date === 'custom' ? f.date_to : '' }).filter(([, v]) => v));
 
   const ack = async (d) => {
     setBusy(d.donation_id);
-    try { await download(`/donations/${d.donation_id}/receipt`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`); }
+    try { await downloadSigned(`/donations/${d.donation_id}/receipt/link`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`); }
     catch (err) { toast(err.message, 'error'); } finally { setBusy(null); }
   };
   const exportCsv = async () => {
@@ -226,7 +232,7 @@ export default function Donations() {
 
   return (
     <>
-      <PageHeader title="Donations" description="Every donation in one place: walk-in visitors, online gifts from donor accounts, and gifts recorded by staff. All donations are general."
+      <PageHeader title="Donations" description="Every donation in one place: walk-in visitors, gifts donors reported after using the home's QR codes, and gifts recorded by staff. All donations are general."
         actions={<>
           <Button variant="secondary" onClick={() => setVerifying(true)}><ScanLine className="h-4 w-4" aria-hidden /> Verify receipt</Button>
           <Button onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden /> Record donation</Button>
@@ -234,14 +240,14 @@ export default function Donations() {
       {!options.can_see_donors && optionsApi.data && (
         <p className="mb-3 text-xs text-slate-500">Donor names and contact details need the Donor directory duty: you see donor codes and initials. Search works by donation number or donor code.</p>
       )}
-      <div role="tablist" aria-label="Donations view" className="relative mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
-        {[['list', 'Donations'], ['summary', 'Summary']].map(([k, l]) => {
-          const on = (k === 'summary') === summary;
+      <div role="tablist" aria-label="Donations view" className={TAB_ROW}>
+        {VIEWS.map(([k, l]) => {
+          const on = k === view;
           return <button key={k} type="button" role="tab" aria-selected={on} onClick={() => showView(k)}
-            className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${on ? 'border-brand text-navy-900' : 'border-transparent text-slate-500 hover:text-navy-900'}`}>{l}</button>;
+            className={tabClass(on)}>{l}</button>;
         })}
       </div>
-      {summary ? (
+      {view === 'verify' ? <ToVerifyQueue onChanged={reload} /> : view === 'reconciliation' ? <Reconciliation onChanged={reload} /> : view === 'cash' ? <CashCounts /> : summary ? (
         <>
           <Card className="mb-4 p-3">
             <div className="flex flex-wrap items-end gap-2" role="search" aria-label="Summary period">{dateFields}</div>
@@ -249,7 +255,6 @@ export default function Donations() {
           {rangeError ? <p className="text-sm text-red-600">{rangeError}</p> : <DonationSummary key={tick} query={dateQuery} />}
         </>
       ) : (<>
-      <BankTransferQueue onChanged={reload} />
       <Cards cards={data?.meta?.cards} canSeeDonors={options.can_see_donors} navigate={navigate} onPick={(filter) => { setSearch(''); setParams(new URLSearchParams(filter), { replace: true }); }} />
 
       <Card className="mb-4 p-3">

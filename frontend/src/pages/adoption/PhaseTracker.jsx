@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import { adoptionLabel } from '../../lib/adoptionStatus';
 
 /**
  * 4-phase progress (Preparation, Matching, Petition, Finalization) with the current stage
@@ -30,7 +31,7 @@ export default function PhaseTracker({ app }) {
           })}
         </ol>
       )}
-      <p className="text-sm"><span className="cs-muted">Current stage: </span><span className="cs-title">{app.status}</span></p>
+      <p className="text-sm"><span className="cs-muted">Current stage: </span><span className="cs-title">{adoptionLabel(app.status)}</span></p>
       <p className="mt-1 text-sm">{stage.description}</p>
       {stage.next_step && <p className="mt-2 text-sm"><span className="cs-muted">Next step: </span>{stage.next_step}</p>}
     </section>

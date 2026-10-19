@@ -12,7 +12,8 @@ import { MB, ageFromDob, checkFile, readFile } from '../lib/files';
 import { openFileInNewTab } from '../lib/openFile';
 import NotFound from './NotFound';
 
-export const ADMISSION_TONE = { Draft: 'slate', 'Pending Approval': 'amber', 'Needs Correction': 'red', Admitted: 'green', Declined: 'slate' };
+export const ADMISSION_TONE = { Draft: 'slate', 'Referral Received': 'slate', 'Intake and Assessment': 'blue', 'Pending Approval': 'amber', 'Needs Correction': 'red',
+  Admitted: 'green', Declined: 'slate', 'Not Admitted': 'slate' };
 const STEPS = [[1, 'Basic information'], [2, 'Referral details'], [3, 'Parent/guardian and family'], [4, 'Documents / checklist']];
 const OVER_AGE = 'Registration denied. The child exceeds the maximum age requirement.';
 const blank = (v) => !String(v ?? '').trim();
@@ -28,7 +29,7 @@ function Stepper({ current, onSelect, done = [], disabled = false }) {
             <li key={n} className="flex items-center gap-1">
               <button type="button" disabled={disabled} onClick={() => onSelect?.(n)} aria-current={state === 'current' ? 'step' : undefined}
                 className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-default ${
-                  state === 'completed' ? 'bg-emerald-50 text-emerald-800' : state === 'current' ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                  state === 'completed' ? 'bg-emerald-50 text-emerald-800' : state === 'current' ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
                 {state === 'completed' ? <Check className="h-3 w-3" aria-hidden /> : <span aria-hidden>{n}</span>} Step {n}: {label}
                 <span className="sr-only">({state})</span>
               </button>
@@ -36,7 +37,7 @@ function Stepper({ current, onSelect, done = [], disabled = false }) {
             </li>
           );
         })}
-        <li className="flex items-center gap-1"><span className="h-px w-3 bg-slate-300" aria-hidden /><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">Submit for Admin Approval</span></li>
+        <li className="flex items-center gap-1"><span className="h-px w-3 bg-slate-300" aria-hidden /><span className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600"><span aria-hidden>5</span> Submit for Admin Approval</span></li>
       </ol>
     </nav>
   );
@@ -44,6 +45,12 @@ function Stepper({ current, onSelect, done = [], disabled = false }) {
 
 /** Field errors from a 422 (server-side validation is the real check). */
 const fieldErrors = (err) => err?.details?.errors || {};
+const REQ_TONE = { Required: 'red', Conditional: 'amber', Optional: 'slate' };
+const DOC_TONE = { Pending: 'amber', Submitted: 'blue', Verified: 'green', 'Not Applicable (verified)': 'green', Rejected: 'red', 'Requires Correction': 'red', 'Not Applicable': 'slate', 'Not marked': 'slate' };
+function Requirement({ c }) {
+  const r = c.requirement || (c.required ? 'Required' : 'Optional');
+  return <span className="ml-1.5 inline-flex flex-wrap items-center gap-1"><Badge tone={REQ_TONE[r]}>{r}</Badge>{r === 'Conditional' && c.condition && <span className="text-xs text-slate-500">{c.condition}</span>}</span>;
+}
 
 // ---------------------------------------------------------------- Step 1
 function BasicForm({ initial, creating, onSave, error, maxAge }) {
@@ -183,14 +190,15 @@ function DocumentsForm({ a, options, onSave, onUploaded, error }) {
   };
   return (
     <form id="step-form" noValidate className="space-y-3" onSubmit={(ev) => { ev.preventDefault(); onSave({ checklist: Object.fromEntries(Object.entries(marks).filter(([, v]) => v.status)) }); }}>
-      <p className="text-sm text-slate-600">Mark every item before submitting. Copies are optional (PDF, JPG or PNG, up to {options.file_max_mb} MB) and stored encrypted.</p>
+      <p className="text-sm text-slate-600">Mark every item before submitting. Items marked Required must be Received, or Not applicable with the reason in the note. Copies are optional (PDF, JPG or PNG, up to {options.file_max_mb} MB) and stored encrypted.</p>
       {upErr && <Notice tone="error">{upErr}</Notice>}
       <Table label="Admission checklist">
         <thead className="bg-slate-50"><tr><th className="th">Document</th><th className="th w-44">Status</th><th className="th">Note</th><th className="th">Copy</th></tr></thead>
         <tbody className="divide-y divide-slate-100">
           {a.checklist.map((c) => (
             <tr key={c.key}>
-              <td className="td text-sm">{c.label}{c.sensitive && <span className="mt-0.5 flex items-center gap-1 text-xs text-slate-500"><Lock className="h-3 w-3" aria-hidden /> Medical: opens only for Admin and the assigned case worker</span>}</td>
+              <td className="td text-sm">{c.label}<Requirement c={c} />{c.verification && c.verification.status !== 'Verified' && <span className="mt-0.5 block text-xs text-red-700">Reviewer: {c.verification.status}{c.verification.note ? `: ${c.verification.note}` : ''}</span>}{c.sensitive && <span className="mt-0.5 flex items-center gap-1 text-xs text-slate-500"><Lock className="h-3 w-3" aria-hidden /> Medical: opens only for Admin and the assigned case worker</span>}
+                {e[`check_${c.key}`] && <span className="mt-0.5 block text-xs text-red-700">{e[`check_${c.key}`]}</span>}</td>
               <td className="td">
                 <select className={`input h-9 ${e[`check_${c.key}`] ? 'border-red-400' : ''}`} aria-label={`Status of ${c.label}`} value={marks[c.key].status} onChange={(ev) => setMarks((m) => ({ ...m, [c.key]: { ...m[c.key], status: ev.target.value } }))}>
                   <option value="">Not marked</option>{options.check_statuses.map((s) => <option key={s}>{s}</option>)}
@@ -223,7 +231,7 @@ function FileLinks({ a, item }) {
 
 // ---------------------------------------------------------------- read-only summary (Admin review, submitted, decided)
 const Row = ({ label, children }) => <div><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt><dd className="mt-0.5 whitespace-pre-line text-sm text-navy-900">{children || <span className="text-slate-400">Not recorded</span>}</dd></div>;
-function Summary({ a }) {
+function Summary({ a, onVerify }) {
   const b = a.basic; const r = a.referral; const f = a.family;
   return (
     <div className="space-y-4">
@@ -246,10 +254,18 @@ function Summary({ a }) {
             <tbody className="divide-y divide-slate-100">{f.guardians.map((g, i) => <tr key={i}><td className="td">{g.name || '-'}</td><td className="td">{g.relationship}</td><td className="td">{g.status}</td><td className="td">{g.contact || '-'}</td><td className="td">{g.address || '-'}</td></tr>)}</tbody></Table>)}
         <dl className="mt-3 grid gap-3 sm:grid-cols-2"><Row label="Siblings">{f.siblings}</Row><Row label="Family background notes">{f.family_notes}</Row></dl></Card>
       <Card className="p-4"><h2 className="mb-3 font-semibold text-navy-900">Step 4: Documents / admission checklist</h2>
-        <Table label="Admission checklist"><thead className="bg-slate-50"><tr><th className="th">Document</th><th className="th">Status</th><th className="th">Note</th><th className="th">Copy</th></tr></thead>
+        {a.checklist.some((c) => c.status === 'To follow') && (
+          <div className="mb-3"><Notice tone="warning">Documents still to follow: {a.checklist.filter((c) => c.status === 'To follow').map((c) => c.label).join('; ')}.</Notice></div>)}
+        <Table label="Admission checklist"><thead className="bg-slate-50"><tr><th className="th">Document</th><th className="th">Status</th><th className="th">Note</th><th className="th">Copy</th>{a.can.verify && <th className="th"><span className="sr-only">Verify</span></th>}</tr></thead>
           <tbody className="divide-y divide-slate-100">{a.checklist.map((c) => (
-            <tr key={c.key}><td className="td text-sm">{c.label}</td><td className="td">{c.status ? <Badge tone={c.status === 'Received' ? 'green' : c.status === 'To follow' ? 'amber' : 'slate'}>{c.status}</Badge> : <span className="text-xs text-red-700">Not marked</span>}</td>
-              <td className="td text-sm">{c.note || '-'}</td><td className="td"><FileLinks a={a} item={c} /></td></tr>))}</tbody></Table></Card>
+            <tr key={c.key}><td className="td text-sm">{c.label}<Requirement c={c} /></td>
+              <td className="td"><Badge tone={DOC_TONE[c.doc_status] || 'slate'}>{c.doc_status}</Badge>
+                {c.verification && <span className="mt-0.5 block text-xs text-slate-500">{c.verification.by} · {formatDateTime(c.verification.at)}{c.verification.note ? `: ${c.verification.note}` : ''}</span>}</td>
+              <td className="td text-sm">{c.note || '-'}</td><td className="td"><FileLinks a={a} item={c} /></td>
+              {a.can.verify && <td className="td whitespace-nowrap text-right">{c.status && c.status !== 'To follow' && <Button size="sm" variant="secondary" onClick={() => onVerify(c)}>Check</Button>}</td>}</tr>))}</tbody></Table>
+        {a.exceptions?.length > 0 && (
+          <div className="mt-3"><Notice tone="warning" title="Approved with document exceptions">
+            <ul className="list-disc pl-5">{a.exceptions.map((e) => <li key={e.key}>{e.label}: {e.reason} ({e.by})</li>)}</ul></Notice></div>)}</Card>
     </div>
   );
 }
@@ -259,13 +275,15 @@ function ApproveDialog({ a, onClose, onDone }) {
   const opts = useApi('/admissions/assign-options');
   const [cw, setCw] = useState(null);
   const [note, setNote] = useState('');
+  const unverified = a.checklist.filter((c) => c.required && c.verification?.status !== 'Verified');
+  const [exc, setExc] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const o = opts.data?.data;
   useEffect(() => { if (o && cw === null) setCw(o.default_case_worker_id ? String(o.default_case_worker_id) : ''); }, [o]); // eslint-disable-line react-hooks/exhaustive-deps
   const go = async () => {
     setBusy(true); setError(null);
-    try { const res = await api(`/admissions/${a.child_id}/approve`, { method: 'POST', body: { case_worker_id: cw ? Number(cw) : undefined, note: note || undefined } }); onDone(res); }
+    try { const res = await api(`/admissions/${a.child_id}/approve`, { method: 'POST', body: { case_worker_id: cw ? Number(cw) : undefined, note: note || undefined, exceptions: exc } }); onDone(res); }
     catch (err) { setError(err); setBusy(false); }
   };
   return (
@@ -279,7 +297,64 @@ function ApproveDialog({ a, onClose, onDone }) {
             {(o?.staff || []).map((s) => <option key={s.user_id} value={s.user_id}>{s.full_name}{s.user_id === a.created_by.user_id ? ' (created this admission)' : ''}</option>)}
           </select>
         </Field>
+        {unverified.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-medium text-amber-900">Required documents not verified yet</p>
+            <p className="mt-0.5 text-xs text-amber-900">Use Check on the checklist to verify them, or approve with an exception: give the reason for each (it is logged and shown in the admission history).</p>
+            {unverified.map((c) => (
+              <Field key={c.key} label={`Exception reason: ${c.label}`} className="mt-2">
+                <input className="input" maxLength={500} value={exc[c.key] || ''} onChange={(e) => setExc((x) => ({ ...x, [c.key]: e.target.value }))} placeholder="Why the admission is approved without verifying it" />
+              </Field>
+            ))}
+          </div>
+        )}
         <Field label="Note (optional)"><textarea className="input" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+/** The reviewing Admin checks one checklist item: Verified, Rejected or Requires correction (with a note). */
+function VerifyDialog({ a, item, onClose, onDone }) {
+  const [result, setResult] = useState('Verified');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const e = fieldErrors(error);
+  const go = async () => {
+    setBusy(true); setError(null);
+    try { const res = await api(`/admissions/${encodeURIComponent(a.child_id)}/documents/${item.key}/verify`, { method: 'POST', body: { result, note } }); onDone(res); }
+    catch (err) { setError(err); setBusy(false); }
+  };
+  return (
+    <Modal open onClose={onClose} title={`Check: ${item.label}`} footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={go}>Save</Button></>}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-600">Marked <strong>{item.status}</strong>{item.note ? ` (${item.note})` : ''}. Open the copy to check it.</p>
+        <ErrorNote error={error && !Object.keys(e).length ? error : null} />
+        <Field label="Result" error={e.result}><select className="input" value={result} onChange={(ev) => setResult(ev.target.value)}>{(a.options.verify_results || []).map((r) => <option key={r}>{r}</option>)}</select></Field>
+        <Field label={result === 'Verified' ? 'Note (optional)' : 'What is wrong'} required={result !== 'Verified'} error={e.note}><textarea className="input" rows={2} maxLength={500} value={note} onChange={(ev) => setNote(ev.target.value)} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+/** The creator (or an Admin) withdraws an admission that is not waiting for approval: it becomes Not Admitted. */
+function WithdrawDialog({ a, onClose, onDone }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const e = fieldErrors(error);
+  const go = async () => {
+    setBusy(true); setError(null);
+    try { const res = await api(`/admissions/${encodeURIComponent(a.child_id)}/withdraw`, { method: 'POST', body: { reason } }); onDone(res); }
+    catch (err) { setError(err); setBusy(false); }
+  };
+  return (
+    <Modal open onClose={onClose} title="Withdraw admission" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button variant="danger" loading={busy} onClick={go}>Withdraw</Button></>}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-600">The admission becomes <strong>Not Admitted</strong>. Nothing is deleted: the record and its history are kept, and it can no longer be edited.</p>
+        <ErrorNote error={error && !Object.keys(e).length ? error : null} />
+        <Field label="Reason" required error={e.reason}><textarea className="input" rows={3} maxLength={2000} value={reason} onChange={(ev) => setReason(ev.target.value)} /></Field>
       </div>
     </Modal>
   );
@@ -312,11 +387,11 @@ function ReasonDialog({ a, kind, onClose, onDone }) {
 function Header({ a, title }) {
   return (
     <>
-      <Link to="/children" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-navy-900"><ArrowLeft className="h-4 w-4" aria-hidden /> Children</Link>
+      <Link to="/children/intake" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-navy-900"><ArrowLeft className="h-4 w-4" aria-hidden /> Intake</Link>
       <div className="mb-4 mt-1 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-navy-900">{title}</h1>
-          {a && <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600"><span className="font-mono">{a.child_id}</span><Badge tone={ADMISSION_TONE[a.admission_status]}>{a.admission_status}</Badge>
+          {a && <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600"><span className="font-mono">{a.child_id}</span><Badge tone={ADMISSION_TONE[a.stage || a.admission_status]}>{a.stage_label || a.admission_status}</Badge>{a.stale && <Badge tone="amber">Unfinished (stale)</Badge>}
             <span>Created by {a.created_by.name} · {formatDate(a.created_at)}</span>{a.submitted_at && <span>· Submitted {formatDateTime(a.submitted_at)}</span>}</p>}
         </div>
       </div>
@@ -325,6 +400,20 @@ function Header({ a, title }) {
 }
 
 function NewAdmission() {
+  const { user } = useAuth();
+  if (user.role === 'Admin') {
+    return (
+      <>
+        <Header title="New Admission" />
+        <Notice tone="info" title="Admins review admissions">A Staff member with the Admission duty completes the steps and submits the admission for Admin approval. Open the Intake page to review admissions waiting for you.
+          <div className="mt-2"><Link to="/children/intake" className="font-medium text-brand underline">Go to Intake</Link></div></Notice>
+      </>
+    );
+  }
+  return <NewAdmissionForm />;
+}
+
+function NewAdmissionForm() {
   const { toast } = useApp();
   const navigate = useNavigate();
   const rules = useApi('/children/rules');
@@ -420,8 +509,9 @@ function ExistingAdmission({ id }) {
     <>
       <Header a={a} title={`Admission: ${a.basic.full_name}`} />
       {result && <Notice tone={result.tone} className="mb-4">{result.text}</Notice>}
-      {a.admission_status === 'Pending Approval' && !a.can.review && !result && <Notice tone="success" className="mb-4">Admission submitted successfully. Waiting for Admin approval.</Notice>}
+      {a.admission_status === 'Pending Approval' && !a.can.review && !a.can.self_review && !result && <Notice tone="success" title="Submitted for Admin Approval" className="mb-4">Submitted{a.submitted_at ? ` ${formatDateTime(a.submitted_at)}` : ''}. An Admin reviews it and approves it, returns it for correction or declines it. It can't be changed while it waits.</Notice>}
       {a.admission_status === 'Needs Correction' && a.decision && <Notice tone="warning" title="Returned for correction" className="mb-4"><p className="whitespace-pre-line">{a.decision.note}</p><p className="mt-1 text-xs">{a.decision.by} · {formatDateTime(a.decision.at)}. Make the corrections, then submit it again.</p></Notice>}
+      {a.admission_status === 'Not Admitted' && a.withdrawn && <Notice tone="info" title="Not Admitted (withdrawn)" className="mb-4"><p className="whitespace-pre-line">{a.withdrawn.reason}</p><p className="mt-1 text-xs">{formatDateTime(a.withdrawn.at)}. The record is kept.</p></Notice>}
       {a.admission_status === 'Declined' && a.decision && <Notice tone="error" title="Admission declined" className="mb-4"><p className="whitespace-pre-line">{a.decision.note}</p><p className="mt-1 text-xs">{a.decision.by} · {formatDateTime(a.decision.at)}. The record is kept.</p></Notice>}
       {a.admission_status === 'Admitted' && (
         <Notice tone="success" title="Admission approved. Child is now Admitted." className="mb-4">
@@ -432,6 +522,7 @@ function ExistingAdmission({ id }) {
 
       {editing ? (
         <>
+          {a.can.withdraw && step !== 4 && <div className="-mt-2 mb-2 flex justify-end"><Button size="sm" variant="ghost" onClick={() => setDialog('withdraw')}>Withdraw admission</Button></div>}
           <Stepper current={step} onSelect={goStep} done={done} />
           <Card className="p-5">
             <h2 className="mb-4 font-semibold text-navy-900">Step {step}: {STEPS[step - 1][1]}</h2>
@@ -452,7 +543,10 @@ function ExistingAdmission({ id }) {
                 </ul>
               )}
               <ErrorNote error={submitError && !submitError.details?.problems ? submitError : null} />
-              <div className="mt-4 flex justify-end"><Button loading={saving} disabled={a.problems.length > 0} onClick={submit}><Send className="h-4 w-4" aria-hidden /> Submit for Admin Approval</Button></div>
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
+                {a.can.withdraw && <Button variant="ghost" onClick={() => setDialog('withdraw')}>Withdraw admission</Button>}
+                <Button loading={saving} disabled={a.problems.length > 0} onClick={submit}><Send className="h-4 w-4" aria-hidden /> Submit for Admin Approval</Button>
+              </div>
             </Card>
           )}
         </>
@@ -460,14 +554,29 @@ function ExistingAdmission({ id }) {
         <>
           {a.can.review && (
             <Card className="mb-4 flex flex-wrap items-center gap-2 p-4">
-              <p className="mr-auto text-sm text-navy-900">Review the four steps below, then decide.</p>
-              <Button onClick={() => setDialog('approve')}><CheckCircle2 className="h-4 w-4" aria-hidden /> Approve Admission</Button>
+              <div className="mr-auto">
+                <h2 className="font-semibold text-navy-900">Review Admission</h2>
+                <p className="text-sm text-slate-600">Submitted by {a.submitted_by_name || a.created_by.name}{a.submitted_at ? ` · ${formatDateTime(a.submitted_at)}` : ''}. Check the four steps and the documents below, then decide.</p>
+              </div>
+              <Button onClick={() => setDialog('approve')}><CheckCircle2 className="h-4 w-4" aria-hidden /> Approve</Button>
               <Button variant="secondary" onClick={() => setDialog('return')}><Undo2 className="h-4 w-4" aria-hidden /> Return for Correction</Button>
-              <Button variant="danger" onClick={() => setDialog('decline')}><XCircle className="h-4 w-4" aria-hidden /> Decline Admission</Button>
+              <Button variant="danger" onClick={() => setDialog('decline')}><XCircle className="h-4 w-4" aria-hidden /> Decline</Button>
             </Card>
           )}
-          {!a.can.review && a.can.decline && <div className="mb-4 flex justify-end"><Button variant="danger" onClick={() => setDialog('decline')}><XCircle className="h-4 w-4" aria-hidden /> Decline Admission</Button></div>}
-          <Summary a={a} />
+          {!a.can.review && a.can.decline && <div className="mb-4 flex justify-end"><Button variant="danger" onClick={() => setDialog('decline')}><XCircle className="h-4 w-4" aria-hidden /> Decline</Button></div>}
+          {user.role === 'Admin' && ['Draft', 'Referral Received', 'Intake and Assessment', 'Needs Correction'].includes(a.admission_status) && (
+            <Notice tone="info" title={a.admission_status === 'Needs Correction' ? 'Returned for correction: waiting for the staff member' : 'Being completed by the staff member'} className="mb-4">
+              {a.admission_status === 'Needs Correction' ? 'The staff member corrects it and submits it again for Admin approval.' : `${a.created_by.name} completes the steps and submits it for Admin approval.`} Admins review and decide; they don't fill in or submit admissions.
+              {a.can.withdraw && <div className="mt-2"><Button size="sm" variant="ghost" onClick={() => setDialog('withdraw')}>Withdraw admission</Button></div>}
+            </Notice>
+          )}
+          {a.can.self_review && ['Pending Approval', 'Needs Correction'].includes(a.admission_status) && (
+            <Notice tone="info" title="A different Admin must review this admission" className="mb-4">
+              You created this admission, so you can't approve, return or decline it.
+              {a.can.other_admins > 0 ? ' Another Admin will review it.' : ' There is no other active Admin account yet: a second Admin account is required to review it.'}
+            </Notice>
+          )}
+          <Summary a={a} onVerify={(c) => setDialog({ verify: c })} />
         </>
       )}
 
@@ -476,8 +585,10 @@ function ExistingAdmission({ id }) {
         <ol className="space-y-1.5 text-sm">{a.history.map((h, i) => <li key={i}><span className="text-slate-500">{formatDateTime(h.created_at)}</span> · {h.from_status ? `${h.from_status} → ` : ''}<strong>{h.to_status}</strong>{h.actor_name ? ` · ${h.actor_name}` : ''}{h.note ? <span className="block whitespace-pre-line pl-4 text-slate-600">{h.note}</span> : null}</li>)}</ol>
       </Card>
 
+      {dialog?.verify && <VerifyDialog a={a} item={dialog.verify} onClose={() => setDialog(null)} onDone={(res) => { setDialog(null); setData(res); toast(res.message); }} />}
+      {dialog === 'withdraw' && <WithdrawDialog a={a} onClose={() => setDialog(null)} onDone={(res) => { setDialog(null); toast(res.message); if (res.data) setData(res); else navigate('/children/intake'); }} />}
       {dialog === 'approve' && <ApproveDialog a={a} onClose={() => setDialog(null)} onDone={(res) => { setDialog(null); setResult({ tone: 'success', text: `${res.message} ${res.data.assignment.label}.` }); toast(res.message); reload(); }} />}
-      {(dialog === 'return' || dialog === 'decline') && <ReasonDialog a={a} kind={dialog} onClose={() => setDialog(null)} onDone={(res) => { setDialog(null); toast(res.message); reload(); if (user.role === 'Admin') navigate('/children?panel=admissions'); }} />}
+      {(dialog === 'return' || dialog === 'decline') && <ReasonDialog a={a} kind={dialog} onClose={() => setDialog(null)} onDone={(res) => { setDialog(null); toast(res.message); reload(); if (user.role === 'Admin') navigate('/children/intake'); }} />}
     </>
   );
 }

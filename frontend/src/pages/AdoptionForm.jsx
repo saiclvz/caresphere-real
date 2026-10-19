@@ -74,7 +74,7 @@ export function StartApplication() {
 function SaveIndicator({ state, onRetry }) {
   if (state === 'saving') return <span className="cs-muted text-xs" aria-live="polite">Saving...</span>;
   if (state === 'error') {
-    return <span className="text-xs" style={{ color: 'var(--cs-danger)' }} aria-live="polite">Not saved. <button type="button" className="cs-link" onClick={onRetry}>Try again</button></span>;
+    return <span className="text-xs" style={{ color: 'var(--ad-danger)' }} aria-live="polite">Not saved. <button type="button" className="cs-link" onClick={onRetry}>Try again</button></span>;
   }
   if (state === 'saved') return <span className="cs-muted text-xs" aria-live="polite">All changes saved</span>;
   return null;
@@ -147,7 +147,7 @@ function SubmittedView({ app }) {
   return (
     <div className="cs-theme cs-page">
       <div className="cs-card mx-auto max-w-xl space-y-4 p-6 text-center">
-        <CheckCircle2 className="mx-auto h-10 w-10" style={{ color: 'var(--cs-success)' }} aria-hidden />
+        <CheckCircle2 className="mx-auto h-10 w-10" style={{ color: 'var(--ad-success)' }} aria-hidden />
         <h1 className="cs-title text-xl">Application submitted</h1>
         <p className="cs-muted text-sm">Thank you. The home will review your application and contact you about the next steps. Submitting does not guarantee approval.</p>
         <div className="cs-card cs-surface-2 p-4">

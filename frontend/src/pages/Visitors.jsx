@@ -5,7 +5,7 @@ import useApi from '../hooks/useApi';
 import { api, qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, Spinner, Table, PageHeader } from '../components/ui';
 import DonationForm from '../components/DonationForm';
 import Pagination, { usePageState } from '../components/Pagination';
 import { formatDateTime, formatMoney, isoDate } from '../lib/format';
@@ -206,11 +206,11 @@ function DeleteVisitModal({ visitor, onClose, onDone }) {
     } catch (err) { setError(err); } finally { setBusy(false); }
   };
   return (
-    <Modal open onClose={onClose} title="Delete visitor record?" size="sm"
-      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button variant="danger" loading={busy} onClick={submit}>Delete visit</Button></>}>
+    <Modal open onClose={onClose} title="Remove visitor record?" size="sm"
+      footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button variant="danger" loading={busy} onClick={submit}>Remove visit</Button></>}>
       <div className="space-y-3 text-sm text-slate-600">
         <ErrorNote error={error} />
-        <p>The visit record for <strong>{visitor.visitor_name}</strong> ({formatDateTime(visitor.check_in_time)}) will be deleted.</p>
+        <p>The visit record for <strong>{visitor.visitor_name}</strong> ({formatDateTime(visitor.check_in_time)}) will be removed from the visitor log. It is kept in the archive.</p>
         {donated && (
           <fieldset className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
             <legend className="px-1 text-sm font-medium text-amber-900">This visit has a donation<span className="ml-0.5 text-red-600" aria-hidden="true">*</span></legend>
@@ -295,13 +295,8 @@ export default function Visitors() {
 
   return (
     <>
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-navy-900">Visitors</h1>
-          <p className="mt-1 max-w-2xl text-sm text-slate-500">Log each visit, including walk-in donations. Donations logged here appear on the Donations page automatically.</p>
-        </div>
-        <Button onClick={() => setForm('new')}><UserPlus className="h-4 w-4" /> Check in visitor</Button>
-      </div>
+      <PageHeader title="Visitors" description="Log each visit, including walk-in donations. Donations logged here appear on the Donations page automatically."
+        actions={<Button onClick={() => setForm('new')}><UserPlus className="h-4 w-4" /> Check in visitor</Button>} />
 
       <Card className="mb-4 p-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)_auto] lg:items-end">

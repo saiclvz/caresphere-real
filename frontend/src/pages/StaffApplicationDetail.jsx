@@ -6,7 +6,7 @@ import { api } from '../api/client';
 import DocumentViewer from '../components/DocumentViewer';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, ErrorNote, Field, Modal, Skeleton } from '../components/ui';
+import { Badge, Button, Card, ErrorNote, Field, Modal, Skeleton, TAB_ROW, tabClass } from '../components/ui';
 import TokenVerifyModal from '../components/TokenVerifyModal';
 import UnlockedBar from '../components/UnlockedBar';
 import AssignedStaffCard from '../components/AssignedStaffCard';
@@ -27,6 +27,7 @@ import TimelineTab from './adoption/staff/TimelineTab';
 import AccessTab from './adoption/staff/AccessTab';
 import { headersFor, REC } from './adoption/staff/common';
 import WorkflowTab, { CaseStepper } from './adoption/staff/WorkflowTab';
+import { adoptionLabel } from '../lib/adoptionStatus';
 
 const TABS = [
   ['workflow', 'Case workflow'], ['overview', 'Overview'], ['applicant', 'Applicant'], ['documents', 'Documents'], ['idcheck', 'ID check'], ['assessment', 'Assessment'],
@@ -49,7 +50,7 @@ function Header({ app, isAdmin }) {
       <Link to="/adoptions" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-navy-900"><ArrowLeft className="h-4 w-4" aria-hidden /> Adoption applications</Link>
       <div className="mt-1 flex flex-wrap items-center gap-2">
         <h1 className="font-mono text-2xl font-semibold text-navy-900">{app.reference_no}</h1>
-        <Badge tone={statusTone(app.status)}>{app.status}</Badge>
+        <Badge tone={statusTone(app.status)}>{['Declined', 'Withdrawn', 'Closed'].includes(app.status) && <Lock className="h-3 w-3" aria-hidden />}{adoptionLabel(app.status)}{['Declined', 'Withdrawn', 'Closed'].includes(app.status) ? ' — Locked' : ''}</Badge>
         {app.category && <Badge tone="slate">{app.category}</Badge>}
         {app.key_dates?.finalized_at && <Badge tone="green"><ShieldCheck className="h-3 w-3" aria-hidden /> Finalized {formatDate(app.key_dates.finalized_at)}</Badge>}
         {app.is_legacy && <Badge tone="slate">Earlier form</Badge>}
@@ -80,11 +81,11 @@ function TabList({ tabs, current, onSelect }) {
     onSelect(k); refs.current[k]?.focus();
   };
   return (
-    <div role="tablist" aria-label="Application sections" className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200" onKeyDown={onKey}>
+    <div role="tablist" aria-label="Application sections" className={TAB_ROW} onKeyDown={onKey}>
       {tabs.map(([k, label]) => (
         <button key={k} ref={(el) => { refs.current[k] = el; }} type="button" role="tab" id={`tab-${k}`} aria-selected={current === k} aria-controls={`panel-${k}`}
           tabIndex={current === k ? 0 : -1} onClick={() => onSelect(k)}
-          className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 ${current === k ? 'border-brand text-navy-900' : 'border-transparent text-slate-500 hover:text-navy-900'}`}>
+          className={tabClass(current === k)}>
           {label}
         </button>
       ))}
@@ -219,7 +220,7 @@ export default function StaffApplicationDetail() {
       onSaved={(data) => {
         setDialog(null);
         setSessionUpdate({ history_id: data.last_history_id, status: data.status, at: new Date().toISOString() });
-        toast(`Recorded: ${data.status}.`);
+        toast(`Recorded: ${adoptionLabel(data.status)}.`);
         refresh();
       }} />
   );

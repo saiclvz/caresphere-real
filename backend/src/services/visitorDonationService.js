@@ -14,7 +14,7 @@ const { moveStock } = require('./donationService');
 async function deleteVisit(req, visitorId, choice, voidBody = {}) {
   const LC = require('./donationLifecycle');
   return withTransaction(async (conn) => {
-    const [[v]] = await conn.query('SELECT visitor_id FROM tbl_visitors WHERE visitor_id = ? FOR UPDATE', [visitorId]);
+    const [[v]] = await conn.query('SELECT visitor_id FROM tbl_visitors WHERE visitor_id = ? AND archived_at IS NULL FOR UPDATE', [visitorId]);
     if (!v) throw new HttpError(404, 'Visitor record not found.');
     const [[d0]] = await conn.query('SELECT donation_id FROM tbl_donations WHERE visit_id = ? FOR UPDATE', [visitorId]);
     let reversed = [];
@@ -25,7 +25,9 @@ async function deleteVisit(req, visitorId, choice, voidBody = {}) {
       }
       await conn.query('UPDATE tbl_donations SET visit_id = NULL, last_activity_at = NOW() WHERE donation_id = ?', [d0.donation_id]);
     }
-    await conn.query('DELETE FROM tbl_visitors WHERE visitor_id = ?', [visitorId]);
+    // Visits are never deleted (migration 034): archived with the reason, hidden from the Visitors page.
+    await conn.query('UPDATE tbl_visitors SET archived_at = NOW(), archived_by = ?, archive_reason = ? WHERE visitor_id = ?',
+      [req.user.user_id, String(voidBody.archive_reason || 'Removed from the visitor log').slice(0, 500), visitorId]);
     return { donationId: d0?.donation_id || null, reversed };
   });
 }

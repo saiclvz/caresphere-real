@@ -327,7 +327,37 @@ async function openFlags(conn = pool, recordType = null) {
   return rows;
 }
 
+/**
+ * Record ids (strings) of `recordType` that `userId` is assigned to (null = anyone, active accounts only), through
+ * the one assignment service: the record's own active primary/backup/temporary rows, the old column for records
+ * not converted yet, and, for an adoption application or a transition review, the assignment of its child.
+ * Used by every "Assigned to me" / "Unassigned" filter, so lists agree with what the access checks allow.
+ */
+async function recordIdsFor(conn, recordType, userId = null) {
+  const t = table(recordType);
+  const uArgs = userId ? [userId] : [];
+  const [own] = await conn.query(
+    `SELECT DISTINCT a.record_id FROM tbl_record_assignments a JOIN tbl_users u ON u.user_id = a.user_id AND u.is_active = TRUE
+      WHERE a.record_type = ? ${userId ? 'AND a.user_id = ?' : ''} AND ${ACTIVE_SQL}`, [recordType, ...uArgs]);
+  const [legacy] = await conn.query(
+    `SELECT CAST(x.${t.id} AS CHAR) AS record_id FROM ${t.table} x JOIN tbl_users u ON u.user_id = x.assigned_staff_id AND u.is_active = TRUE
+      WHERE ${userId ? 'x.assigned_staff_id = ? AND ' : ''}NOT EXISTS (SELECT 1 FROM tbl_record_assignments a2 WHERE a2.record_type = ? AND a2.record_id = CAST(x.${t.id} AS CHAR))`,
+    [...uArgs, recordType]);
+  const ids = new Set([...own, ...legacy].map((r) => String(r.record_id)));
+  if (recordType !== 'child') {
+    const children = [...await recordIdsFor(conn, 'child', userId)];
+    if (children.length) {
+      const [rows] = recordType === 'adoption_application'
+        ? await conn.query('SELECT application_id AS id FROM tbl_adoption_applications WHERE COALESCE(matched_child_id, target_child_id, link_child_id) IN (?)', [children])
+        : await conn.query('SELECT review_id AS id FROM tbl_transition_reviews WHERE child_id IN (?)', [children]);
+      for (const r of rows) ids.add(String(r.id));
+    }
+  }
+  return ids;
+}
+
 module.exports = {
+  recordIdsFor,
   TABLES, TYPES, ACTIVE_SQL, assign, assignWith, add, end, change, bulk, active, assignmentOf, history, converted, convertOne, syncMirror,
   revokeSessions, staffLostAccess, openFlags, flag, clearFlags, endRow, audit,
 };

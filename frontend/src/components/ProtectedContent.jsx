@@ -132,7 +132,7 @@ function Guard({ area, children }) {
               <ShieldAlert className="mx-auto h-8 w-8 text-red-600" aria-hidden />
               <p id="shield-title" className="mt-2 font-semibold text-navy-900">{CAPTURE_MESSAGE}</p>
               <p className="mt-1 text-sm text-slate-600">This attempt has been recorded.</p>
-              <button type="button" autoFocus className="mt-4 rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white" onClick={() => setCover(null)}>Continue</button>
+              <button type="button" autoFocus className="mt-4 rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-white" onClick={() => setCover(null)}>Continue</button>
             </div>
           </div>
         )}
@@ -142,7 +142,7 @@ function Guard({ area, children }) {
               <EyeOff className="mx-auto h-7 w-7 text-navy-700" aria-hidden />
               <p className="mt-2 font-semibold text-navy-900">Protected data is hidden</p>
               <p className="mt-1 text-sm text-slate-600">It shows again when this window is active. Click here to continue.</p>
-              <button type="button" className="mt-4 rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white" onClick={() => window.focus()}>Show</button>
+              <button type="button" className="mt-4 rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark focus:outline-none focus-visible:ring-2 focus-visible:ring-white" onClick={() => window.focus()}>Show</button>
             </div>
           </div>
         )}

@@ -3,7 +3,9 @@ const { likeParam } = require('../utils/validate');
 const L = require('../config/donationLifecycle');
 
 const q = (list) => list.map((s) => `'${s.replace(/'/g, "''")}'`).join(', ');
-const COUNTED = `d.status IN (${q(L.COUNTED)})`;
+// Counted: a verified or accepted status AND, for donor reports, verified against the home's account, AND, for cash
+// above the dual-control amount, confirmed by a second person. Nothing else is ever in a total.
+const COUNTED = `(d.status IN (${q(L.COUNTED)}) AND (d.claim_status IS NULL OR d.claim_status = 'Verified') AND (d.dual_control IS NULL OR d.dual_control = 'Approved'))`;
 const IN_KIND = "d.payment_method = 'In-kind'";
 // In-kind value: the item lines' estimated values when every line has one, else the older whole-donation estimate.
 const LINES_VALUE = `(SELECT CASE WHEN COUNT(*) = 0 OR SUM(l.estimated_value IS NULL) > 0 THEN NULL ELSE SUM(l.estimated_value) END
@@ -24,6 +26,8 @@ const COLS = `d.donation_id, d.donation_no, d.donor_id, d.donor_type, d.walk_in_
   d.amount, d.payment_method, d.status, d.legacy_status, d.item_description, d.reason_for_donation, d.reason_category, d.is_general, d.submitted_by_donor,
   d.allocation_notes, d.legacy_allocation, d.qr_receipt_code, d.receipt_issued, d.created_at, d.received_at, d.purpose, d.is_anonymous, d.last_activity_at,
   d.void_reason, d.void_note, d.voided_at, d.donor_ref_id, d.lifecycle_converted_at,
+  d.claim_status, d.reported_amount, d.verified_amount, d.reference_raw, d.sent_at, d.claim_reported_at, d.stale_flagged_at, d.payment_method_id,
+  d.dual_control, d.recorded_by, d.verified_at, d.legacy_payment_id,
   dr.donor_code, dr.donor_type AS donor_kind, dr.display_name AS donor_record_name,
   (SELECT vl.check_in_time FROM tbl_visitors vl WHERE vl.visitor_id = d.visit_id) AS linked_visit_time,
   ${EST_VALUE} AS estimated_value, ${ITEMS} AS items_summary, ${NEEDS_REVIEW} AS allocation_needs_review, ${NO_ALLOCATION} AS allocation_missing,
@@ -82,6 +86,8 @@ const shape = (r) => r && ({
   ...r, amount: Number(r.amount), estimated_value: r.estimated_value === null || r.estimated_value === undefined ? null : Number(r.estimated_value),
   allocation_needs_review: !!r.allocation_needs_review, allocation_missing: !!r.allocation_missing, void_requested: !!r.void_requested,
   has_acknowledgment: !!r.has_acknowledgment, needs_attention: !!r.needs_attention, is_anonymous: !!r.is_anonymous, in_kind: r.payment_method === 'In-kind',
+  reported_amount: r.reported_amount === null || r.reported_amount === undefined ? null : Number(r.reported_amount),
+  verified_amount: r.verified_amount === null || r.verified_amount === undefined ? null : Number(r.verified_amount),
 });
 
 async function allocationsFor(ids, conn = pool) {
@@ -94,7 +100,7 @@ async function allocationsFor(ids, conn = pool) {
 }
 
 module.exports = {
-  COUNTED_SQL: COUNTED, IN_KIND_SQL: IN_KIND, EST_VALUE_SQL: EST_VALUE, FROM_SQL: FROM, buildWhere,
+  COUNTED_SQL: COUNTED, IN_KIND_SQL: IN_KIND, EST_VALUE_SQL: EST_VALUE, FROM_SQL: FROM, buildWhere, allocationsFor,
 
   /** The list: newest activity first; paginated when `paging` is given ({ limit, offset }). */
   async list(filters = {}, paging = null) {
@@ -149,7 +155,7 @@ module.exports = {
     const [[r]] = await pool.query(
       `SELECT COALESCE(SUM(${COUNTED}), 0) AS count,
               COALESCE(SUM(CASE WHEN ${COUNTED} AND NOT ${IN_KIND} THEN d.amount END), 0) AS received_total,
-              COALESCE(SUM(d.status IN ('Pending', 'Pending verification')), 0) AS pending_count,
+              COALESCE(SUM(d.status IN ('Pending', 'Pending verification') AND (d.claim_status IS NULL OR d.claim_status IN ('Reported', 'Details requested', 'Awaiting approval'))), 0) AS pending_count,
               MAX(CASE WHEN d.status <> 'Voided' THEN d.created_at END) AS last_donation_at
          ${FROM} ${sql}`, params);
     return { count: Number(r.count), received_total: Number(r.received_total), pending_count: Number(r.pending_count), last_donation_at: r.last_donation_at };

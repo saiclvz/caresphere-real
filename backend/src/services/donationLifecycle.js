@@ -154,6 +154,8 @@ async function setStatus(conn, req, d, to, note) {
  * lines for in-kind); rejecting needs a reason.
  */
 async function transition(conn, req, d, to, note) {
+  if (d.claim_status && d.claim_status !== 'Verified') throw new HttpError(409, "This donor report isn't verified yet. Verify it against the home's account first (Donations > To verify).");
+  if (d.dual_control === 'Waiting') throw new HttpError(409, 'A second person must confirm this cash first (Confirm cash on the donation page).');
   if (!(L.TRANSITIONS[d.status] || []).includes(to)) throw new HttpError(409, `A ${d.status.toLowerCase()} donation can't be moved to ${to}.`);
   if (to === 'Accepted') {
     const problems = await allocationProblems(conn, d);
@@ -172,6 +174,9 @@ async function transition(conn, req, d, to, note) {
 /** Issues (or reissues, with a reason) the acknowledgment. Accepted donations move to Acknowledged. */
 async function acknowledge(conn, req, d, { reason } = {}) {
   if (d.status === 'Voided') throw new HttpError(409, 'This donation was voided. No acknowledgment can be issued.');
+  // Receipts need Verified (donor reports) and Allocated/accepted; cash above the dual-control amount needs its second person.
+  if (d.claim_status && d.claim_status !== 'Verified') throw new HttpError(409, "No acknowledgment until the donor report is verified against the home's account.");
+  if (d.dual_control === 'Waiting') throw new HttpError(409, 'No acknowledgment until a second person confirms the cash.');
   if (!['Accepted', ...L.ACKNOWLEDGED_OR_LATER].includes(d.status)) throw new HttpError(409, 'The acknowledgment is issued once the donation is accepted (allocation set).');
   if (d.status === 'Accepted') {
     // e.g. a converted donation whose old allocation text was flagged "Needs review"
@@ -181,8 +186,10 @@ async function acknowledge(conn, req, d, { reason } = {}) {
   const [[last]] = await conn.query('SELECT MAX(version) AS v FROM tbl_donation_acknowledgments WHERE donation_id = ?', [d.donation_id]);
   const version = Number(last.v || 0) + 1;
   if (version > 1 && !String(reason || '').trim()) throw new HttpError(422, 'Give the reason for reissuing the acknowledgment.', { errors: { reason: 'Give the reason for reissuing.' } });
-  await conn.query('INSERT INTO tbl_donation_acknowledgments (donation_id, version, issued_by, reissue_reason) VALUES (?, ?, ?, ?)',
-    [d.donation_id, version, req?.user?.user_id || null, version > 1 ? String(reason).slice(0, 255) : null]);
+  // Sequential acknowledgment number (not a secret: the random receipt code is what proves a receipt).
+  const ackNo = `ACK-${new Date().getFullYear()}-${pad4(await nextValue(conn, `ACK-${new Date().getFullYear()}`))}`;
+  await conn.query('INSERT INTO tbl_donation_acknowledgments (donation_id, version, issued_by, reissue_reason, ack_no) VALUES (?, ?, ?, ?, ?)',
+    [d.donation_id, version, req?.user?.user_id || null, version > 1 ? String(reason).slice(0, 255) : null, ackNo]);
   await conn.query('UPDATE tbl_donations SET receipt_issued = TRUE, last_activity_at = NOW() WHERE donation_id = ?', [d.donation_id]);
   if (req?.user?.user_id) await logActivityWith(conn, req, version > 1 ? `ACKNOWLEDGMENT_REISSUED (version ${version})` : 'ACKNOWLEDGMENT_ISSUED', `Donation #${d.donation_id}`);
   if (d.status === 'Accepted') await setStatus(conn, req, d, 'Acknowledged', version > 1 ? 'Acknowledgment reissued' : 'Acknowledgment issued');
@@ -316,6 +323,7 @@ async function voidDonation(conn, req, d, body, moveStock) {
   await setStatus(conn, req, d, 'Voided', `Voided: ${reason}${correction ? ' (correction)' : ''}`);
   await conn.query("UPDATE tbl_donation_void_requests SET status = 'Approved', decided_by = ?, decided_at = NOW(), decision_note = COALESCE(decision_note, 'Voided') WHERE donation_id = ? AND status = 'Pending'", [req.user.user_id, d.donation_id]);
   await logActivityWith(conn, req, `DONATION_VOIDED (${reason}${correction ? ', correction' : ''})`, `Donation #${d.donation_id}`);
+  await require('./cashControls').afterVoid(conn, req, d);
   for (const it of reversed) await logActivityWith(conn, req, `INVENTORY_VOID_REVERSAL (-${it.quantity}, donation #${d.donation_id})`, `Inventory #${it.item_id}`);
   return reversed;
 }
@@ -343,28 +351,13 @@ async function declineVoid(conn, req, d, note) {
 // ---------------------------------------------------------------- corrections (after acknowledgment)
 
 /** A correction entry: the field, old and new values, and the reason. The change itself is applied with it. */
-async function correction(conn, req, d, field, oldValue, newValue, reason) {
+async function correction(conn, req, d, field, oldValue, newValue, reason, { alert = true } = {}) {
   if (!String(reason || '').trim()) fail({ reason: 'Give the reason for the correction.' });
   await conn.query('INSERT INTO tbl_donation_corrections (donation_id, field, old_value, new_value, reason, made_by) VALUES (?, ?, ?, ?, ?, ?)',
     [d.donation_id, field, oldValue === null || oldValue === undefined ? null : String(oldValue).slice(0, 500), newValue === null || newValue === undefined ? null : String(newValue).slice(0, 500), String(reason).trim().slice(0, 500), req.user.user_id]);
   await conn.query('UPDATE tbl_donations SET last_activity_at = NOW() WHERE donation_id = ?', [d.donation_id]);
   await logActivityWith(conn, req, `DONATION_CORRECTION (${field})`, `Donation #${d.donation_id}`);
-}
-
-/**
- * Portal gifts (paid online, or a bank transfer staff confirmed): one allocation line for the whole amount,
- * Accepted, and the acknowledgment issued (so the donor's receipt is ready, as before). Runs in the caller's
- * transaction; `req` is null for the payment webhook (no acting user).
- */
-async function acceptPortalGift(conn, req, donationId, { purpose, use, note }) {
-  const d0 = await lockDonation(conn, donationId);
-  const d = { ...d0, amount: Number(d0.amount) };
-  const program = L.PROGRAMS.includes(purpose) ? purpose : 'General support';
-  await setAllocation(conn, req, d, [{ program, amount: round2(d.amount), intended_use: use ? String(use).slice(0, 500) : null, needs_review: false, original_text: null }], { purpose: program });
-  await conn.query('UPDATE tbl_donations SET purpose = ? WHERE donation_id = ?', [program, donationId]);
-  if (d.status !== 'Accepted') await setStatus(conn, req, d, 'Accepted', note || 'Allocation recorded');
-  await acknowledge(conn, req, d, {});
-  return d;
+  if (alert && L.ACKNOWLEDGED_OR_LATER.includes(d.status)) await require('./cashControls').afterCorrection(conn, req, d, field);
 }
 
 /** The program a donor's own words point to, or General support when unclear. */
@@ -374,7 +367,7 @@ function purposeFromText(text) {
 }
 
 module.exports = {
-  acceptPortalGift, purposeFromText,
+  purposeFromText,
   nextValue, donationNumber, donorCode, donorForAccount, donorForWalkIn, nameKey, mapAllocation, activeAllocations, cleanAllocation,
   setAllocation, allocationProblems, history, lockDonation, setStatus, transition, acknowledge, distributionTotals, syncDistributedStatus,
   recordDistribution, recordUtilization, cleanVoid, voidDonation, requestVoid, declineVoid, correction, isInKind, round2, today,

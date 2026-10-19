@@ -4,7 +4,7 @@ import { ClipboardList, FileSpreadsheet, FileText, ShieldAlert } from 'lucide-re
 import useApi from '../hooks/useApi';
 import { api, download, qs } from '../api/client';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, PageHeader, Spinner, Table, SectionHeader, TAB_ROW, tabClass } from '../components/ui';
 import Pagination from '../components/Pagination';
 import { formatDateTime } from '../lib/format';
 import DataProtection from './DataProtection';
@@ -74,7 +74,7 @@ function ActivityLog() {
 
   return (
     <>
-      <PageHeader title="Activity log" description="Who did what, when, and to which record. Sensitive record access is marked. Entries can't be edited or deleted."
+      <SectionHeader title="Activity log" description="Who did what, when, and to which record. Sensitive record access is marked. Entries can't be edited or deleted."
         actions={<>
           <Button variant="secondary" loading={busy === 'pdf'} onClick={report}><FileText className="h-4 w-4" /> Compliance report</Button>
           <Button variant="secondary" loading={busy === 'xlsx'} onClick={exportXlsx}><FileSpreadsheet className="h-4 w-4" /> Export to Excel</Button>
@@ -130,7 +130,7 @@ function ActivityLog() {
         ) : (
           <Table>
             <thead className="bg-slate-50"><tr>
-              <th className="th">When</th><th className="th">User</th><th className="th">Action</th><th className="th">Record</th><th className="th">Device</th><th className="th">Detail</th>
+              <th className="th">When</th><th className="th">User</th><th className="th">Action</th><th className="th">Record</th><th className="th">Result</th><th className="th">Device</th><th className="th">Detail</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100">
               {rows.map((r) => (
@@ -144,8 +144,20 @@ function ActivityLog() {
                   <td className="td whitespace-nowrap font-mono text-xs">
                     {r.record ? (r.record.link ? <Link to={r.record.link} className="text-brand hover:underline">{r.record.label}</Link> : r.record.label) : <span className="font-sans text-slate-400">-</span>}
                   </td>
+                  <td className="td">{r.result === 'DENIED' ? <Badge tone="red">Denied</Badge> : <Badge tone="green">Success</Badge>}</td>
                   <td className="td text-xs capitalize">{r.device || '-'}</td>
-                  <td className="td max-w-xs text-xs text-slate-500">{r.detail || ''}</td>
+                  <td className="td max-w-xs text-xs text-slate-500">
+                    {r.detail || ''}
+                    {r.reason && <p className="mt-0.5 break-words"><span className="font-medium text-slate-600">Reason:</span> {r.reason}</p>}
+                    {r.changes?.length > 0 && (
+                      <ul className="mt-1 space-y-0.5" aria-label="Changed fields">
+                        {r.changes.map((c, i) => (
+                          <li key={i} className="break-words"><span className="font-medium text-slate-600">{c.field}:</span>{' '}
+                            {c.sensitive ? 'changed (value not recorded)' : <>{c.old ?? '(empty)'} → <span className="text-navy-900">{c.new ?? '(empty)'}</span></>}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -161,7 +173,7 @@ function ActivityLog() {
 
 /** Data protection (Admin tab): privacy requests, incidents and security events, then active access. */
 function DataProtectionTab() {
-  return (<><DataProtection /><AccessControlPanels /></>);
+  return (<><DataProtection embedded /><AccessControlPanels /></>);
 }
 
 const TABS = [{ key: 'activity', label: 'Activity log' }, { key: 'data-protection', label: 'Data protection' }];
@@ -193,11 +205,12 @@ export default function AuditLog() {
 
   return (
     <>
-      <div className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200" role="tablist" aria-label="Audit log sections" onKeyDown={onKeyDown}>
+      <PageHeader title="Audit log" description="A permanent record of who did what in CareSphere, and the data protection records." />
+      <div className={TAB_ROW} role="tablist" aria-label="Audit log sections" onKeyDown={onKeyDown}>
         {TABS.map((t) => (
           <button key={t.key} ref={(el) => { refs.current[t.key] = el; }} type="button" role="tab" id={`tab-${t.key}`} aria-controls={`panel-${t.key}`}
             aria-selected={tab === t.key} tabIndex={tab === t.key ? 0 : -1} onClick={() => select(t.key)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 ${tab === t.key ? 'bg-navy-900 text-white' : 'text-slate-600 hover:text-navy-900'}`}>
+            className={tabClass(tab === t.key)}>
             {t.label}
           </button>
         ))}

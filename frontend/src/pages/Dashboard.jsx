@@ -2,8 +2,9 @@ import DueSoon from '../components/adoption/DueSoon';
 import { hasDuty } from '../lib/duties';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertTriangle, Baby, Boxes, HandCoins, UserCheck, UtensilsCrossed } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Baby, Boxes, ClipboardCheck, HandCoins, UserCheck, UtensilsCrossed } from 'lucide-react';
 import useApi from '../hooks/useApi';
+import useThemeColors from '../hooks/useThemeColors';
 import { useAuth } from '../context/AuthContext';
 import { Badge, Card, ErrorNote, WelcomeBanner, Spinner, StatTile } from '../components/ui';
 import { formatMoney } from '../lib/format';
@@ -13,6 +14,7 @@ const monthLabel = (key) => new Date(`${key}-01T00:00:00`).toLocaleDateString('e
 export default function Dashboard() {
   const { user } = useAuth();
   const { data, loading, error, reload } = useApi('/dashboard/summary');
+  const tc = useThemeColors();
 
   if (loading && !data) return <Spinner />;
   if (error) return <ErrorNote error={error} onRetry={reload} />;
@@ -24,18 +26,28 @@ export default function Dashboard() {
       <WelcomeBanner title={`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}, ${user.full_name.split(' ')[0]}`}
         description="Today at the home: who's in care, what's running low, and who's on site." />
 
+      {/* What needs attention first: admissions waiting for an Admin decision (Admin only). */}
+      {d.admissions_to_review !== undefined && (
+        <Link to={`/children/intake?status=${encodeURIComponent('Pending Approval')}`}
+          className={`mb-4 flex items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 ${d.admissions_to_review ? 'border-amber-300 bg-amber-50 text-amber-950 hover:bg-amber-100' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}>
+          <ClipboardCheck className={`h-5 w-5 shrink-0 ${d.admissions_to_review ? 'text-amber-700' : 'text-emerald-700'}`} aria-hidden />
+          <span className="min-w-0 flex-1">
+            {d.admissions_to_review
+              ? <><strong className="font-semibold tabular-nums">{d.admissions_to_review}</strong> admission{d.admissions_to_review === 1 ? ' is' : 's are'} waiting for your review.</>
+              : 'No admissions are waiting for review.'}
+          </span>
+          <span className="inline-flex shrink-0 items-center gap-1 font-medium text-brand">Review admissions <ArrowRight className="h-4 w-4" aria-hidden /></span>
+        </Link>
+      )}
+
+      <h2 className="sr-only">Summary</h2>
+      {/* Today's numbers. Each tile opens its list when the user has that duty; the numbers are the server's, unchanged. */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile icon={Baby} label="Children in care" value={s.active_children} />
-        <StatTile icon={Boxes} label="Items low on stock" value={s.low_stock} tone={s.low_stock ? 'amber' : 'green'} />
-        <StatTile icon={UserCheck} label={`Visitors on site (${s.visitors_today} today)`} value={s.visitors_on_site} tone="slate" />
-        <Card className="flex items-center gap-4 p-5">
-          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><HandCoins className="h-5 w-5" aria-hidden /></div>
-          <div className="min-w-0">
-            <p className="text-2xl font-semibold tabular-nums text-navy-900">{formatMoney(d.donations.received_total)}</p>
-            <p className="text-sm text-slate-500">Received from {d.donations.count} donation{d.donations.count === 1 ? '' : 's'}</p>
-            {hasDuty(user, 'donations') && <Link to="/donations" className="text-sm font-medium text-brand hover:underline">View donations</Link>}
-          </div>
-        </Card>
+        <StatTile icon={Baby} label="Children in care" value={s.active_children} to={hasDuty(user, 'children') ? '/children' : undefined} />
+        <StatTile icon={Boxes} label="Items low on stock" value={s.low_stock} tone={s.low_stock ? 'amber' : 'green'} hint={s.low_stock ? 'At or below their low-stock level' : 'Everything above its level'} to={hasDuty(user, 'inventory') ? '/inventory' : undefined} />
+        <StatTile icon={UserCheck} label="Visitors on site" value={s.visitors_on_site} hint={`${s.visitors_today} checked in today`} tone="slate" to={hasDuty(user, 'visitors') ? '/visitors' : undefined} />
+        <StatTile icon={HandCoins} label="Donations received" value={formatMoney(d.donations.received_total)} tone="green"
+          hint={`From ${d.donations.count} donation${d.donations.count === 1 ? '' : 's'}`} to={hasDuty(user, 'donations') ? '/donations' : undefined} />
       </div>
 
       {hasDuty(user, 'adoption') && <div className="mt-6"><DueSoon /></div>}
@@ -46,12 +58,12 @@ export default function Dashboard() {
           <div className="mt-4 h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={d.donation_trend}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={70}
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={tc.line} />
+                <XAxis dataKey="month" tickFormatter={monthLabel} tick={{ fontSize: 12, fill: tc.muted }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 12, fill: tc.muted }} axisLine={false} tickLine={false} width={70}
                   tickFormatter={(v) => (v >= 1000 ? `₱${(v / 1000).toFixed(0)}k` : `₱${v}`)} />
-                <Tooltip formatter={(v) => formatMoney(v)} labelFormatter={monthLabel} cursor={{ fill: '#F1F5F9' }} />
-                <Bar dataKey="total" name="Amount" fill="#1D5FD6" radius={[4, 4, 0, 0]} />
+                <Tooltip contentStyle={{ backgroundColor: tc.surface, borderColor: tc.line, borderRadius: 12 }} labelStyle={{ color: tc.heading }} formatter={(v) => formatMoney(v)} labelFormatter={monthLabel} cursor={{ fill: tc.tint }} />
+                <Bar dataKey="total" name="Amount" fill={tc.primary} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -89,13 +101,13 @@ export default function Dashboard() {
             <div className="mt-4 h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={d.age_groups}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                  <XAxis dataKey="age_group" tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} width={30} />
-                  <Tooltip cursor={{ fill: '#F1F5F9' }} />
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={tc.line} />
+                  <XAxis dataKey="age_group" tick={{ fontSize: 12, fill: tc.muted }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: tc.muted }} axisLine={false} tickLine={false} width={30} />
+                  <Tooltip contentStyle={{ backgroundColor: tc.surface, borderColor: tc.line, borderRadius: 12 }} labelStyle={{ color: tc.heading }} cursor={{ fill: tc.tint }} />
                   <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="female" name="Girls" stackId="a" fill="#1E293B" />
-                  <Bar dataKey="male" name="Boys" stackId="a" fill="#1D5FD6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="female" name="Girls" stackId="a" fill={tc.navy} />
+                  <Bar dataKey="male" name="Boys" stackId="a" fill={tc.primary} radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

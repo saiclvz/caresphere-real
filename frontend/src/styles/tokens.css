@@ -1,0 +1,208 @@
+/*
+ * CareSphere design tokens: colours (as "R G B" so Tailwind can add opacity), shape, shadow and focus.
+ * Themes: light (default), dark ([data-theme="dark"]) and high contrast (.cs-contrast, combined with either).
+ * Set from Display settings (lib/displayPrefs.js). Every pairing below was measured for WCAG 2.2 AA; see
+ * DESIGN-SYSTEM.md for the ratios and the two substitutions made for contrast.
+ */
+:root {
+  /* Surfaces */
+  --cs-page: 242 247 255;          /* #F2F7FF page background */
+  --cs-surface: 255 255 255;       /* #FFFFFF cards and inputs */
+  --cs-surface-2: 245 249 255;     /* #F5F9FF table headers, quiet panels */
+  --cs-surface-3: 234 241 252;     /* #EAF1FC pressed / selected rows */
+  --cs-tint-1: 238 244 253;        /* #EEF4FD hover tint */
+  --cs-tint-2: 227 239 254;        /* #E3EFFE header band and soft panels */
+  --cs-tint-3: 198 216 247;        /* #C6D8F7 soft outline */
+  /* Lines */
+  --cs-line: 211 226 247;          /* #D3E2F7 card borders (decorative) */
+  --cs-line-strong: 125 143 179;   /* #7D8FB3 track / strong divider */
+  --cs-control: 125 143 179;       /* #7D8FB3 form-control outline, 3.25:1 on white (substitute for #D3E2F7) */
+  /* Text */
+  --cs-heading: 11 42 102;         /* #0B2A66 */
+  --cs-heading-2: 31 42 68;        /* #1F2A44 labels */
+  --cs-body: 31 42 68;             /* #1F2A44 */
+  --cs-body-2: 58 72 100;          /* #3A4864 */
+  --cs-muted: 81 96 127;           /* #51607F */
+  --cs-faint: 94 110 142;          /* #5E6E8E small secondary text, 4.77:1 on page (replaces slate-400) */
+  --cs-placeholder: 97 112 143;    /* #61708F */
+  --cs-disabled: 154 169 196;      /* #9AA9C4 disabled text and decorative separators (no contrast minimum) */
+  --cs-link: 27 95 209;            /* #1B5FD1 */
+  --cs-link-strong: 20 63 140;     /* #143F8C */
+  /* Brand */
+  --cs-primary: 27 95 209;         /* #1B5FD1 */
+  --cs-primary-hover: 22 78 175;   /* #164EAF */
+  --cs-primary-active: 18 63 145;  /* #123F91 */
+  --cs-brand-300: 157 188 240;
+  --cs-brand-400: 127 168 240;
+  --cs-focus: 27 95 209;
+  --cs-navy-600: 74 91 163;
+  --cs-navy-700: 51 69 143;
+  --cs-navy-800: 36 53 127;
+  --cs-navy-900: 27 42 107;        /* #1B2A6B logo navy, navy panels */
+  --cs-navy-950: 18 29 77;
+  /* Status */
+  --cs-success-bg: 221 244 232;  --cs-success-bg-2: 201 238 218; --cs-success-line: 143 211 174; --cs-success-text: 11 107 58;   /* #0B6B3A on #DDF4E8 */
+  --cs-warning-bg: 255 241 214;  --cs-warning-bg-2: 255 228 173; --cs-warning-line: 240 195 109; --cs-warning-text: 138 75 0;   /* #8A4B00 on #FFF1D6 */
+  --cs-danger-bg: 253 229 229;   --cs-danger-bg-2: 251 207 207;  --cs-danger-line: 240 163 163;  --cs-danger-text: 161 32 32;   /* #A12020 on #FDE5E5 */
+  --cs-info-bg: 227 239 254;     --cs-info-line: 185 208 245;    --cs-info-text: 19 74 168;                                    /* #134AA8 on #E3EFFE */
+  /* Sidebar (light by default; Display settings can choose the navy sidebar) */
+  --cs-sb-bg: var(--cs-surface);
+  --cs-sb-line: var(--cs-line);
+  --cs-sb-text: var(--cs-heading);
+  --cs-sb-muted: var(--cs-faint);
+  --cs-sb-hover: var(--cs-tint-1);
+  --cs-sb-group: var(--cs-tint-1);
+  /* Logo colours (the two-tone wordmark is kept exactly: "Sphere" #1D5FD6) */
+  --cs-logo-navy: #1B2A6B; --cs-logo-blue: #1D5FD6; --cs-logo-side: #2F4FB0; --cs-logo-tag: #1B2A6B;
+  /* Shape, shadow, focus, motion */
+  --cs-radius-card: 16px;
+  --cs-radius-control: 12px;
+  --cs-shadow: 0 2px 8px rgba(27, 95, 209, 0.07);
+  --cs-shadow-hover: 0 6px 18px rgba(27, 95, 209, 0.12);
+  --cs-focus-width: 3px;
+  --cs-motion: 150ms;
+  color-scheme: light;
+}
+
+/* Named aliases (ready-to-use colours and the spacing / layout scale). Components use these or the Tailwind colour
+   names mapped in theme/palette.js; both read the same channels above, so every theme applies to both. */
+:root {
+  --color-page: rgb(var(--cs-page));
+  --color-panel: rgb(var(--cs-tint-2));
+  --color-surface: rgb(var(--cs-surface));
+  --color-border: rgb(var(--cs-line));
+  --color-control: rgb(var(--cs-control));
+  --color-heading: rgb(var(--cs-heading));
+  --color-text: rgb(var(--cs-body));
+  --color-muted: rgb(var(--cs-muted));
+  --color-placeholder: rgb(var(--cs-placeholder));
+  --color-primary: rgb(var(--cs-primary));
+  --color-primary-hover: rgb(var(--cs-primary-hover));
+  --color-primary-active: rgb(var(--cs-primary-active));
+  --color-success-text: rgb(var(--cs-success-text));
+  --color-success-bg: rgb(var(--cs-success-bg));
+  --color-warning-text: rgb(var(--cs-warning-text));
+  --color-warning-bg: rgb(var(--cs-warning-bg));
+  --color-danger-text: rgb(var(--cs-danger-text));
+  --color-danger-bg: rgb(var(--cs-danger-bg));
+  --radius-card: var(--cs-radius-card);
+  --radius-control: var(--cs-radius-control);
+  --radius-pill: 999px;
+  --shadow-card: var(--cs-shadow);
+  --shadow-card-hover: var(--cs-shadow-hover);
+  --spacing-1: 4px; --spacing-2: 8px; --spacing-3: 12px; --spacing-4: 16px; --spacing-5: 20px;
+  --spacing-6: 24px; --spacing-8: 32px; --spacing-10: 40px; --spacing-12: 48px;
+  --content-max-width: 1300px;
+  --focus-ring-width: var(--cs-focus-width);
+}
+
+/* Navy sidebar (Display settings > Sidebar: Navy), the earlier CareSphere look. */
+:root.cs-sidebar-navy {
+  --cs-sb-bg: var(--cs-navy-900);
+  --cs-sb-line: var(--cs-navy-950);
+  --cs-sb-text: 241 245 252;
+  --cs-sb-muted: 201 211 240;
+  --cs-sb-hover: var(--cs-navy-800);
+  --cs-sb-group: var(--cs-navy-800);
+}
+
+/* Dark theme */
+:root[data-theme="dark"] {
+  --cs-page: 15 23 41;             /* #0F1729 */
+  --cs-surface: 23 32 54;          /* #172036 */
+  --cs-surface-2: 27 37 64;        /* #1B2540 */
+  --cs-surface-3: 34 45 74;        /* #222D4A */
+  --cs-tint-1: 24 38 74;           /* #18264A */
+  --cs-tint-2: 26 44 77;           /* #1A2C4D */
+  --cs-tint-3: 40 68 119;
+  --cs-line: 42 55 84;             /* #2A3754 */
+  --cs-line-strong: 93 111 148;
+  --cs-control: 110 127 163;       /* #6E7FA3, 4.0:1 on surface */
+  --cs-heading: 230 236 247;       /* #E6ECF7 */
+  --cs-heading-2: 214 222 237;
+  --cs-body: 201 211 229;          /* #C9D3E5 */
+  --cs-body-2: 180 192 214;
+  --cs-muted: 157 170 202;         /* #9DAACA */
+  --cs-faint: 142 156 187;         /* #8E9CBB */
+  --cs-placeholder: 142 156 187;
+  --cs-disabled: 93 107 136;
+  --cs-link: 142 182 255;          /* #8EB6FF */
+  --cs-link-strong: 169 200 255;
+  --cs-primary: 47 111 224;        /* #2F6FE0, white text 4.70:1 */
+  --cs-primary-hover: 37 95 204;
+  --cs-primary-active: 30 80 178;
+  --cs-focus: 142 182 255;
+  --cs-navy-800: 52 73 143;
+  --cs-navy-900: 46 69 150;        /* #2E4596 navy chips and panels, white text 8.7:1 */
+  --cs-navy-950: 5 9 18;
+  --cs-success-bg: 16 41 30;  --cs-success-bg-2: 20 56 38;  --cs-success-line: 44 107 74;  --cs-success-text: 121 223 166;
+  --cs-warning-bg: 43 33 17;  --cs-warning-bg-2: 58 44 18;  --cs-warning-line: 122 90 30;  --cs-warning-text: 249 195 106;
+  --cs-danger-bg: 53 24 25;   --cs-danger-bg-2: 74 31 33;   --cs-danger-line: 122 46 48;   --cs-danger-text: 255 159 159;
+  --cs-info-bg: 26 44 77;     --cs-info-line: 46 76 128;    --cs-info-text: 142 182 255;
+  --cs-logo-navy: #FFFFFF; --cs-logo-blue: #60A5FA; --cs-logo-side: #BFDBFE; --cs-logo-tag: #CBD5E1;
+  --cs-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --cs-shadow-hover: 0 6px 18px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+:root[data-theme="dark"].cs-sidebar-navy { --cs-sb-bg: 20 30 66; --cs-sb-line: 5 9 18; --cs-sb-hover: 36 53 110; --cs-sb-group: 36 53 110; }
+
+/* High contrast (light): near-black text, strong outlines, darker links and buttons. */
+:root.cs-contrast {
+  --cs-page: 255 255 255;
+  --cs-surface-2: 243 246 251;
+  --cs-surface-3: 231 236 245;
+  --cs-tint-1: 230 238 252;
+  --cs-tint-2: 220 231 251;
+  --cs-line: 31 42 68;
+  --cs-line-strong: 31 42 68;
+  --cs-control: 31 42 68;
+  --cs-heading: 0 0 0;
+  --cs-heading-2: 0 0 0;
+  --cs-body: 0 8 20;
+  --cs-body-2: 11 18 32;
+  --cs-muted: 31 42 68;            /* 14.3:1 */
+  --cs-faint: 31 42 68;
+  --cs-placeholder: 51 64 92;
+  --cs-disabled: 81 96 127;
+  --cs-link: 10 58 158;            /* #0A3A9E, 9.9:1 */
+  --cs-link-strong: 7 44 120;
+  --cs-primary: 10 58 158;
+  --cs-primary-hover: 7 44 120;
+  --cs-primary-active: 5 34 94;
+  --cs-focus: 0 0 0;
+  --cs-success-text: 6 77 41; --cs-success-line: 6 77 41;
+  --cs-warning-text: 107 58 0; --cs-warning-line: 107 58 0;
+  --cs-danger-text: 127 20 20; --cs-danger-line: 127 20 20;
+  --cs-info-text: 10 58 158;   --cs-info-line: 10 58 158;
+  --cs-focus-width: 4px;
+}
+/* High contrast (dark): white text on black. */
+:root[data-theme="dark"].cs-contrast {
+  --cs-page: 0 0 0;
+  --cs-surface: 10 10 10;
+  --cs-surface-2: 18 18 18;
+  --cs-surface-3: 28 28 28;
+  --cs-tint-1: 20 28 46;
+  --cs-tint-2: 24 34 56;
+  --cs-line: 215 222 236;
+  --cs-line-strong: 215 222 236;
+  --cs-control: 215 222 236;
+  --cs-heading: 255 255 255;
+  --cs-heading-2: 255 255 255;
+  --cs-body: 255 255 255;
+  --cs-body-2: 240 244 250;
+  --cs-muted: 215 222 236;         /* 15.5:1 */
+  --cs-faint: 215 222 236;
+  --cs-placeholder: 200 208 224;
+  --cs-disabled: 150 160 180;
+  --cs-link: 169 200 255;          /* 12.4:1 */
+  --cs-link-strong: 200 220 255;
+  --cs-primary: 28 74 174;         /* #1C4AAE, white text 7.95:1 */
+  --cs-primary-hover: 22 60 145;
+  --cs-primary-active: 18 50 120;
+  --cs-focus: 255 255 255;
+  --cs-success-text: 150 240 190; --cs-success-line: 150 240 190;
+  --cs-warning-text: 255 214 140; --cs-warning-line: 255 214 140;
+  --cs-danger-text: 255 185 185;  --cs-danger-line: 255 185 185;
+  --cs-info-text: 169 200 255;    --cs-info-line: 169 200 255;
+}

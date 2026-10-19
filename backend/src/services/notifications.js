@@ -73,6 +73,15 @@ async function toAdmins(conn, type, opts = {}) {
 async function toStaff(conn, type, opts = {}) {
   for (const id of await activeIds(conn, 'Staff', opts.exceptUserId)) await emit(conn, type, { ...opts, userId: id });
 }
+/** Active Staff who have every one of these duties (for example donations + cash_verification). */
+async function toStaffWithDuties(conn, type, duties, opts = {}) {
+  const ids = await activeIds(conn, 'Staff', opts.exceptUserId);
+  for (const id of ids) {
+    const [rows] = await conn.query('SELECT duty FROM tbl_staff_duties WHERE user_id = ?', [id]);
+    const have = rows.map((r) => r.duty);
+    if (duties.every((d) => have.includes(d))) await emit(conn, type, { ...opts, userId: id });
+  }
+}
 
 /** Adoption stage change for the applicant (reference and stage only; never remarks or notes). */
 const STAGE_EVENTS = {
@@ -274,7 +283,7 @@ async function cleanupRun() {
  * updated) one grouped notification with the current number of low items.
  */
 async function lowStock(conn) {
-  const [[r]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_inventory WHERE quantity <= min_threshold');
+  const [[r]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_inventory WHERE archived_at IS NULL AND quantity <= min_threshold');
   const count = Number(r.n);
   if (!count) return;
   await toAdmins(conn, 'admin_low_stock', { params: { count }, groupKey: 'low_stock', mode: 'set' });
@@ -282,6 +291,7 @@ async function lowStock(conn) {
 }
 
 module.exports = {
+  toStaffWithDuties,
   lowStock, emit, toAdmins, toStaff, adoptionStatus, list, counts, unreadCount, setRead, dismiss, markAllRead, markApplicationRead,
   unreadByApplication, open, preferences, setPreference, cleanupPreview, cleanupRun, retentionDays,
 };

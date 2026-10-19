@@ -33,4 +33,5 @@ UPDATE tbl_users u JOIN tbl_roles r ON r.role_id = u.role_id
    SET u.mfa_enabled = FALSE, u.mfa_secret_enc = NULL, u.mfa_last_step = NULL, u.mfa_enrolled_at = NULL
  WHERE r.role_name <> 'Admin' AND (u.mfa_enabled = TRUE OR u.mfa_secret_enc IS NOT NULL);
 
-ALTER TABLE tbl_inventory_movements MODIFY COLUMN movement_type ENUM('donation_in', 'donation_reversal', 'manual_edit') NOT NULL;
+-- (October 2026) the list includes every value added by later migrations, so running all migrations again never narrows it.
+ALTER TABLE tbl_inventory_movements MODIFY COLUMN movement_type ENUM('donation_in', 'donation_reversal', 'manual_edit', 'distribution_out', 'void_reversal', 'correction', 'stock_in', 'stock_out', 'adjustment', 'disposal') NOT NULL;

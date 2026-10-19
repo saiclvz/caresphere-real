@@ -10,7 +10,7 @@ const { logActivity, logActivityWith } = require('../utils/audit');
 const { readPagination, pageInfo } = require('../utils/pagination');
 const { pool, withTransaction } = require('../config/db');
 const { readDateFilter } = require('../config/listFilters');
-const { saveUpload, readUpload, verifyUpload, deleteUpload, MB } = require('../utils/files');
+const { saveUpload, readUpload, verifyUpload, discardUnsavedUpload, MB } = require('../utils/files');
 const L = require('../config/donationLifecycle');
 const LC = require('../services/donationLifecycle');
 const C = require('../config/donorConfidentiality');
@@ -62,8 +62,8 @@ function actionsFor(d, user) {
 function nextAction(d) {
   const ready = !d.allocation_missing && !d.allocation_needs_review;
   switch (d.status) {
-    case 'Pending verification': return { key: 'verify_transfer', label: 'Verify the bank transfer' };
-    case 'Pending': return { key: 'Received', label: 'Mark received' };
+    case 'Pending verification': return d.claim_status === 'Awaiting approval' ? { key: 'approve_claim', label: 'Approve the verification' } : { key: 'verify_claim', label: 'Verify the donor report' };
+    case 'Pending': return d.dual_control === 'Waiting' ? { key: 'confirm_cash', label: 'Confirm the cash (second person)' } : { key: 'Received', label: 'Mark received' };
     case 'Received':
       if (d.in_kind) return { key: 'Under inspection', label: 'Start inspection' };
       return ready ? { key: 'Accepted', label: 'Accept donation' } : { key: 'allocation', label: 'Add the allocation' };
@@ -273,12 +273,13 @@ exports.getOne = async (req, res) => {
     q(`SELECT x.*, l.item_name, u.full_name AS recorded_by_name FROM tbl_donation_distributions x LEFT JOIN tbl_donation_item_lines l ON l.line_id = x.line_id
          JOIN tbl_users u ON u.user_id = x.recorded_by WHERE x.donation_id = ? ORDER BY x.used_on DESC, x.distribution_id DESC`),
     q('SELECT h.history_id, h.from_status, h.to_status, h.note, h.created_at, u.full_name AS actor_name FROM tbl_donation_status_history h LEFT JOIN tbl_users u ON u.user_id = h.actor_id WHERE h.donation_id = ? ORDER BY h.created_at, h.history_id'),
-    q('SELECT k.ack_id, k.version, k.issued_at, k.reissue_reason, u.full_name AS issued_by_name FROM tbl_donation_acknowledgments k LEFT JOIN tbl_users u ON u.user_id = k.issued_by WHERE k.donation_id = ? ORDER BY k.version'),
+    q('SELECT k.ack_id, k.ack_no, k.version, k.issued_at, k.reissue_reason, u.full_name AS issued_by_name FROM tbl_donation_acknowledgments k LEFT JOIN tbl_users u ON u.user_id = k.issued_by WHERE k.donation_id = ? ORDER BY k.version'),
     q('SELECT c.*, u.full_name AS made_by_name FROM tbl_donation_corrections c JOIN tbl_users u ON u.user_id = c.made_by WHERE c.donation_id = ? ORDER BY c.made_at DESC'),
-    q('SELECT d.document_id, d.kind, d.label, d.original_name, d.mime_type, d.size_bytes, d.uploaded_at, u.full_name AS uploaded_by_name FROM tbl_donation_documents d JOIN tbl_users u ON u.user_id = d.uploaded_by WHERE d.donation_id = ? ORDER BY d.uploaded_at DESC'),
+    q('SELECT d.document_id, d.kind, d.label, d.original_name, d.mime_type, d.size_bytes, d.uploaded_at, d.duplicate_of, u.full_name AS uploaded_by_name, r.role_name AS uploaded_by_role FROM tbl_donation_documents d JOIN tbl_users u ON u.user_id = d.uploaded_by JOIN tbl_roles r ON r.role_id = u.role_id WHERE d.donation_id = ? ORDER BY d.uploaded_at DESC'),
     q(`SELECT r.request_id, r.reason, r.note, r.status, r.requested_at, u.full_name AS requested_by_name, r.decided_at, r.decision_note FROM tbl_donation_void_requests r
          JOIN tbl_users u ON u.user_id = r.requested_by WHERE r.donation_id = ? ORDER BY r.requested_at DESC`),
-    q('SELECT p.payment_id, p.method_name, p.gateway, p.status, p.transfer_reference, p.transfer_date, p.proof_storage_key IS NOT NULL AS has_proof, p.paid_at, p.verified_at FROM tbl_payments p WHERE p.donation_id = ?'),
+    // Legacy online-gateway or bank-transfer payment (read-only, migration 037): shown for history only.
+    q('SELECT p.payment_id, p.method_name, p.gateway, p.status, p.paid_at, p.verified_at, m.mapped_as FROM tbl_payments p LEFT JOIN tbl_legacy_payment_map m ON m.payment_id = p.payment_id WHERE p.donation_id = ?'),
   ]);
   const totals = await LC.distributionTotals(pool, d);
   // Donor: identity only for Admin and the Donor directory duty; anonymous shows as such everywhere.
@@ -295,8 +296,10 @@ exports.getOne = async (req, res) => {
     ...rowFor(d, req.user), donor, stepper: stepper(d), allowed: L.TRANSITIONS[d.status] || [], allocation_problems: await LC.allocationProblems(pool, d),
     items: lines.map((l) => ({ ...l, estimated_value: l.estimated_value === null ? null : Number(l.estimated_value), remaining: lots.filter((x) => x.line_id === l.line_id).reduce((s, x) => s + x.remaining_qty, 0) })),
     lots, movements, distributions: distributions.map((x) => ({ ...x, amount: x.amount === null ? null : Number(x.amount) })), distribution_totals: totals,
-    timeline: history, acknowledgments: acks, corrections, documents: docs, void_requests: voidReq,
-    payment: payment[0] ? { ...payment[0], has_proof: !!payment[0].has_proof } : null, audit,
+    timeline: history, acknowledgments: acks, corrections, documents: docs.map((x) => ({ ...x, kind_label: x.kind === 'donor_proof' ? 'Proof from the donor (not verification)' : L.DOCUMENT_KINDS[x.kind] || x.kind, duplicate: !!x.duplicate_of })),
+    void_requests: voidReq, legacy_payment: payment[0] ? { ...payment[0], read_only: true } : null, audit,
+    claim: await require('../services/donationClaims').claimDetail(req, d),
+    dual_control: d.dual_control ? { status: d.dual_control, can_confirm: d.dual_control === 'Waiting' && d.recorded_by !== req.user.user_id } : null,
     visit: d.visit_id ? { visit_id: d.visit_id, check_in_time: d.linked_visit_time } : null,
   } });
 };
@@ -316,7 +319,7 @@ const act = (fn, message) => async (req, res) => {
 
 /** POST /api/donations/:id/status { to, note } - the next allowed step (Received, Under inspection, Accepted, Allocated, Closed, Rejected). */
 exports.transition = act(async (conn, req, d) => {
-  if (d.status === 'Pending verification') throw new HttpError(409, 'This bank transfer is waiting for verification. Confirm or reject it in "Bank transfers to verify".');
+  if (d.status === 'Pending verification') throw new HttpError(409, "This donor report is waiting for verification. Verify it against the home's account in Donations > To verify.");
   await LC.transition(conn, req, d, String(req.body?.to || ''), String(req.body?.note || '').trim().slice(0, 255) || null);
 }, 'Status updated.');
 
@@ -363,6 +366,8 @@ exports.update = act(async (conn, req, d) => {
   }
   const b = req.body || {};
   const fields = {};
+  if (b.amount !== undefined && d.claim_status) throw new HttpError(409, "The amount of a donor report is the amount verified against the home's account. It can't be edited here.");
+  if (b.amount !== undefined && d.dual_control) throw new HttpError(409, 'This cash amount was confirmed by a second person. Void and record it again if it is wrong.');
   if (b.amount !== undefined && !d.in_kind) {
     const amount = toMoney(b.amount, 'Amount');
     if (!(amount > 0)) throw new HttpError(422, 'Enter an amount greater than 0.', { errors: { amount: 'Enter an amount greater than 0.' } });
@@ -385,6 +390,7 @@ exports.correct = act(async (conn, req, d) => {
   if (d.status === 'Voided') throw new HttpError(409, "A voided donation can't be corrected.");
   if (!L.ACKNOWLEDGED_OR_LATER.includes(d.status)) throw new HttpError(409, 'Before acknowledgment, use Edit.');
   const field = oneOf(req.body?.field, L.CORRECTABLE, 'Field');
+  if (d.claim_status && ['amount', 'payment_method'].includes(field)) throw new HttpError(409, "A donor report's amount and method come from the verification. If they are wrong, an administrator voids the donation.");
   let value = req.body?.value;
   if (field === 'amount') {
     if (d.in_kind) throw new HttpError(409, 'In-kind values are corrected on each item.');
@@ -450,41 +456,71 @@ exports.uploadDocument = async (req, res) => {
       await conn.query('UPDATE tbl_donations SET last_activity_at = NOW() WHERE donation_id = ?', [d.donation_id]);
       await logActivityWith(conn, req, `UPLOAD_DONATION_DOCUMENT (${kind})`, `Donation #${d.donation_id}`);
     });
-  } catch (err) { deleteUpload(saved.storage_key); throw err; }
+  } catch (err) { discardUnsavedUpload(saved.storage_key); throw err; }
   res.status(201).json({ success: true, data: { ok: true } });
 };
 
-/** GET /api/donations/:id/documents/:docId - inline view (logged). */
-exports.viewDocument = async (req, res) => {
+/** GET /api/donations/:id/documents/:docId/link - a short-lived signed link to the file (bound to this user). */
+exports.documentLink = async (req, res) => {
   const d = await load(req);
-  const [[doc]] = await pool.query('SELECT * FROM tbl_donation_documents WHERE document_id = ? AND donation_id = ?', [toInt(req.params.docId, 'document', { min: 1 }), d.donation_id]);
+  const [[doc]] = await pool.query('SELECT document_id FROM tbl_donation_documents WHERE document_id = ? AND donation_id = ?', [toInt(req.params.docId, 'document', { min: 1 }), d.donation_id]);
   if (!doc) throw new HttpError(404, 'Document not found.');
+  const links = require('../utils/signedLinks');
+  res.json({ success: true, data: { url: links.url(links.sign({ kind: 'donation_doc', id: doc.document_id, userId: req.user.user_id })), expires_in: links.LINK_SECONDS } });
+};
+
+/** Sends a donation document after the signed link was checked: Staff/Admin with Donations, or the donor for their own proof. Logged. */
+exports.sendDocument = async (req, res, docId) => {
+  const [[doc]] = await pool.query('SELECT x.*, d.donor_id FROM tbl_donation_documents x JOIN tbl_donations d ON d.donation_id = x.donation_id WHERE x.document_id = ?', [docId]);
+  const { hasDuty } = require('../middleware/requireDuty');
+  const staffOk = req.user.role === 'Admin' || (req.user.role === 'Staff' && hasDuty(req, 'donations'));
+  const donorOk = req.user.role === 'Donor' && doc && doc.kind === 'donor_proof' && doc.donor_id === req.user.user_id && doc.uploaded_by === req.user.user_id;
+  if (!doc || !(staffOk || donorOk)) throw new HttpError(404, 'This link has expired. Open the file again from its page.');
   const intact = verifyUpload(doc.storage_key, doc.sha256);
-  await logActivity(req, `VIEW_DONATION_DOCUMENT (${doc.kind}${intact === false ? ', integrity check failed' : ''})`, `Donation #${d.donation_id}`);
+  await logActivity(req, `VIEW_DONATION_DOCUMENT (${doc.kind}${intact === false ? ', integrity check failed' : ''})`, `Donation #${doc.donation_id}`);
   res.setHeader('Content-Type', doc.mime_type);
   res.setHeader('Content-Disposition', `inline; filename="${doc.original_name.replace(/["\r\n]/g, '')}"`);
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.send(readUpload(doc.storage_key));
 };
 
 // ---------------------------------------------------------------- acknowledgment PDF and receipt check
 
-/** GET /api/donations/:id/receipt - the acknowledgment PDF. Only once issued; donors only their own. */
-exports.receipt = async (req, res) => {
-  const d = await load(req);
-  if (req.user.role === 'Donor' && d.donor_id !== req.user.user_id) throw new HttpError(403, 'You can only download receipts for your own donations.');
+/** Who may have this donation's acknowledgment: the donor (their own), Admin, Staff with Donations. Not before it is issued, never once voided. */
+async function receiptCheck(req, d) {
+  const { hasDuty } = require('../middleware/requireDuty');
+  const ok = req.user.role === 'Admin' || (req.user.role === 'Staff' && hasDuty(req, 'donations')) || (req.user.role === 'Donor' && d.donor_id === req.user.user_id);
+  if (!ok) throw new HttpError(404, 'Donation not found.');
   if (d.status === 'Voided') throw new HttpError(409, 'This donation was voided, so its acknowledgment is no longer valid.');
   if (!d.has_acknowledgment) {
     throw new HttpError(409, req.user.role === 'Donor'
       ? "The home is still completing this donation's record. Your receipt will be available soon."
       : 'Issue the acknowledgment first (the donation must be accepted).');
   }
+}
+
+/** GET /api/donations/:id/receipt/link - a short-lived signed link to the acknowledgment PDF. */
+exports.receiptLink = async (req, res) => {
+  const d = await load(req);
+  await receiptCheck(req, d);
+  const links = require('../utils/signedLinks');
+  res.json({ success: true, data: { url: links.url(links.sign({ kind: 'receipt', id: d.donation_id, userId: req.user.user_id })), expires_in: links.LINK_SECONDS } });
+};
+
+/** Sends the acknowledgment PDF after the signed link was checked (the checks are repeated). */
+exports.sendReceipt = async (req, res, donationId) => {
+  const d = await Donation.findById(donationId);
+  if (!d) throw new HttpError(404, 'This link has expired. Open the file again from its page.');
+  await receiptCheck(req, d);
   const settings = await Settings.getAll();
   const [lines] = await pool.query('SELECT item_name, quantity, estimated_value FROM tbl_donation_item_lines WHERE donation_id = ? ORDER BY line_id', [d.donation_id]);
+  const [[ack]] = await pool.query('SELECT ack_no FROM tbl_donation_acknowledgments WHERE donation_id = ? ORDER BY version DESC LIMIT 1', [d.donation_id]);
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="CareSphere-Acknowledgment-${d.donation_no || d.donation_id}.pdf"`);
+  res.setHeader('Cache-Control', 'no-store');
   await logActivity(req, 'DOWNLOAD_RECEIPT', `Donation #${d.donation_id}`);
-  await pdf.donationReceipt(res, { ...d, donor_name: d.is_anonymous ? C.ANONYMOUS : d.donor_name, item_lines: lines, method_label: L.methodLabel(d.payment_method) }, settings);
+  await pdf.donationReceipt(res, { ...d, ack_no: ack?.ack_no || null, donor_name: d.is_anonymous ? C.ANONYMOUS : d.donor_name, item_lines: lines, method_label: L.methodLabel(d.payment_method) }, settings);
 };
 
 const RECEIPT_CODE = /^[A-Za-z0-9._-]+$/;
@@ -495,7 +531,7 @@ const NOT_FOUND = 'Code not found. Check that it was copied exactly.';
 function receiptView(d, user) {
   const group = d.source === 'portal' ? 'Portal' : d.donor_type === 'walk_in' ? 'Walk-in' : 'Staff recorded';
   return {
-    donation_id: d.donation_id, receipt_no: d.donation_no || String(d.donation_id).padStart(6, '0'), donation_no: d.donation_no,
+    donation_id: d.donation_id, receipt_no: d.ack_no || d.donation_no || String(d.donation_id).padStart(6, '0'), donation_no: d.donation_no, ack_no: d.ack_no || null,
     donor_name: C.donorLabel({ ...d, is_anonymous: !!d.is_anonymous, donor_record_name: null }, user), donor_type: d.donor_type, source_label: group,
     amount: d.amount, payment_method: L.methodLabel(d.payment_method), status: d.status, void_reason: d.status === 'Voided' ? d.void_reason : null, created_at: d.created_at,
     ...(d.donor_type === 'walk_in' && C.canSeeDonors(user) && !d.is_anonymous ? { walk_in_contact: d.walk_in_contact ? C.maskContact(d.walk_in_contact) : null } : {}),
@@ -506,10 +542,16 @@ function receiptView(d, user) {
  * GET /api/donations/verify/:code (Admin, Staff; rate-limited). Checks the code's signature, then that a donation
  * with that code exists. Voided donations are reported as voided. Failed attempts are logged.
  */
+const verifyFailures = new Map(); // ip -> [timestamps]: a growing delay after repeated failures
 exports.verify = async (req, res) => {
   const code = String(req.params.code ?? '').replace(/\s+/g, '');
+  const since = Date.now() - 10 * 60 * 1000;
+  const recent = (verifyFailures.get(req.ip) || []).filter((t) => t > since);
+  if (recent.length >= 3) await new Promise((r) => setTimeout(r, Math.min(5000, 500 * (recent.length - 2))));
   const fail = async (status, reason) => {
-    await logActivity(req, `VERIFY_RECEIPT_FAILED (${reason})`, `Code ${code.slice(0, 40) || '(empty)'}`);
+    recent.push(Date.now()); verifyFailures.set(req.ip, recent);
+    // Only the first characters of the code are logged (never the signature part).
+    await logActivity(req, `VERIFY_RECEIPT_FAILED (${reason})`, `Code ${code.slice(0, 12) || '(empty)'}...`);
     return new HttpError(status, status === 400 && reason !== 'not authentic' ? reason : NOT_FOUND);
   };
   if (!code) throw await fail(400, 'The receipt code is required.');
@@ -518,6 +560,11 @@ exports.verify = async (req, res) => {
   if (!receiptSignatureValid(code)) throw await fail(404, 'not authentic');
   const donation = await Donation.findByReceipt(code);
   if (!donation) throw await fail(404, 'no matching donation');
+  // Voided receipts and donations without an issued acknowledgment are "not found" (nothing else is revealed).
+  if (donation.status === 'Voided') throw await fail(404, 'voided receipt');
+  const [[ack]] = await pool.query('SELECT ack_no FROM tbl_donation_acknowledgments WHERE donation_id = ? ORDER BY version DESC LIMIT 1', [donation.donation_id]);
+  if (!ack && !donation.receipt_issued) throw await fail(404, 'not acknowledged');
+  donation.ack_no = ack?.ack_no || null;
   await logActivity(req, 'VERIFY_RECEIPT', `Donation #${donation.donation_id}`);
   res.json({ success: true, data: receiptView(donation, req.user) });
 };

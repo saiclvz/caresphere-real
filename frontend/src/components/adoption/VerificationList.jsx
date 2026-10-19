@@ -13,6 +13,11 @@ const tone = (s) => (OK.includes(s) ? 'green' : NEUTRAL.includes(s) ? 'amber' : 
 const icon = (r) => (r === 'pass' ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" aria-label="Passed" />
   : r === 'fail' ? <XCircle className="h-3.5 w-3.5 text-red-600" aria-label="Failed" />
     : r === 'warn' ? <AlertTriangle className="h-3.5 w-3.5 text-amber-600" aria-label="Warning" /> : <MinusCircle className="h-3.5 w-3.5 text-slate-400" aria-label="Not applicable" />);
+/** Icon beside a status badge, so the status reads by shape and text as well as colour (no emoji). */
+export function StatusIcon({ tone: t }) {
+  const I = t === 'green' ? CheckCircle2 : t === 'amber' ? AlertTriangle : XCircle;
+  return <I className="h-3.5 w-3.5 shrink-0" aria-hidden />;
+}
 const isOfficial = (v) => v.status === 'Verified' && String(v.method || '').startsWith('Official verification');
 
 /**
@@ -21,15 +26,15 @@ const isOfficial = (v) => v.status === 'Verified' && String(v.method || '').star
  */
 export function statusLabel(v) {
   if (v.status === 'Verified') {
-    if (isOfficial(v)) return v.official?.mode === 'staff_confirmed' ? '✅ Verified – real and valid (PhilSys Check, Staff-confirmed)' : '✅ Verified – real and valid';
-    return `✅ Manually verified by ${v.reviewed_by_role || 'staff'}${v.reviewed_at ? ` on ${formatDate(v.reviewed_at)}` : ''}`;
+    if (isOfficial(v)) return v.official?.mode === 'staff_confirmed' ? 'Verified – real and valid (PhilSys Check, Staff-confirmed)' : 'Verified – real and valid';
+    return `Manually verified by ${v.reviewed_by_role || 'staff'}${v.reviewed_at ? ` on ${formatDate(v.reviewed_at)}` : ''}`;
   }
   const id = v.kind === 'government_id';
   const map = {
-    'Manual verification required': '⚠️ Manual verification required', 'Unable to verify': '⚠️ Unable to verify', 'Flagged for review': '⚠️ Flagged for review',
-    'Pending verification': '⚠️ Pending verification', Expired: id ? '❌ Expired ID' : '❌ Expired', 'Invalid ID': '❌ Invalid ID', 'Invalid ID number': '❌ Invalid ID number',
-    'Information mismatch': '❌ Information mismatch', 'ID type mismatch': '❌ ID type mismatch', 'Unrecognized ID': '❌ Unrecognized ID',
-    'Requires correction': '⚠️ Correction requested', Invalid: '❌ Invalid', 'Not verified': '❌ Not verified', 'Verification failed': '❌ Verification failed',
+    'Manual verification required': 'Manual verification required', 'Unable to verify': 'Unable to verify', 'Flagged for review': 'Flagged for review',
+    'Pending verification': 'Pending verification', Expired: id ? 'Expired ID' : 'Expired', 'Invalid ID': 'Invalid ID', 'Invalid ID number': 'Invalid ID number',
+    'Information mismatch': 'Information mismatch', 'ID type mismatch': 'ID type mismatch', 'Unrecognized ID': 'Unrecognized ID',
+    'Requires correction': 'Correction requested', Invalid: 'Invalid', 'Not verified': 'Not verified', 'Verification failed': 'Verification failed',
   };
   return map[v.status] || v.status;
 }
@@ -334,7 +339,7 @@ export default function VerificationList({ app, config, mode, onUpdated }) {
                 <p className="font-medium text-navy-900">{v.kind === 'government_id' ? `Government ID: ${v.item_type}` : `${v.item_type}: ${v.holder}`}</p>
                 <p className="text-xs text-slate-500">No. <span className="font-mono">{v.reference}</span>{v.issue_date ? ` · issued ${formatDate(v.issue_date)}` : ''}{v.expiry_date ? ` · valid to ${formatDate(v.expiry_date)}` : ''} · last checked {formatDateTime(v.last_checked)}</p>
               </div>
-              <Badge tone={tone(v.status)}>{statusLabel(v)}</Badge>
+              <Badge tone={tone(v.status)}><StatusIcon tone={tone(v.status)} />{statusLabel(v)}</Badge>
             </div>
             {statusText(v) && <p className="mt-1 text-xs text-slate-600">{statusText(v)}</p>}
             {v.note && <p className="mt-1 text-xs text-amber-800">Note from the home: {v.note}</p>}

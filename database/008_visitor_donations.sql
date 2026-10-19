@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS tbl_inventory_movements (
 ALTER TABLE tbl_inventory_movements MODIFY COLUMN movement_type VARCHAR(30) NOT NULL;
 UPDATE tbl_inventory_movements SET movement_type = 'donation_in' WHERE movement_type = 'Donation in';
 -- 'manual_edit' (an item's quantity changed on the Inventory page) was added by 012; listed here so re-runs keep it.
-ALTER TABLE tbl_inventory_movements MODIFY COLUMN movement_type ENUM('donation_in', 'donation_reversal', 'manual_edit') NOT NULL;
+-- (October 2026) the list includes every value added by later migrations, so running all migrations again never narrows it.
+ALTER TABLE tbl_inventory_movements MODIFY COLUMN movement_type ENUM('donation_in', 'donation_reversal', 'manual_edit', 'distribution_out', 'void_reversal', 'correction', 'stock_in', 'stock_out', 'adjustment', 'disposal') NOT NULL;
 
 SET @fk := (SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tbl_inventory_movements'

@@ -15,6 +15,5 @@ export const chipOf = (access) => ACCESS_CHIP[access?.chip] || { label: 'No acce
 export const YOUR_ACCESS = { full: 'Full', unlock: 'Core', temporary: 'Core (temporary)', directory: 'Directory' };
 
 export const ASSIGNMENT_TYPES = { primary: 'Primary case worker', backup: 'Backup', temporary: 'Temporary cover' };
-export const EMERGENCY_REASONS = ['Medical emergency', 'Missing or injured child', 'Covering the shift', 'Other'];
 export const CORE_LOCKED = 'Core record: Locked. Ask the assigned case worker or an Admin.';
 export const DENIED = 'ACCESS DENIED – You are not authorized to view this information.';

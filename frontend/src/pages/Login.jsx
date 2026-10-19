@@ -18,7 +18,13 @@ function validate(form) {
   return e;
 }
 
-export default function Login() {
+/**
+ * The sign-in flow: email and password, then (Admin) two-step verification and backup codes. Shared by the Sign in
+ * page and the home page's login card, so both use exactly the same validation, API call and error handling.
+ * Frame draws the surroundings ({ title, subtitle, children }); `title` / `subtitle` replace the first step's
+ * heading only.
+ */
+export function LoginFlow({ Frame = AuthShell, title = 'Sign in', subtitle = 'Sign in with your CareSphere account.', idPrefix }) {
   const { login, completeSession } = useAuth();
   const [form, setForm] = useState({ email: '', password: '' });
   // Admin two-step verification: { token, setup } after the password step,
@@ -61,38 +67,38 @@ export default function Login() {
 
   if (finish?.codes) {
     return (
-      <AuthShell title="Save your backup codes" subtitle="Two-step verification is on.">
+      <Frame title="Save your backup codes" subtitle="Two-step verification is on.">
         <BackupCodes codes={finish.codes} onContinue={() => completeSession(finish.res)} />
-      </AuthShell>
+      </Frame>
     );
   }
   if (finish?.left !== undefined) {
     return (
-      <AuthShell title="Signed in with a backup code" subtitle="That code can't be used again.">
+      <Frame title="Signed in with a backup code" subtitle="That code can't be used again.">
         <BackupCodeUsed left={finish.left} onContinue={() => completeSession(finish.res)} />
-      </AuthShell>
+      </Frame>
     );
   }
   if (mfa?.setup) {
     return (
-      <AuthShell title="Set up two-step verification" subtitle="Administrator accounts need a code from an authenticator app every time they sign in.">
+      <Frame title="Set up two-step verification" subtitle="This account needs a code from an authenticator app every time it signs in.">
         <MfaSetup mfaToken={mfa.token} onRestart={restart}
           onDone={(res) => setFinish({ codes: res.backup_codes, res })} />
-      </AuthShell>
+      </Frame>
     );
   }
   if (mfa) {
     return (
-      <AuthShell title="Two-step verification" subtitle="Enter the code from your authenticator app to finish signing in.">
+      <Frame title="Two-step verification" subtitle="Enter the code from your authenticator app to finish signing in.">
         <MfaVerify mfaToken={mfa.token} onRestart={restart}
           onDone={(res) => (res.backup_codes_left !== undefined ? setFinish({ left: res.backup_codes_left, res }) : completeSession(res))} />
-      </AuthShell>
+      </Frame>
     );
   }
 
   return (
-    <AuthShell title="Sign in" subtitle="Use the account your administrator created, or your donor account.">
-      <form onSubmit={submit} noValidate className="space-y-4">
+    <Frame title={title} subtitle={subtitle}>
+      <form onSubmit={submit} noValidate className="space-y-4" id={idPrefix ? `${idPrefix}-form` : undefined}>
         <ErrorNote error={error} />
         <Field label="Email" required error={errors.email}>
           <input className={`input ${errors.email ? 'border-red-400 focus:border-red-500 focus:ring-red-200' : ''}`}
@@ -107,6 +113,10 @@ export default function Login() {
       <p className="mt-6 text-center text-sm text-slate-500">
         Want to support the home? <Link to="/register" className="font-medium text-brand hover:underline">Create a donor account</Link>
       </p>
-    </AuthShell>
+    </Frame>
   );
+}
+
+export default function Login() {
+  return <LoginFlow />;
 }

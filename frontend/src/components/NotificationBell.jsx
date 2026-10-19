@@ -73,9 +73,9 @@ export default function NotificationBell() {
         <button type="button" onClick={() => openItem(n)} className={`flex w-full gap-3 px-4 py-3 text-left hover:bg-slate-50 focus:bg-slate-50 focus:outline-none ${n.is_read ? '' : 'bg-blue-50/60'}`}>
           <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${n.priority === 'action' ? 'text-red-600' : n.priority === 'warning' ? 'text-amber-600' : 'text-slate-500'}`} aria-hidden />
           <span className="min-w-0 flex-1">
-            <span className={`block truncate text-sm ${n.is_read ? 'text-slate-700' : 'font-semibold text-navy-900'}`}>{n.title}</span>
-            <span className="block truncate text-xs text-slate-500">{n.body}</span>
-            <span className="block text-[11px] text-slate-400">{relativeTime(n.created_at)}{n.is_read ? '' : ' · unread'}</span>
+            <span className={`block break-words text-sm [overflow-wrap:anywhere] ${n.is_read ? 'text-slate-700' : 'font-semibold text-navy-900'}`}>{n.title}</span>
+            <span className="line-clamp-2 block break-words text-xs text-slate-500 [overflow-wrap:anywhere]">{n.body}</span>
+            <span className="block text-xs text-slate-500">{relativeTime(n.created_at)}{n.is_read ? '' : ' · unread'}</span>
           </span>
         </button>
       </li>
@@ -93,7 +93,7 @@ export default function NotificationBell() {
       <span className="sr-only" aria-live="polite">{unread ? `${unread} unread notifications` : ''}</span>
       {open && (
         <div ref={panel} tabIndex={-1} role="dialog" aria-label="Notifications"
-          className="fixed inset-x-2 top-16 z-50 max-h-[80vh] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-modal focus:outline-none sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-96">
+          className="fixed inset-x-2 top-16 z-50 max-h-[80vh] max-w-[calc(100vw-1rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-modal focus:outline-none sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-96">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
             <h2 className="text-sm font-semibold text-navy-900">Notifications</h2>
             <div className="relative flex items-center gap-1">
@@ -117,10 +117,10 @@ export default function NotificationBell() {
               <button type="button" className="hover:underline" onClick={() => setConfirm(false)}>No</button>
             </div>
           )}
-          <div className="flex gap-1.5 overflow-x-auto border-b border-slate-100 px-3 py-2" role="tablist" aria-label="Filter notifications">
+          <div className="flex flex-wrap gap-1.5 border-b border-slate-100 px-3 py-2" role="tablist" aria-label="Filter notifications">
             {chips.map((c) => (
               <button key={c.key} type="button" role="tab" aria-selected={chip === c.key} onClick={() => { setChip(c.key); setConfirm(false); }}
-                className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${chip === c.key ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${chip === c.key ? 'bg-brand text-white' : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 hover:text-navy-900'}`}>
                 {c.label}
                 {countFor(c.key) > 0 && <span className={`rounded-full px-1.5 text-[10px] ${chip === c.key ? 'bg-white/20' : 'bg-red-600 text-white'}`}>{badgeText(countFor(c.key))}</span>}
               </button>

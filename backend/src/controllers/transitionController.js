@@ -7,7 +7,7 @@ const U = require('../services/unlockService');
 const { maskName } = require('../config/adoptionSensitive');
 const { LOCKED_TRANSITION } = require('../config/transitionSensitive');
 const { decField } = require('../utils/fieldCrypto');
-const { saveUpload, readUpload, deleteUpload, verifyUpload, MB } = require('../utils/files');
+const { saveUpload, readUpload, discardUnsavedUpload, verifyUpload, MB } = require('../utils/files');
 const W = require('../services/transitionWorkflow');
 const TC = require('../config/transitionWorkflow');
 
@@ -104,9 +104,15 @@ exports.list = async (req, res) => {
   const params = [];
   if (req.query.status) { where.push('tr.review_status = ?'); params.push(oneOf(req.query.status, STATUSES, 'status')); }
   // Assigned staff filter: Admin "none" or a staff id; anyone "me".
-  if (req.query.assigned === 'me') { where.push('tr.assigned_staff_id = ? AND asu.is_active = TRUE'); params.push(req.user.user_id); }
-  else if (isAdmin && req.query.assigned === 'none') where.push('(tr.assigned_staff_id IS NULL OR asu.is_active = FALSE)');
-  else if (isAdmin && req.query.assigned) { where.push('tr.assigned_staff_id = ? AND asu.is_active = TRUE'); params.push(toInt(req.query.assigned, 'assigned', { min: 1 })); }
+  // One assignment service: the review's own primary/backup/temporary rows and the child's case worker.
+  const Assign = require('../services/assignment');
+  const who = req.query.assigned === 'me' ? req.user.user_id : isAdmin && req.query.assigned && req.query.assigned !== 'none' ? toInt(req.query.assigned, 'assigned', { min: 1 }) : undefined;
+  if (who || (isAdmin && req.query.assigned === 'none')) {
+    const ids = [...await Assign.recordIdsFor(pool, 'transition_review', who || null)].map(Number);
+    if (!who) { if (ids.length) { where.push('tr.review_id NOT IN (?)'); params.push(ids); } }
+    else if (ids.length) { where.push('tr.review_id IN (?)'); params.push(ids); } else where.push('1 = 0');
+  }
+  const mine = isAdmin ? new Set() : await Assign.recordIdsFor(pool, 'transition_review', req.user.user_id);
   for (const [k, op] of [['from', '>='], ['to', '<=']]) {
     if (!req.query[k]) continue;
     if (!DATE.test(String(req.query[k]))) throw new HttpError(400, 'Choose a valid date.');
@@ -131,7 +137,7 @@ exports.list = async (req, res) => {
     success: true,
     data: rows.map((r) => (isAdmin
       ? { ...full(r), masked: false, current_stage: stages[r.review_id]?.stage }
-      : { ...basic(r), masked: true, current_stage: stages[r.review_id]?.stage, assigned_to_me: r.assigned_staff_id === req.user.user_id && !!r.assigned_staff_active })),
+      : { ...basic(r), masked: true, current_stage: stages[r.review_id]?.stage, assigned_to_me: mine.has(String(r.review_id)) })),
     meta: { counts: { all: Number(counts.all_count) || 0, 'For Review': Number(counts.for_review) || 0, 'In Progress': Number(counts.in_progress) || 0, Completed: Number(counts.completed) || 0 } },
   });
 };
@@ -241,7 +247,7 @@ exports.uploadDocument = async (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [ctx.id, stage.key, confId, visitId, label, saved.original_name, saved.mime_type, saved.size_bytes, saved.storage_key, saved.sha256, req.user.user_id]);
       await W.event(conn, req, ctx.row, stage.key, 'document_uploaded', `Document uploaded (${stage.label})`);
     });
-  } catch (err) { deleteUpload(saved.storage_key); throw err; }
+  } catch (err) { discardUnsavedUpload(saved.storage_key); throw err; }
   await done(req, res, ctx, 'document uploaded');
 };
 

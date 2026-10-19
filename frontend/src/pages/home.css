@@ -1,0 +1,138 @@
+/*
+ * Public pages (home, Sign in, Create an account, Privacy Policy, Terms): layout and the few styles Tailwind
+ * classes can't express. Scoped to .cs-home. Colours are aliases of the shared tokens in styles/tokens.css
+ * (light, dark and high contrast); the light values were measured for WCAG AA:
+ *   heading #0B2A66 on panel #E3EFFE 11.7:1 · muted #51607F on panel 5.4:1 · links #1B5FD1 on white 5.8:1
+ *   button text white on #1B5FD1 5.8:1 · placeholder #61708F on white 5.0:1 · field outline #7D8FB3 3.25:1
+ */
+.cs-home {
+  /* Public-page aliases of the shared tokens (styles/tokens.css), so the home, sign-in and legal pages follow the
+     light, dark and high-contrast themes like every other page. */
+  --home-bg: rgb(var(--cs-page));
+  --home-panel: rgb(var(--cs-tint-2));
+  --home-card: rgb(var(--cs-surface));
+  --home-border: rgb(var(--cs-line));
+  --home-control: rgb(var(--cs-control));
+  --home-heading: rgb(var(--cs-heading));
+  --home-text: rgb(var(--cs-body));
+  --home-muted: rgb(var(--cs-muted));
+  --home-placeholder: rgb(var(--cs-placeholder));
+  --home-primary: rgb(var(--cs-primary));
+  --home-link: rgb(var(--cs-link));
+  --home-primary-hover: rgb(var(--cs-primary-hover));
+  --home-card-radius: var(--cs-radius-card);
+  --home-control-radius: var(--cs-radius-control);
+  --home-shadow: var(--cs-shadow);
+  --home-shadow-raised: 0 12px 32px -8px rgba(27, 95, 209, 0.22);
+  --home-focus: var(--cs-focus-width) solid rgb(var(--cs-focus));
+  background-color: var(--home-bg);
+  color: var(--home-text);
+}
+:root[data-theme="dark"] .cs-home { --home-shadow-raised: 0 12px 32px -8px rgba(0, 0, 0, 0.5); }
+
+/* Visible 3px keyboard focus on every control of the home page. */
+.cs-home :focus-visible { outline: var(--home-focus); outline-offset: 2px; }
+.cs-home .home-focus:focus-visible { outline: var(--home-focus); outline-offset: 2px; box-shadow: none; }
+
+/* The sign-in form inside the home login card (the same form as the Sign in page; only its look differs here). */
+.cs-home .home-login .input {
+  border-color: var(--home-control);
+  border-radius: var(--home-control-radius);
+  background-color: var(--home-card);
+  color: var(--home-text);
+  padding-top: 0.625rem; padding-bottom: 0.625rem;
+}
+.cs-home .home-login .input::placeholder { color: var(--home-placeholder); }
+.cs-home .home-login .input:focus { border-color: var(--home-primary); box-shadow: none; outline: var(--home-focus); outline-offset: 1px; }
+.cs-home .home-login .input[aria-invalid="true"] { border-color: #DC2626; }
+.cs-home .home-login label > span:first-child { color: var(--home-heading); }
+.cs-home .home-login button[type="submit"] { border-radius: var(--home-control-radius); background-color: var(--home-primary); min-height: 2.75rem; }
+.cs-home .home-login button[type="submit"]:hover:not(:disabled) { background-color: var(--home-primary-hover); }
+.cs-home .home-login a { color: var(--home-link); }
+
+/* Nav links: blue underline on the current one (shape as well as colour). */
+.cs-home .home-navlink { position: relative; }
+.cs-home .home-navlink[aria-current="true"]::after {
+  content: ''; position: absolute; left: 0.75rem; right: 0.75rem; bottom: -0.5rem; height: 3px; border-radius: 3px;
+  background: var(--home-primary);
+}
+
+/* In-page links (About, Support, Contact) land below the sticky bar; smooth only when motion isn't reduced. */
+.cs-home section[id] { scroll-margin-top: 5rem; }
+@media (prefers-reduced-motion: no-preference) {
+  html:has(.cs-home):not(.cs-reduce-motion) { scroll-behavior: smooth; }
+}
+
+/* ---------------------------------------------------------------- public page layout
+ * One centred container for every public page (home, Sign in, Create an account): header, sections and footer all
+ * line up on the same left and right edges. Plain CSS, so the layout doesn't depend on utility-class details.
+ */
+.public-page { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; }
+.public-page > main { flex: 1 0 auto; width: 100%; }
+.public-container { width: min(100% - 48px, var(--content-max-width, 1300px)); margin-inline: auto; }
+/* (phone width rule at the end of the file, after the footer rule) */
+
+/* Header bar: logo, divider and "Child Welfare Home" on the left; links and the display-settings button on one line. */
+.public-header__bar { display: flex; align-items: center; gap: 12px; min-height: 64px; }
+.public-brand { display: flex; align-items: center; gap: 12px; min-width: 0; line-height: 1; }
+.public-brand__divider { width: 1px; height: 24px; background: var(--home-border); flex-shrink: 0; }
+.public-header__end { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.public-nav { align-items: center; gap: 4px; } /* display: hidden below md, flex above (utility classes) */
+.public-nav .home-navlink { display: inline-flex; align-items: center; height: 40px; padding: 0 12px; }
+/* The active underline sits directly under its own link text. */
+.cs-home .public-nav .home-navlink[aria-current="true"]::after { left: 12px; right: 12px; bottom: 2px; }
+
+/* Footer: full-width band; links centred with the copyright directly beneath. In normal flow at the bottom. */
+.public-footer { width: 100%; margin-top: auto; text-align: center; border-top: 1px solid var(--home-border); background: var(--home-panel); }
+.public-footer__content { width: min(100% - 48px, var(--content-max-width, 1300px)); margin-inline: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding-block: 24px; text-align: center; }
+.public-footer__links { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 10px; margin: 0; }
+
+/* Home hero: two balanced columns, vertically centred; the login card and the illustration sit side by side in their
+   own grid (the illustration tucks slightly behind the card on wide screens, by grid placement, not positioning). */
+.home-hero { padding-block: 48px; }
+.home-hero__grid { display: grid; gap: 40px; align-items: center; }
+.home-hero__media { display: grid; gap: 24px; align-items: center; justify-items: center; }
+.home-hero__card { width: 100%; max-width: 26rem; position: relative; z-index: 1; }
+.home-hero__art { width: 100%; max-width: 24rem; }
+@media (min-width: 640px) {
+  .home-hero__media { grid-template-columns: minmax(0, 22rem) minmax(0, 1fr); justify-items: stretch; }
+  .home-hero__card { max-width: none; }
+  .home-hero__art { max-width: none; }
+}
+@media (min-width: 1024px) {
+  .home-hero { padding-block: 72px; }
+  .home-hero__grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 48px; }
+  .home-hero__art { margin-left: -40px; }
+}
+/* 1024–1279px: two hero columns leave too little room for card and illustration side by side, so show the card alone. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .home-hero__media { grid-template-columns: minmax(0, 26rem); justify-content: center; }
+  .home-hero__art { display: none; }
+}
+
+/* Sections share the container; cards in a row have equal heights. */
+.home-section { padding-block: 56px; }
+.home-cards { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+.home-cards > li { height: 100%; }
+@media (min-width: 640px) { .home-cards--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 768px) { .home-cards--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Support: text and button together in one balanced panel (no empty gap between them). */
+.home-support { display: flex; flex-direction: column; align-items: flex-start; gap: 20px; }
+@media (min-width: 768px) { .home-support { flex-direction: row; align-items: center; justify-content: space-between; gap: 40px; } }
+
+/* Sign in / Create an account: brand message and the form card, vertically centred. */
+.auth-grid { display: grid; gap: 40px; align-items: center; padding-block: 40px; }
+@media (min-width: 1024px) { .auth-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); gap: 56px; padding-block: 64px; } }
+
+/* Privacy Policy and Terms: headings, lists and links inside the text card. */
+.legal-body h2 { font-size: 1.125rem; line-height: 1.75rem; font-weight: 600; color: rgb(var(--cs-heading)); }
+.legal-body section > h2 + p, .legal-body section > h2 + ul, .legal-body section > h2 + ol, .legal-body section > h2 + div { margin-top: 0.25rem; }
+.legal-body section > p + p { margin-top: 0.5rem; }
+.legal-body ul { list-style: disc; padding-left: 1.25rem; }
+.legal-body ol { list-style: lower-alpha; padding-left: 1.5rem; }
+.legal-body li { margin-top: 0.25rem; }
+.legal-body a { font-weight: 500; color: rgb(var(--cs-link)); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Phones: 16px side margins for the container and the footer content (kept last so it wins). */
+@media (max-width: 639px) { .public-container, .public-footer__content { width: min(100% - 32px, var(--content-max-width, 1300px)); } }

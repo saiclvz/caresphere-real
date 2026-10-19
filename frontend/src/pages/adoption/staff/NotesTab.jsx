@@ -5,6 +5,7 @@ import { useApp } from '../../../context/AppContext';
 import { formatDateTime } from '../../../lib/format';
 import { Button, Card, Field } from '../../../components/ui';
 import { headersFor, TabState, useTab } from './common';
+import { adoptionLabel } from '../../../lib/adoptionStatus';
 
 /**
  * Notes: "Message to the applicant" (the applicant sees it; written in Update status) apart from
@@ -33,7 +34,7 @@ export default function NotesTab({ app, version, sessionUpdate, onChanged }) {
             {d.messages.length === 0 ? <p className="mt-3 text-sm text-slate-500">No messages sent.</p> : (
               <ul className="mt-3 space-y-2">{d.messages.map((m) => (
                 <li key={m.history_id} className="rounded-lg border border-slate-100 p-3 text-sm">
-                  <p className="text-xs text-slate-500">{formatDateTime(m.created_at)}{m.by_name ? ` · ${m.by_name}${m.by_role ? ` (${m.by_role})` : ''}` : ''}{m.to_status ? ` · with "${m.to_status}"` : ''}</p>
+                  <p className="text-xs text-slate-500">{formatDateTime(m.created_at)}{m.by_name ? ` · ${m.by_name}${m.by_role ? ` (${m.by_role})` : ''}` : ''}{m.to_status ? ` · with "${adoptionLabel(m.to_status)}"` : ''}</p>
                   <p className="mt-1 whitespace-pre-line text-navy-900">{m.message}</p>
                 </li>
               ))}</ul>

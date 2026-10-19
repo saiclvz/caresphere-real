@@ -6,7 +6,8 @@
  */
 const { pool, withTransaction } = require('../config/db');
 const HttpError = require('../utils/HttpError');
-const { saveUpload, deleteUpload, MB } = require('../utils/files');
+const { saveUpload, discardUnsavedUpload, MB } = require('../utils/files');
+const Retained = require('../services/retainedFiles');
 const { logActivity } = require('../utils/audit');
 const P = require('../services/protectedRecords');
 const env = require('../config/env');
@@ -85,6 +86,8 @@ exports.saveCdclaa = async (req, res) => {
         available_for_adoption: 0 };
       if (saved) {
         oldKey = c.cdclaa_storage_key;
+        // The previous copy stays on disk, recorded as Replaced (files are never deleted).
+        if (oldKey) await Retained.retain(conn, req, { area: 'cdclaa', childId: id, key: oldKey, originalName: c.cdclaa_original_name, mime: c.cdclaa_mime, sha: c.cdclaa_sha256, status: 'Replaced', replacedByKey: saved.storage_key });
         Object.assign(set, { cdclaa_storage_key: saved.storage_key, cdclaa_original_name: saved.original_name, cdclaa_mime: saved.mime_type,
           cdclaa_size: saved.size_bytes, cdclaa_sha256: saved.sha256 });
       }
@@ -94,10 +97,9 @@ exports.saveCdclaa = async (req, res) => {
       if (!rec && (saved || c.cdclaa_storage_key)) await P.createRecord(conn, { type: 'cdclaa', label: `CDCLAA, ${id}`, childId: id, createdBy: req.user.user_id });
     });
   } catch (err) {
-    if (saved) deleteUpload(saved.storage_key);
+    if (saved) discardUnsavedUpload(saved.storage_key);
     throw err;
   }
-  if (oldKey) deleteUpload(oldKey);
   await logActivity(req, `CDCLAA_RECORDED${saved ? ' (file uploaded)' : ''}`, `Child ${id}`);
   res.json({ success: true, data: await cdclaaSummary(id) });
 };
@@ -138,7 +140,7 @@ exports.uploadSealed = async (req, res) => {
       await conn.query('UPDATE tbl_children SET original_birth_sealed = TRUE WHERE child_id = ?', [id]);
     });
   } catch (err) {
-    deleteUpload(saved.storage_key);
+    discardUnsavedUpload(saved.storage_key);
     throw err;
   }
   await logActivity(req, `SEALED_RECORD_STORED (${kind})`, `Child ${id}`);
@@ -151,7 +153,7 @@ exports.matchable = async (req, res) => {
     `SELECT child_id, full_name, first_name, LEFT(last_name, 1) AS last_initial, gender, TIMESTAMPDIFF(YEAR, dob, CURDATE()) AS age,
             cdclaa_number, cdclaa_verified_at
        FROM tbl_children
-      WHERE status = 'Active' AND available_for_adoption = TRUE AND placement_status = 'None' AND cdclaa_verified_at IS NOT NULL
+      WHERE status = 'Active' AND archived_at IS NULL AND available_for_adoption = TRUE AND placement_status = 'None' AND cdclaa_verified_at IS NOT NULL
         AND TIMESTAMPDIFF(YEAR, dob, CURDATE()) < ? ORDER BY first_name, last_name`, [Number(env.transitionAge)]);
   // Staff see the first name and last initial (directory level); the full name is in the core record.
   const P = require('../services/childAccess');

@@ -69,7 +69,7 @@ async function onShift(conn, userId) {
   const today = localToday();
   const d = new Date(); d.setDate(d.getDate() - 1);
   const yesterday = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const [rows] = await conn.query('SELECT shift_date, start_time, end_time FROM tbl_staff_schedules WHERE user_id = ? AND shift_date IN (?, ?)', [userId, today, yesterday]);
+  const [rows] = await conn.query('SELECT shift_date, start_time, end_time FROM tbl_staff_schedules WHERE archived_at IS NULL AND user_id = ? AND shift_date IN (?, ?)', [userId, today, yesterday]);
   const now = new Date();
   const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
   const day = (v) => (v instanceof Date ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}` : String(v).slice(0, 10));
@@ -107,7 +107,7 @@ async function viewerContext(req, ids = null, conn = pool) {
   const { settings: s } = await load(conn);
   const u = req.user;
   const ctx = { user: u, role: u.role, mode: s.child_access_mode, enforced: s.child_access_mode === 'enforce', settings: s,
-    assigned: new Map(), initial: new Map(), emergency: new Map(), onShift: false, monitoring: null };
+    assigned: new Map(), initial: new Map(), onShift: false, monitoring: null };
   if (u.role === 'Admin') { ctx.monitoring = await monitoringOf(req, conn); return ctx; }
   if (u.role !== 'Staff' || (ids && !ids.length)) return ctx;
   const only = ids ? ' AND a.record_id IN (?)' : '';
@@ -122,15 +122,8 @@ async function viewerContext(req, ids = null, conn = pool) {
        AND NOT EXISTS (SELECT 1 FROM tbl_record_assignments a2 WHERE a2.record_type = 'child' AND a2.record_id = c.child_id)`, [u.user_id, ...args]);
   for (const r of legacy) if (!ctx.assigned.has(r.child_id)) ctx.assigned.set(r.child_id, { type: 'primary', ends_at: null, legacy: true });
   if (!(u.duties || []).includes('children')) return ctx; // assignments still count for level 3 (e.g. Transition Review)
-  const [ini] = await conn.query(
-    `SELECT child_id, ends_at, (ends_at <= NOW()) AS expired FROM tbl_child_initial_access WHERE user_id = ? AND ended_at IS NULL${ids ? ' AND child_id IN (?)' : ''}`, [u.user_id, ...args]);
-  for (const r of ini) {
-    if (Number(r.expired)) await endInitialAccess(conn, null, r.child_id, 'expired');
-    else ctx.initial.set(r.child_id, { ends_at: r.ends_at });
-  }
-  const [em] = await conn.query(
-    `SELECT emergency_id, child_id, expires_at, reason FROM tbl_emergency_access WHERE user_id = ? AND ended_at IS NULL AND expires_at > NOW()${ids ? ' AND child_id IN (?)' : ''}`, [u.user_id, ...args]);
-  for (const r of em) ctx.emergency.set(r.child_id, { emergency_id: r.emergency_id, expires_at: r.expires_at, reason: r.reason });
+  // The old "initial access" for the registering Staff member was replaced by the admission workflow (033/036):
+  // the creator's temporary access is the open admission itself, and ongoing access follows the assignment.
   ctx.onShift = s.child_care_card_visibility === 'on_shift' ? await onShift(conn, u.user_id) : true;
   return ctx;
 }
@@ -147,9 +140,11 @@ function decideFor(ctx, child) {
       if (!ctx.monitoring.child_ids.includes(id)) return { ...d, reason: 'monitoring' };
       return { ...d, level: 'full', label: 'Full (monitoring visit, read-only)', chip: 'full', directory: true, care_card: true, core: true, sensitive_assigned: true, access_tab: true, read_only: true };
     }
+    if (child.archived_at) return { ...d, level: 'full', label: 'Archived (read-only)', chip: 'full', directory: true, care_card: true, core: true, sensitive_assigned: true, access_tab: true, read_only: true, archived: true };
     return { ...d, level: 'full', label: 'Full', chip: 'full', directory: true, care_card: true, core: true, sensitive_assigned: true, edit_care_card: true, edit_photo: true, access_tab: true };
   }
   if (ctx.role !== 'Staff') return d;
+  if (child.archived_at) return { ...d, archived: true, reason: 'archived' };
   // Not admitted yet (migration 033): only Admin and the staff member who created the admission (Admission duty)
   // while it is open. Nobody else sees it, in either rollout mode; the creator never gets level 3.
   if (child.status === ADM.CHILD_STATUS) {
@@ -163,15 +158,14 @@ function decideFor(ctx, child) {
   const a = ctx.assigned.get(id) || null;
   if (!(ctx.user.duties || []).includes('children')) return { ...d, sensitive_assigned: Boolean(a), assignment: a }; // level 3 only, through the unlock flow
   const i = ctx.initial.get(id) || null;
-  const e = null; // emergency access was removed: an earlier session no longer opens anything
   d.directory = true;
-  d.assignment = a; d.initial = i; d.emergency = e;
+  d.assignment = a; d.initial = i; // emergency access was removed: it never opens anything
   d.core = Boolean(a || i);
-  d.care_card = Boolean(ctx.settings.child_care_card_visibility === 'children_duty' || ctx.onShift || a || i || e);
+  d.care_card = Boolean(ctx.settings.child_care_card_visibility === 'children_duty' || ctx.onShift || a || i);
   d.sensitive_assigned = Boolean(a);
   d.edit_care_card = Boolean(a);
   d.edit_photo = Boolean(a || i);
-  d.access_tab = Boolean(a);
+  d.access_tab = false; // the Access tab (assignments, requests, access history) is Admin management only
   if (a) Object.assign(d, { level: 'core', label: 'Core record (unlock for health, adoption and transition)', chip: 'unlock' });
   else if (i) Object.assign(d, { level: 'core', label: 'Core record (temporary, as the registering staff member)', chip: 'temporary' });
   else Object.assign(d, { level: 'directory', label: 'Directory', chip: 'directory' });
@@ -180,7 +174,7 @@ function decideFor(ctx, child) {
 
 async function childRow(conn, childId) {
   const [[c]] = await conn.query(
-    `SELECT c.child_id, c.first_name, c.last_name, c.status, c.assigned_staff_id, c.admission_status, adm.created_by AS admission_created_by
+    `SELECT c.child_id, c.first_name, c.last_name, c.status, c.assigned_staff_id, c.admission_status, c.archived_at, adm.created_by AS admission_created_by
        FROM tbl_children c LEFT JOIN tbl_child_admissions adm ON adm.child_id = c.child_id WHERE c.child_id = ?`, [String(childId)]);
   if (!c) throw new HttpError(404, 'Child record not found.');
   return c;
@@ -200,7 +194,7 @@ const NEED = {
   sensitive: (d) => d.role === 'Admin' ? d.directory : d.sensitive_assigned,
   edit_care_card: (d) => d.edit_care_card,
   edit_photo: (d) => d.edit_photo,
-  access_tab: (d) => d.access_tab,
+  access_tab: (d) => d.role === 'Admin' && d.access_tab, // Admin only, whatever else the decision says
   admin: (d) => d.role === 'Admin' && d.directory,
 };
 /** Limits that are new in this release: only recorded while the rollout mode is "Log only". */
@@ -227,6 +221,14 @@ async function logDenied(req, childId, need, action) {
  */
 async function check(req, childId, need, action, conn = pool) {
   const d = await decide(req, childId, conn);
+  // Archived (migration 034): kept for the record, hidden from Staff, read-only for Admin until restored.
+  if (d.child.archived_at) {
+    if (req.user.role !== 'Admin') {
+      await logDenied(req, d.child_id, 'archived', action);
+      throw new HttpError(403, 'This child record is archived. Ask an Admin.', { archived: true });
+    }
+    if (req.method && req.method !== 'GET') throw new HttpError(409, 'This child record is archived. Restore it before making changes.', { archived: true });
+  }
   if (d.monitoring && !d.directory) {
     await logDenied(req, d.child_id, 'monitoring', action);
     throw new HttpError(403, 'Only the records selected for this monitoring visit can be opened.', { monitoring: true });
@@ -254,6 +256,11 @@ async function isAssigned(req, recordType, recordId, conn = pool) {
   const A = Assign();
   if (recordType === 'health' || recordType === 'child') return Boolean(await A.assignmentOf(conn, 'child', recordId, req.user.user_id));
   if (await A.assignmentOf(conn, recordType, recordId, req.user.user_id)) return true;
+  // One central assignment: the child's case worker is assigned to that child's adoption application too.
+  if (recordType === 'adoption_application') {
+    const [[r]] = await conn.query('SELECT COALESCE(matched_child_id, target_child_id, link_child_id) AS child_id FROM tbl_adoption_applications WHERE application_id = ?', [recordId]);
+    if (r?.child_id) return Boolean(await A.assignmentOf(conn, 'child', r.child_id, req.user.user_id));
+  }
   if (recordType === 'transition_review') {
     const [[r]] = await conn.query('SELECT child_id FROM tbl_transition_reviews WHERE review_id = ?', [recordId]);
     if (r) return Boolean(await A.assignmentOf(conn, 'child', r.child_id, req.user.user_id));
@@ -323,16 +330,9 @@ async function nameFor(req, row, conn = pool) {
   return d.core || (!d.enforced && d.directory) ? (row.full_name || displayName(row)) : displayName(row);
 }
 
-// ---------------------------------------------------------------- initial access (registering Staff member)
-async function grantInitialAccess(conn, req, childId) {
-  const s = await settings(conn);
-  await conn.query(
-    `INSERT INTO tbl_child_initial_access (child_id, user_id, starts_at, ends_at) VALUES (?, ?, NOW(), NOW() + INTERVAL ? DAY)`,
-    [childId, req.user.user_id, s.child_initial_access_days]);
-  const [[r]] = await conn.query('SELECT ends_at FROM tbl_child_initial_access WHERE child_id = ?', [childId]);
-  await logActivityWith(conn, req, `CRA_INITIAL_ACCESS_GRANTED (${s.child_initial_access_days} days)`, `Child ${childId}`);
-  return r.ends_at;
-}
+// ---------------------------------------------------------------- initial access (retired; history only)
+// New initial access is never granted (the admission workflow replaced it). endInitialAccess closes any row still
+// open (kept for history in tbl_child_initial_access) when a case worker is assigned or an admission is decided.
 
 /** Ends the registering Staff member's initial access (expired, intake complete, another case worker assigned). */
 async function endInitialAccess(conn, req, childId, reason, newCaseWorkerId = null) {
@@ -346,13 +346,6 @@ async function endInitialAccess(conn, req, childId, reason, newCaseWorkerId = nu
   return true;
 }
 
-async function intakeComplete(req, childId) {
-  return withTransaction(async (conn) => {
-    const [[r]] = await conn.query('SELECT user_id FROM tbl_child_initial_access WHERE child_id = ? AND ended_at IS NULL FOR UPDATE', [String(childId)]);
-    if (!r || r.user_id !== req.user.user_id) throw new HttpError(409, 'You have no temporary access to this record.');
-    await endInitialAccess(conn, req, childId, 'intake_complete');
-  });
-}
 
 // ---------------------------------------------------------------- duplicate check
 const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z\s-]/g, '').replace(/[\s-]+/g, ' ').trim();
@@ -427,69 +420,12 @@ async function reviewCareCard(req, childId) {
   return careCard(childId);
 }
 
-// ---------------------------------------------------------------- emergency access (break-glass)
-/** Care card + critical health summary (allergies, medications, emergency contact). Nothing else. */
-async function emergencySummary(childId, conn = pool) {
-  const card = await careCard(childId, conn);
-  const [[h]] = await conn.query('SELECT allergies, prescriptions FROM tbl_health_history WHERE child_id = ?', [String(childId)]);
-  return {
-    care_card: card,
-    critical: {
-      allergies: [card.allergies, h ? decrypt(h.allergies, env.phiKey) : null].filter(Boolean).join('\n') || null,
-      medications: [card.daily_medications, h ? decrypt(h.prescriptions, env.phiKey) : null].filter(Boolean).join('\n') || null,
-      emergency_contact: card.emergency_contact || null,
-    },
-  };
-}
-
+// ---------------------------------------------------------------- emergency access (removed)
+// Emergency (break-glass) access was removed from CareSphere and must not come back. Earlier uses stay in
+// tbl_emergency_access as read-only history (Access tab, Admin); nothing can start, extend or review one any more.
+/** Active case workers of a child (primary, backup, temporary; active accounts). Used by access requests. */
 async function caseWorkerIds(conn, childId) {
   return (await Assign().active(conn, 'child', childId)).filter((a) => a.is_active).map((a) => a.user_id);
-}
-
-async function startEmergency(req, childId, body) {
-  if (req.user.role !== 'Staff') throw new HttpError(400, 'Administrators have full access and do not need emergency access.');
-  const d = await check(req, childId, 'directory', 'emergency access');
-  const reason = String(body?.reason || '');
-  const note = String(body?.note || '').trim();
-  if (!L.EMERGENCY_REASONS.includes(reason)) throw new HttpError(422, 'Choose the reason.', { errors: { reason: 'Choose the reason.' } });
-  if (reason === 'Other' && note.length < 5) throw new HttpError(422, 'Describe the emergency (at least 5 characters).', { errors: { note: 'Describe the emergency (at least 5 characters).' } });
-  if (note.length > 500) throw new HttpError(422, 'The note can be up to 500 characters.', { errors: { note: 'Up to 500 characters.' } });
-  const s = await settings();
-  const id = await withTransaction(async (conn) => {
-    const [[open]] = await conn.query('SELECT emergency_id FROM tbl_emergency_access WHERE child_id = ? AND user_id = ? AND ended_at IS NULL AND expires_at > NOW()', [d.child_id, req.user.user_id]);
-    if (open) return open.emergency_id;
-    const [[used]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_emergency_access WHERE user_id = ? AND started_at >= CURDATE()', [req.user.user_id]);
-    if (Number(used.n) >= s.child_emergency_uses_per_day) {
-      await logActivityWith(conn, req, `CRA_EMERGENCY_ACCESS_LIMIT (${used.n} used today, limit ${s.child_emergency_uses_per_day})`, `Child ${d.child_id}`);
-      await Notify.toAdmins(conn, 'admin_emergency_limit', { params: { limit: s.child_emergency_uses_per_day }, groupKey: `emergency_limit:${req.user.user_id}:${localToday()}` });
-      return { limited: true };
-    }
-    const [ins] = await conn.query('INSERT INTO tbl_emergency_access (child_id, user_id, reason, note_enc, started_at, expires_at) VALUES (?, ?, ?, ?, NOW(), NOW() + INTERVAL ? MINUTE)',
-      [d.child_id, req.user.user_id, reason, note ? encrypt(note, env.phiKey) : null, s.child_emergency_minutes]);
-    await logActivityWith(conn, req, `CRA_EMERGENCY_ACCESS_STARTED (${reason}, ${s.child_emergency_minutes} min)`, `Child ${d.child_id}`);
-    for (const uid of await caseWorkerIds(conn, d.child_id)) {
-      if (uid !== req.user.user_id) await Notify.emit(conn, 'case_worker_emergency_access', { userId: uid, params: { ref: d.child_id, id: d.child_id }, entityType: 'child', entityId: d.child_id, groupKey: `emergency:${ins.insertId}:cw:${uid}` });
-    }
-    await Notify.toAdmins(conn, 'admin_emergency_access', { params: { ref: d.child_id, reason }, groupKey: `emergency:${ins.insertId}` });
-    return ins.insertId;
-  });
-  if (id?.limited) throw new HttpError(429, `You have used emergency access ${s.child_emergency_uses_per_day} times today. Ask an Admin or the case worker.`);
-  return currentEmergency(req, d.child_id);
-}
-
-async function currentEmergency(req, childId) {
-  const [[e]] = await pool.query(
-    `SELECT emergency_id, reason, started_at, expires_at, TIMESTAMPDIFF(SECOND, NOW(), expires_at) AS remaining FROM tbl_emergency_access
-      WHERE child_id = ? AND user_id = ? AND ended_at IS NULL AND expires_at > NOW() ORDER BY emergency_id DESC LIMIT 1`, [String(childId), req.user.user_id]);
-  if (!e) throw new HttpError(403, DENIED, { emergency: false });
-  await logActivity(req, 'CRA_EMERGENCY_ACCESS_VIEWED', `Child ${childId}`);
-  return { emergency_id: e.emergency_id, reason: e.reason, started_at: e.started_at, expires_at: e.expires_at, remaining_seconds: Math.max(0, Number(e.remaining)),
-    ...(await emergencySummary(childId)) };
-}
-
-async function endEmergency(req, childId) {
-  const [r] = await pool.query('UPDATE tbl_emergency_access SET ended_at = NOW() WHERE child_id = ? AND user_id = ? AND ended_at IS NULL', [String(childId), req.user.user_id]);
-  if (r.affectedRows) await logActivity(req, 'CRA_EMERGENCY_ACCESS_ENDED (closed)', `Child ${childId}`);
 }
 
 async function emergencyList({ pending = false, childId = null } = {}, conn = pool) {
@@ -505,23 +441,6 @@ async function emergencyList({ pending = false, childId = null } = {}, conn = po
   return rows.map(({ note_enc: n, ...r }) => ({ ...r, note: n ? decrypt(n, env.phiKey) : null, active: !r.ended_at && new Date(r.expires_at) > new Date() }));
 }
 
-async function reviewEmergency(req, emergencyId, body) {
-  const result = String(body?.result || '');
-  const note = String(body?.note || '').trim();
-  const errors = {};
-  if (!['Justified', 'Not justified'].includes(result)) errors.result = 'Choose Justified or Not justified.';
-  if (note.length < 3) errors.note = 'Add a note (at least 3 characters).';
-  if (note.length > 500) errors.note = 'Up to 500 characters.';
-  if (Object.keys(errors).length) throw new HttpError(422, Object.values(errors)[0], { errors });
-  await withTransaction(async (conn) => {
-    const [[e]] = await conn.query('SELECT * FROM tbl_emergency_access WHERE emergency_id = ? FOR UPDATE', [emergencyId]);
-    if (!e) throw new HttpError(404, 'Emergency access not found.');
-    if (e.result) throw new HttpError(409, 'This emergency access was already reviewed.');
-    await conn.query('UPDATE tbl_emergency_access SET result = ?, review_note = ?, reviewed_by = ?, reviewed_at = NOW() WHERE emergency_id = ?', [result, note, req.user.user_id, emergencyId]);
-    // "Not justified" is its own code so it stands out (flagged) in the Audit log.
-    await logActivityWith(conn, req, result === 'Justified' ? `CRA_EMERGENCY_ACCESS_REVIEWED (Justified, #${emergencyId})` : `CRA_EMERGENCY_NOT_JUSTIFIED (flagged, #${emergencyId}, user #${e.user_id})`, `Child ${e.child_id}`);
-  });
-}
 
 // ---------------------------------------------------------------- access requests
 async function requestAccess(req, childId, body) {
@@ -646,18 +565,18 @@ async function monitoringGuard(req, res, next) {
 
 // ---------------------------------------------------------------- Admin overview, report, sweep
 async function overview(conn = pool) {
+  // Children in care with no active case worker (primary, backup or temporary) in the one assignment service.
+  const taken = [...await Assign().recordIdsFor(conn, 'child', null)];
   const [[un]] = await conn.query(
-    `SELECT COUNT(*) AS n FROM tbl_children c LEFT JOIN tbl_users u ON u.user_id = c.assigned_staff_id
-      WHERE c.status = 'Active' AND (c.assigned_staff_id IS NULL OR u.is_active = FALSE)`);
+    `SELECT COUNT(*) AS n FROM tbl_children c WHERE c.status = 'Active' AND c.archived_at IS NULL${taken.length ? ' AND c.child_id NOT IN (?)' : ''}`, taken.length ? [taken] : []);
   const [[flags]] = await conn.query('SELECT COUNT(*) AS n FROM (SELECT DISTINCT record_type, record_id FROM tbl_reassignment_flags WHERE cleared_at IS NULL) x');
   const [[covers]] = await conn.query(`SELECT COUNT(*) AS n FROM tbl_record_assignments a WHERE a.assignment_type = 'temporary' AND ${ACTIVE_SQL} AND a.ends_at <= NOW() + INTERVAL 3 DAY`);
   const [[reqs]] = await conn.query("SELECT COUNT(*) AS n FROM tbl_child_access_requests WHERE status = 'Pending'");
-  const [[em]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_emergency_access WHERE result IS NULL');
   const [[pc]] = await conn.query("SELECT COUNT(*) AS n FROM tbl_privacy_concerns WHERE status = 'Open'");
   const [[ad]] = await conn.query("SELECT COUNT(*) AS n FROM tbl_children WHERE admission_status = 'Pending Approval'").catch(() => [[{ n: 0 }]]);
   const s = await settings(conn);
   return { unassigned: Number(un.n), needs_reassignment: Number(flags.n), covers_ending: Number(covers.n), access_requests: Number(reqs.n),
-    emergency_to_review: Number(em.n), privacy_concerns: Number(pc.n), admissions_to_review: Number(ad.n), mode: s.child_access_mode };
+    privacy_concerns: Number(pc.n), admissions_to_review: Number(ad.n), mode: s.child_access_mode };
 }
 
 /** "Would be blocked" while in Log only: by staff member and by child (reference numbers only). */
@@ -716,7 +635,7 @@ async function sweep() {
   const [due] = await pool.query(
     `SELECT c.child_id, c.assigned_staff_id FROM tbl_children c LEFT JOIN tbl_care_cards cc ON cc.child_id = c.child_id
       JOIN tbl_users u ON u.user_id = c.assigned_staff_id AND u.is_active = TRUE
-      WHERE c.status = 'Active' AND cc.child_id IS NOT NULL AND (cc.last_reviewed_at IS NULL OR cc.last_reviewed_at <= NOW() - INTERVAL ? DAY)
+      WHERE c.status = 'Active' AND c.archived_at IS NULL AND cc.child_id IS NOT NULL AND (cc.last_reviewed_at IS NULL OR cc.last_reviewed_at <= NOW() - INTERVAL ? DAY)
         AND (cc.review_reminded_at IS NULL OR cc.review_reminded_at <= NOW() - INTERVAL ? DAY)`, [s.child_care_card_review_days, s.child_care_card_review_days]);
   for (const r of due) {
     await Notify.emit(pool, 'care_card_review_due', { userId: r.assigned_staff_id, params: { ref: r.child_id, id: r.child_id }, entityType: 'child', entityId: r.child_id });
@@ -754,8 +673,8 @@ async function concernList(conn = pool) {
 
 module.exports = {
   DENIED, DUP_MESSAGE, CARE_FIELDS, invalidate, load, settings, viewerContext, decideFor, decide, check, sensitiveAccess, isAssigned, shapeList, shapeOne,
-  nameFor, displayName, grantInitialAccess, endInitialAccess, intakeComplete, duplicateCheck, careCard, saveCareCard, reviewCareCard,
-  emergencySummary, startEmergency, currentEmergency, endEmergency, emergencyList, reviewEmergency, requestAccess, requestList, decideRequest,
+  nameFor, displayName, endInitialAccess, duplicateCheck, careCard, saveCareCard, reviewCareCard,
+  emergencyList, requestAccess, requestList, decideRequest,
   startMonitoring, endMonitoring, endMonitoringForUser, monitoringOf, monitoringRecordOpened, monitoringGuard, overview, wouldBlock, sweep,
   reportConcern, concernList, onShift,
 };

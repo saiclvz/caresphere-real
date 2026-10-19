@@ -26,6 +26,9 @@ const mysql = require('mysql2/promise');
     console.log(`${await require('./encryptAdoptionData').run(conn)} row(s) updated`);
     process.stdout.write('[migrate] adding QR references to applications and children ... ');
     console.log(`${await require('../src/utils/publicRef').backfill(conn)} added`);
+    // Legacy online payments (migration 037): the mapping is a reviewable step the home runs itself.
+    const [[legacy]] = await conn.query('SELECT COUNT(*) AS n FROM tbl_payments p WHERE NOT EXISTS (SELECT 1 FROM tbl_legacy_payment_map m WHERE m.payment_id = p.payment_id)');
+    if (Number(legacy.n)) console.log(`[migrate] ${legacy.n} legacy payment record(s) are not mapped yet. Review them: node scripts/mapLegacyPayments.js (then --apply).`);
     console.log('[migrate] Database is up to date. Next: npm run create-admin');
   } catch (err) {
     console.error(`\n[migrate] Failed: ${err.message}`);

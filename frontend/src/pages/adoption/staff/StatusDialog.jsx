@@ -4,6 +4,7 @@ import { api } from '../../../api/client';
 import { Badge, Button, ErrorNote, Field, Modal, Spinner } from '../../../components/ui';
 import { statusTone } from '../../Adoptions';
 import { headersFor } from './common';
+import { adoptionLabel } from '../../../lib/adoptionStatus';
 
 const pad = (n) => String(n).padStart(2, '0');
 const nowLocal = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -132,7 +133,7 @@ export default function StatusDialog({ app, config, onClose, onSaved, preset = n
     if (status === 'Endorsed to NACC') need('endorsed_date', 'Endorsement date is required.');
     if (status === 'Order of Adoption issued') { need('order_number', 'Order number is required.'); need('order_date', 'Order date is required.'); }
     if (status === 'Civil registry updated') need('civil_registry_ref', 'Reference is required.');
-    if (status === 'Declined' && !remark.trim()) e.remark = 'Give the applicant a reason when declining.';
+    if (status === 'Declined' && !remark.trim()) e.remark = 'Give the applicant a reason when rejecting.';
     return e;
   };
   const submit = async (ev) => {
@@ -158,11 +159,11 @@ export default function StatusDialog({ app, config, onClose, onSaved, preset = n
       footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" form="status-form" loading={saving} disabled={!status}>{status === 'Order of Adoption issued' ? 'Finalize adoption' : 'Save status'}</Button></>}>
       <form id="status-form" onSubmit={submit} noValidate className="space-y-4">
         <ErrorNote error={error} />
-        <p className="text-sm text-slate-600">Current stage: <Badge tone={statusTone(app.status)}>{app.status}</Badge></p>
+        <p className="text-sm text-slate-600">Current stage: <Badge tone={statusTone(app.status)}>{adoptionLabel(app.status)}</Badge></p>
         {firstOpen ? (
           <Field label="Next stage" required>
             <select className="input" value={status} onChange={(e) => { setStatus(e.target.value); setErrors({}); }}>
-              {transitions.filter((t) => !t.blocked).map((t) => <option key={t.to} value={t.to}>{t.to === 'Order of Adoption issued' ? 'Order of Adoption issued (Finalize adoption)' : t.to}</option>)}
+              {transitions.filter((t) => !t.blocked).map((t) => <option key={t.to} value={t.to}>{t.to === 'Order of Adoption issued' ? 'Order of Adoption issued (Finalize adoption)' : adoptionLabel(t.to)}</option>)}
             </select>
           </Field>
         ) : <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900" role="status">No next stage can be recorded yet. See what blocks each one below.</p>}
@@ -171,7 +172,7 @@ export default function StatusDialog({ app, config, onClose, onSaved, preset = n
             <p className="font-medium text-navy-900">Not available yet</p>
             <ul className="mt-1 space-y-1.5">
               {transitions.filter((t) => t.blocked).map((t) => (
-                <li key={t.to}><span className="font-medium text-slate-700">{t.to}</span>
+                <li key={t.to}><span className="font-medium text-slate-700">{adoptionLabel(t.to)}</span>
                   <ul className="list-disc pl-5 text-xs text-slate-600">{t.reasons.map((r) => <li key={r}>{r}</li>)}{t.more > 0 && <li>and {t.more} more</li>}</ul>
                 </li>
               ))}

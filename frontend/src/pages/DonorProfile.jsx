@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowLeft, Eye } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { Badge, Button, Card, ErrorNote, Skeleton, Table } from '../components/ui';
+import { Badge, Button, Card, ErrorNote, Skeleton, Table, TAB_ROW, tabClass } from '../components/ui';
 import { inKindTotal, typeMethod } from '../lib/donations';
 import { formatDate, formatDateTime, formatMoney } from '../lib/format';
 import { AmountCell, StatusBadge } from './Donations';
@@ -48,9 +48,9 @@ export default function DonorProfile() {
           <ErrorNote error={revealError} />
         </div>
       </div>
-      <div role="tablist" aria-label="Donor sections" className="relative mb-4 flex gap-1 overflow-x-auto border-b border-slate-200">
+      <div role="tablist" aria-label="Donor sections" className={TAB_ROW}>
         {tabs.map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setParams({ tab: k }, { replace: true })}
-          className={`-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${tab === k ? 'border-brand text-navy-900' : 'border-transparent text-slate-500 hover:text-navy-900'}`}>{l}</button>)}
+          className={tabClass(tab === k)}>{l}</button>)}
       </div>
       <div role="tabpanel">
         {tab === 'overview' && (

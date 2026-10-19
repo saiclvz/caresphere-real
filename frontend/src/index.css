@@ -1,42 +1,77 @@
+@import './styles/tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /*
- * CareSphere design system. Colours, fonts and animations are tokens in tailwind.config.js.
- * Display settings (text size, reduce motion, higher contrast) add classes to <html>; see lib/displayPrefs.js.
+ * CareSphere design system (see DESIGN-SYSTEM.md).
+ *   styles/tokens.css   colours, shape, shadow and focus tokens for the light, dark and high-contrast themes
+ *   tailwind.config.js  maps Tailwind colour names to those tokens (src/theme/palette.js)
+ *   this file           base element styles, shared component classes, responsive tables, motion, print
+ * Display settings (text size, theme, sidebar, reduce motion, high contrast) are classes / data-theme on <html>;
+ * see lib/displayPrefs.js.
  */
 @layer base {
   html { -webkit-font-smoothing: antialiased; }
   html.cs-text-lg { font-size: 112.5%; }
   html.cs-text-xl { font-size: 125%; }
-  body { @apply bg-page text-navy-900; }
-  /* One visible focus indicator everywhere (keyboard only). */
-  :focus-visible { outline: 2px solid #1D5FD6; outline-offset: 2px; border-radius: 4px; }
+  body { background-color: rgb(var(--cs-page)); color: rgb(var(--cs-heading)); }
+  /* One visible focus indicator everywhere (keyboard only): 3px, 4px in high contrast. */
+  :focus-visible { outline: var(--cs-focus-width) solid rgb(var(--cs-focus)); outline-offset: 2px; border-radius: 4px; }
+  a { text-underline-offset: 2px; }
   input, select, textarea { font: inherit; }
   h1, h2, h3 { text-wrap: balance; }
 }
 
 @layer components {
+  /* Form controls: surface colour, 3:1 outline (control token), 12px corners, 3px focus ring. */
   .input {
-    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-navy-900 transition-colors
-           placeholder:text-slate-400 hover:border-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20
-           disabled:bg-slate-100 disabled:text-slate-500;
+    @apply w-full border px-3 py-2 text-sm transition-colors focus:outline-none focus:ring-2;
+    background-color: rgb(var(--cs-surface)); color: rgb(var(--cs-heading)); border-color: rgb(var(--cs-control));
+    border-radius: var(--cs-radius-control); --tw-ring-color: rgb(var(--cs-focus) / 0.3);
   }
-  .input[aria-invalid="true"] { @apply border-red-500 focus:border-red-600 focus:ring-red-200; }
-  .th { @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500; }
-  .td { @apply px-4 py-3 text-sm text-slate-700 align-top; }
+  .input::placeholder { color: rgb(var(--cs-placeholder)); }
+  .input:focus { border-color: rgb(var(--cs-primary)); }
+  .input:disabled { background-color: rgb(var(--cs-surface-3)); color: rgb(var(--cs-muted)); }
+  select.input option { background-color: rgb(var(--cs-surface)); color: rgb(var(--cs-heading)); }
+  .input[aria-invalid="true"] { border-color: #EF4444; --tw-ring-color: rgb(239 68 68 / 0.3); }
+  .th { @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide; color: rgb(var(--cs-muted)); }
+  .cs-table > thead { background-color: rgb(var(--cs-surface-2)); }
+  .td { @apply px-4 py-3 text-sm align-top; color: rgb(var(--cs-body)); }
   /* Tables: row hover and keyboard focus inside a row. */
   .cs-table tbody tr { @apply transition-colors; }
-  .cs-table tbody tr:hover, .cs-table tbody tr:focus-within { @apply bg-brand-50; }
+  .cs-table tbody tr:hover, .cs-table tbody tr:focus-within { background-color: rgb(var(--cs-tint-1)); }
   /* Headline serif for brand moments only (never for data). */
   .font-display { letter-spacing: -0.01em; }
   /* Skeleton placeholders while information loads. */
   .cs-skeleton {
-    @apply rounded-md bg-slate-200;
+    @apply rounded-md; background-color: rgb(var(--cs-line));
     background-image: linear-gradient(90deg, rgba(255,255,255,0) 0, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%);
     background-size: 400px 100%; background-repeat: no-repeat;
     animation: cs-shimmer 1.4s linear infinite;
+  }
+}
+
+/*
+ * Phones: each table row becomes a card (column label above each value) instead of scrolling sideways. <Table> turns
+ * this on when the header has no controls, and keeps the table roles so screen readers still read it as a table.
+ */
+@media (max-width: 639px) {
+  .cs-table.cs-stack > thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .cs-table.cs-stack, .cs-table.cs-stack > tbody, .cs-table.cs-stack > tfoot { display: block; width: 100%; }
+  .cs-table.cs-stack > tbody > tr, .cs-table.cs-stack > tfoot > tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.625rem 1rem; padding: 0.875rem 1rem; }
+  .cs-table.cs-stack > tbody > tr + tr { border-top: 1px solid rgb(var(--cs-line)); }
+  .cs-table.cs-stack > tbody > tr > td, .cs-table.cs-stack > tbody > tr > th, .cs-table.cs-stack > tfoot > tr > td { display: block; min-width: 0; padding: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+  .cs-table.cs-stack > tbody > tr > :first-child, .cs-table.cs-stack > tbody > tr > [data-wide] { grid-column: 1 / -1; }
+  .cs-table.cs-stack > tbody > tr > td[data-label=""]:last-child:not(:first-child) {
+    grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 0.5rem;
+    border-top: 1px dashed rgb(var(--cs-line)); padding-top: 0.625rem;
+  }
+  .cs-table.cs-stack > tbody > tr > td:empty { display: none; }
+  .cs-table.cs-stack > tbody > tr > [data-label]:not([data-label=""])::before {
+    content: attr(data-label); display: block; margin-bottom: 0.125rem;
+    font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: rgb(var(--cs-muted));
   }
 }
 
@@ -45,7 +80,8 @@
 /* PHI placeholder blur (the real record is never sent until unlocked) */
 .phi-blur { filter: blur(8px); user-select: none; pointer-events: none; }
 
-/* Reduced motion: the device setting, or "Reduce motion" in Display settings. */
+/* Reduced motion: the device setting, or "Reduce motion" in Display settings. !important is needed here so the
+   setting also wins over animation and transition utilities set on individual elements. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
@@ -53,16 +89,19 @@ html.cs-reduce-motion *, html.cs-reduce-motion *::before, html.cs-reduce-motion 
   animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important;
 }
 
-/* Higher contrast (Display settings): darker secondary text and borders, stronger focus ring. */
-html.cs-contrast .text-slate-400, html.cs-contrast .text-slate-500 { color: #334155 !important; }
-html.cs-contrast .text-slate-600 { color: #1E293B !important; }
-html.cs-contrast .border-slate-100, html.cs-contrast .border-slate-200, html.cs-contrast .border-slate-300 { border-color: #64748B !important; }
-html.cs-contrast .divide-slate-100 > * + * { border-color: #94A3B8 !important; }
-html.cs-contrast .shadow-card { box-shadow: 0 0 0 1px #64748B !important; }
-html.cs-contrast :focus-visible { outline-width: 3px; outline-color: #121D4D; }
-html.cs-contrast .input { border-color: #475569; }
-html.cs-contrast a:not([class*="bg-"]) { text-decoration: underline; }
+/* Underline links (Display settings): every text link, not buttons styled as links. */
+html.cs-underline-links a:not([class*="bg-"]):not([role="tab"]):not(.public-brand) { text-decoration: underline; text-underline-offset: 2px; }
+/* Easy-read spacing (Display settings): WCAG 1.4.12 text spacing (line 1.5, paragraphs 2x, letters 0.12em, words 0.16em). */
+html.cs-easy-read body { line-height: 1.6; letter-spacing: 0.12em; word-spacing: 0.16em; }
+html.cs-easy-read p, html.cs-easy-read li, html.cs-easy-read td, html.cs-easy-read label { line-height: 1.6; }
+html.cs-easy-read p + p { margin-top: 1em; }
 
+/* High contrast (Display settings): the colours come from tokens.css (.cs-contrast); links are also underlined. */
+html.cs-contrast a:not([class*="bg-"]):not([role="tab"]):not([class*="block"]):not([class*="flex"]):not(.public-brand) { text-decoration: underline; }
+html.cs-contrast .shadow-card { box-shadow: 0 0 0 1px rgb(var(--cs-line)); }
+
+/* Logo that follows the theme (Logo theme="auto"). */
+.cs-logo-auto { --navy: var(--cs-logo-navy); --blue: var(--cs-logo-blue); --side: var(--cs-logo-side); --tag: var(--cs-logo-tag); }
 
 /*
  * Protected data (ProtectedArea): text can't be selected or copied and nothing prints. Form fields stay usable.
@@ -72,6 +111,7 @@ html.cs-contrast a:not([class*="bg-"]) { text-decoration: underline; }
 .cs-shield { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(16px); }
 /* Capture "hold" (ProtectedContent): while a capture key is held or the window is inactive, the protected
    content is blanked at once and the screen shows the notice instead, so a capture taken then shows only this. */
+/* !important: protected content must stay hidden whatever styles its elements carry. */
 html.cs-capture-hold .cs-protected > :not(.cs-shield) { visibility: hidden !important; }
 html.cs-capture-hold .cs-protected::after {
   content: 'Screenshot or screen capture is not allowed for protected data.';

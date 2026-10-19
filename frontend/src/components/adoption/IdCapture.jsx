@@ -19,10 +19,10 @@ const frameRatio = (passport) => (passport ? 125 / 88 : 85.6 / 54);
 /** Icon and word for a check state (never color alone). */
 function StateMark({ state }) {
   const map = {
-    pass: [CheckCircle2, 'Passed', 'var(--cs-success)'],
-    fail: [XCircle, 'Needs a fix', 'var(--cs-danger)'],
-    pending: [Clock, 'Waiting', 'var(--cs-muted)'],
-    'n/a': [MinusCircle, 'Not needed', 'var(--cs-muted)'],
+    pass: [CheckCircle2, 'Passed', 'var(--ad-success)'],
+    fail: [XCircle, 'Needs a fix', 'var(--ad-danger)'],
+    pending: [Clock, 'Waiting', 'var(--ad-muted)'],
+    'n/a': [MinusCircle, 'Not needed', 'var(--ad-muted)'],
   };
   const [Icon, word, color] = map[state] || map.pending;
   return (
@@ -142,8 +142,8 @@ function SideSlot({ slot, label, required, hint, file, scan, attemptsUsed, maxAt
       )}
       {needsRetake && (
         <ul className="mt-2 space-y-1 text-sm">
-          {scan.result === 'unreadable' && !fails.length && <li style={{ color: 'var(--cs-danger)' }}>We couldn't read this side. Please try again in good light.</li>}
-          {fails.map((c) => <li key={c.check} className="flex gap-1.5" style={{ color: 'var(--cs-danger)' }}><XCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /><span>{c.message}</span></li>)}
+          {scan.result === 'unreadable' && !fails.length && <li style={{ color: 'var(--ad-danger)' }}>We couldn't read this side. Please try again in good light.</li>}
+          {fails.map((c) => <li key={c.check} className="flex gap-1.5" style={{ color: 'var(--ad-danger)' }}><XCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /><span>{c.message}</span></li>)}
         </ul>
       )}
 
@@ -317,7 +317,7 @@ export default function IdCapture({ appId, config, form, documents, onUpload, on
           <div className="cs-theme space-y-3">
             {pending.file.type !== 'application/pdf' && <img src={pending.url} alt="" className="max-h-64 w-full rounded-lg object-contain" />}
             <ul className="space-y-1 text-sm">
-              {pending.hints.map((h) => <li key={h} className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: 'var(--cs-warning)' }} aria-hidden /><span>{HINT_TEXT[h]}</span></li>)}
+              {pending.hints.map((h) => <li key={h} className="flex gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" style={{ color: 'var(--ad-warning)' }} aria-hidden /><span>{HINT_TEXT[h]}</span></li>)}
             </ul>
             <p className="cs-hint">These are quick checks in your browser. The full check runs after upload.</p>
           </div>

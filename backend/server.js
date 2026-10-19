@@ -12,7 +12,6 @@ const { purgeExpired } = require('./src/services/qrService');
 const mfa = require('./src/services/mfaService');
 const protectedRecords = require('./src/services/protectedRecords');
 const healthAccess = require('./src/services/healthAccessService');
-const paymentService = require('./src/services/paymentService');
 const { syncFlags } = require('./src/controllers/childController');
 const idScan = require('./src/services/idScan');
 
@@ -27,9 +26,15 @@ app.use(helmet({
       'img-src': ["'self'", 'data:', 'blob:'],
       'media-src': ["'self'", 'blob:'],
       'upgrade-insecure-requests': null, // LAN deployments are often plain HTTP
+      'frame-ancestors': ["'none'"],
+      'form-action': ["'self'"],
     },
   },
+  referrerPolicy: { policy: 'no-referrer' },
+  // HSTS only matters over HTTPS; browsers ignore it on plain HTTP.
+  hsts: { maxAge: 15552000, includeSubDomains: false },
 }));
+app.use((req, res, next) => { res.set('Permissions-Policy', 'camera=(self), microphone=(), geolocation=(), payment=()'); next(); });
 
 app.use(cors({
   origin(origin, cb) {
@@ -37,17 +42,17 @@ app.use(cors({
     if (!origin || env.corsOrigins.includes(origin)) return cb(null, true);
     return cb(new Error(`Origin ${origin} is not allowed. Add it to CORS_ORIGINS in .env.`));
   },
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Health-Access', 'X-Unlock-Session', 'X-Protected-Access', 'X-Background', 'Idempotency-Key'],
+  // Cookies are sent only to the allowed origins (credentials), and changes must carry X-CSRF-Token.
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Health-Access', 'X-Unlock-Session', 'X-Protected-Access', 'X-Background', 'Idempotency-Key', 'X-CSRF-Token', 'X-Reauth'],
   exposedHeaders: ['Content-Disposition'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
 }));
 
 // Uploads (child photos up to 5 MB, adoption documents up to 10 MB) arrive as
 // base64 JSON, about 4/3 of the file size. Only those routes get the larger limit.
-const UPLOAD_ROUTES = [/^\/api\/children$/, /^\/api\/children\/[^/]+\/photo$/, /^\/api\/adoptions\/\d+\/documents$/, /^\/api\/payments\/bank$/];
-// PayMongo webhook: needs the raw body to check its signature, so it is mounted before the JSON parser.
-const payments = require('./src/controllers/paymentController');
-app.post('/api/payments/webhook', express.raw({ type: '*/*', limit: '1mb' }), (req, res, next) => payments.webhook(req, res).catch(next));
+const UPLOAD_ROUTES = [/^\/api\/children$/, /^\/api\/children\/[^/]+\/photo$/, /^\/api\/adoptions\/\d+\/documents$/, /^\/api\/donor\/donation-reports(\/\d+\/info)?$/,
+  /^\/api\/payment-qr\/(preview|changes)$/, /^\/api\/donations\/\d+\/documents$/];
 
 const jsonLarge = express.json({ limit: '15mb' });
 const jsonSmall = express.json({ limit: '1mb' });
@@ -81,7 +86,7 @@ async function start() {
   require('./src/services/idTypes').all().catch(() => {});
 
   // Housekeeping: drop expired QR sessions and JWT denylist entries hourly.
-  const cleanup = () => Promise.all([purgeExpired(), healthAccess.purgeExpired(), mfa.purgeExpired(), protectedRecords.cleanupGrants(), paymentService.expireStale(), idScan.purgeOld(),
+  const cleanup = () => Promise.all([purgeExpired(), healthAccess.purgeExpired(), mfa.purgeExpired(), protectedRecords.cleanupGrants(), require('./src/services/donationClaims').staleSweep(), require('./src/services/reauth').purgeOld(), idScan.purgeOld(),
     pool.query('DELETE FROM tbl_session_activity WHERE last_seen < NOW() - INTERVAL 1 DAY')]).catch((e) => console.error('[cleanup]', e.message));
   setInterval(cleanup, 60 * 60 * 1000).unref();
 

@@ -1,131 +1,111 @@
 /*
- * Theme for the donor adoption pages only (the 9-page form and My applications).
- * Colors are CSS variables with a dark version via prefers-color-scheme (decision 7).
- * System fonts, no gradients. App-wide theming is a separate task.
+ * Donor adoption pages (the 9-page form, My applications, application detail, ID capture) and the QR print slips.
+ * The colours are aliases of the shared CareSphere tokens (styles/tokens.css), so these pages follow the same light,
+ * dark and high-contrast themes as every other page (Display settings > Theme; "Device" follows the device's
+ * light / dark setting). Local names start with --ad- so they never shadow the shared --cs-* tokens.
  */
 .cs-theme {
-  --cs-bg: #f1f5f9;
-  --cs-surface: #ffffff;
-  --cs-surface-2: #f8fafc;
-  --cs-border: #e2e8f0;
-  --cs-border-strong: #cbd5e1;
-  --cs-text: #0f172a;
-  --cs-muted: #64748b;
-  --cs-primary: #2563eb;
-  --cs-primary-hover: #1d4ed8;
-  --cs-primary-soft: #eff6ff;
-  --cs-on-primary: #ffffff;
-  --cs-danger: #dc2626;
-  --cs-danger-soft: #fef2f2;
-  --cs-success: #047857;
-  --cs-success-soft: #ecfdf5;
-  --cs-warning: #92400e;
-  --cs-warning-soft: #fffbeb;
-  --cs-focus: #2563eb;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  color: var(--cs-text);
-}
-
-@media (prefers-color-scheme: dark) {
-  .cs-theme {
-    --cs-bg: #0b1220;
-    --cs-surface: #111a2b;
-    --cs-surface-2: #172238;
-    --cs-border: #24314a;
-    --cs-border-strong: #334563;
-    --cs-text: #e5ebf5;
-    --cs-muted: #9aa8bf;
-    --cs-primary: #60a5fa;
-    --cs-primary-hover: #93c5fd;
-    --cs-primary-soft: #16233b;
-    --cs-on-primary: #0b1220;
-    --cs-danger: #f87171;
-    --cs-danger-soft: #2a1416;
-    --cs-success: #34d399;
-    --cs-success-soft: #0f2a22;
-    --cs-warning: #fbbf24;
-    --cs-warning-soft: #2a2010;
-    --cs-focus: #93c5fd;
-  }
+  --ad-bg: rgb(var(--cs-page));
+  --ad-surface: rgb(var(--cs-surface));
+  --ad-surface-2: rgb(var(--cs-surface-2));
+  --ad-border: rgb(var(--cs-line));
+  --ad-border-strong: rgb(var(--cs-control));
+  --ad-text: rgb(var(--cs-heading));
+  --ad-muted: rgb(var(--cs-muted));
+  --ad-primary: rgb(var(--cs-primary));
+  --ad-primary-hover: rgb(var(--cs-primary-hover));
+  --ad-primary-soft: rgb(var(--cs-tint-2));
+  --ad-link: rgb(var(--cs-link));
+  --ad-on-primary: #ffffff;
+  --ad-danger: rgb(var(--cs-danger-text));
+  --ad-danger-soft: rgb(var(--cs-danger-bg));
+  --ad-success: rgb(var(--cs-success-text));
+  --ad-success-soft: rgb(var(--cs-success-bg));
+  --ad-success-solid: #0B6B3A;
+  --ad-warning: rgb(var(--cs-warning-text));
+  --ad-warning-soft: rgb(var(--cs-warning-bg));
+  --ad-focus: rgb(var(--cs-focus));
+  font-family: inherit;
+  color: var(--ad-text);
 }
 
 /* Page area: the themed pages sit inside the app's layout, so they paint their own background. */
-.cs-theme.cs-page { background: var(--cs-bg); border-radius: 16px; padding: 1rem; }
-@media (min-width: 640px) { .cs-theme.cs-page { padding: 1.5rem; } }
+.cs-theme.cs-page { background: var(--ad-bg); border-radius: var(--cs-radius-card); }
 
-.cs-theme .cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: 14px; }
-.cs-theme .cs-surface-2 { background: var(--cs-surface-2); }
-.cs-theme .cs-muted { color: var(--cs-muted); }
-.cs-theme .cs-title { color: var(--cs-text); font-weight: 600; }
-.cs-theme .cs-link { color: var(--cs-primary); font-weight: 500; text-decoration: none; }
+
+.cs-theme .cs-card { background: var(--ad-surface); border: 1px solid var(--ad-border); border-radius: var(--cs-radius-card); box-shadow: var(--cs-shadow); }
+.cs-theme .cs-surface-2 { background: var(--ad-surface-2); }
+.cs-theme .cs-muted { color: var(--ad-muted); }
+.cs-theme .cs-title { color: var(--ad-text); font-weight: 600; }
+.cs-theme .cs-link { color: var(--ad-link); font-weight: 500; text-decoration: none; }
 .cs-theme .cs-link:hover { text-decoration: underline; }
-.cs-theme .cs-divider { border-color: var(--cs-border); }
+.cs-theme .cs-divider { border-color: var(--ad-border); }
 
 /* Form controls */
-.cs-theme .cs-label { display: block; margin-bottom: 0.375rem; font-size: 0.875rem; font-weight: 500; color: var(--cs-text); }
-.cs-theme .cs-req { color: var(--cs-danger); margin-left: 2px; }
-.cs-theme .cs-hint { margin-top: 0.25rem; font-size: 0.75rem; color: var(--cs-muted); }
-.cs-theme .cs-error { margin-top: 0.25rem; font-size: 0.75rem; color: var(--cs-danger); }
+.cs-theme .cs-label { display: block; margin-bottom: 0.375rem; font-size: 0.875rem; font-weight: 500; color: var(--ad-text); }
+.cs-theme .cs-req { color: var(--ad-danger); margin-left: 2px; }
+.cs-theme .cs-hint { margin-top: 0.25rem; font-size: 0.75rem; color: var(--ad-muted); }
+.cs-theme .cs-error { margin-top: 0.25rem; font-size: 0.75rem; color: var(--ad-danger); }
 .cs-theme .cs-input {
-  width: 100%; min-height: 2.5rem; border-radius: 10px; border: 1px solid var(--cs-border-strong);
-  background: var(--cs-surface); color: var(--cs-text); padding: 0.5rem 0.75rem; font: inherit; font-size: 0.9375rem;
+  width: 100%; min-height: 2.5rem; border-radius: var(--cs-radius-control); border: 1px solid var(--ad-border-strong);
+  background: var(--ad-surface); color: var(--ad-text); padding: 0.5rem 0.75rem; font: inherit; font-size: 0.9375rem;
 }
-.cs-theme .cs-input::placeholder { color: var(--cs-muted); }
-.cs-theme .cs-input:disabled { background: var(--cs-surface-2); color: var(--cs-muted); cursor: not-allowed; }
-.cs-theme .cs-input[aria-invalid="true"] { border-color: var(--cs-danger); }
+.cs-theme .cs-input::placeholder { color: var(--ad-muted); }
+.cs-theme .cs-input:disabled { background: var(--ad-surface-2); color: var(--ad-muted); cursor: not-allowed; }
+.cs-theme .cs-input[aria-invalid="true"] { border-color: var(--ad-danger); }
 .cs-theme textarea.cs-input { min-height: 5.5rem; resize: vertical; }
-.cs-theme :focus-visible { outline: 2px solid var(--cs-focus); outline-offset: 2px; }
+.cs-theme :focus-visible { outline: var(--cs-focus-width) solid var(--ad-focus); outline-offset: 2px; }
 .cs-theme .cs-input:focus-visible { outline-offset: 0; }
-.cs-theme input[type="checkbox"], .cs-theme input[type="radio"] { accent-color: var(--cs-primary); width: 1rem; height: 1rem; }
+.cs-theme input[type="checkbox"], .cs-theme input[type="radio"] { accent-color: var(--ad-primary); width: 1rem; height: 1rem; }
 
 /* Buttons */
 .cs-theme .cs-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; min-height: 2.5rem;
-  border-radius: 10px; padding: 0.5rem 1rem; font: inherit; font-size: 0.875rem; font-weight: 600; cursor: pointer;
-  border: 1px solid var(--cs-border-strong); background: var(--cs-surface); color: var(--cs-text);
+  border-radius: var(--cs-radius-control); padding: 0.5rem 1rem; font: inherit; font-size: 0.875rem; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--ad-border-strong); background: var(--ad-surface); color: var(--ad-text);
 }
-.cs-theme .cs-btn:hover { background: var(--cs-surface-2); }
+.cs-theme .cs-btn:hover { background: rgb(var(--cs-tint-1)); border-color: var(--ad-primary); }
 .cs-theme .cs-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.cs-theme .cs-btn-primary { background: var(--cs-primary); border-color: var(--cs-primary); color: var(--cs-on-primary); }
-.cs-theme .cs-btn-primary:hover { background: var(--cs-primary-hover); border-color: var(--cs-primary-hover); }
-.cs-theme .cs-btn-danger { color: var(--cs-danger); }
+.cs-theme .cs-btn-primary { background: var(--ad-primary); border-color: var(--ad-primary); color: var(--ad-on-primary); }
+.cs-theme .cs-btn-primary:hover { background: var(--ad-primary-hover); border-color: var(--ad-primary-hover); }
+.cs-theme .cs-btn-danger { color: var(--ad-danger); }
 .cs-theme .cs-btn-sm { min-height: 2rem; padding: 0.25rem 0.75rem; font-size: 0.8125rem; }
 
 /* Status chips and notices */
 .cs-theme .cs-chip { display: inline-flex; align-items: center; gap: 0.25rem; border-radius: 999px; padding: 0.125rem 0.625rem; font-size: 0.75rem; font-weight: 600; border: 1px solid transparent; }
-.cs-theme .cs-chip-done { background: var(--cs-success-soft); color: var(--cs-success); }
-.cs-theme .cs-chip-missing { background: var(--cs-danger-soft); color: var(--cs-danger); }
-.cs-theme .cs-chip-optional { background: var(--cs-surface-2); color: var(--cs-muted); border-color: var(--cs-border); }
-.cs-theme .cs-chip-info { background: var(--cs-primary-soft); color: var(--cs-primary); }
-.cs-theme .cs-chip-warn { background: var(--cs-warning-soft); color: var(--cs-warning); }
-.cs-theme .cs-notice { border-radius: 12px; padding: 0.875rem 1rem; font-size: 0.875rem; border: 1px solid var(--cs-border); }
-.cs-theme .cs-notice-info { background: var(--cs-primary-soft); color: var(--cs-text); border-color: var(--cs-primary); }
-.cs-theme .cs-notice-warn { background: var(--cs-warning-soft); color: var(--cs-text); border-color: var(--cs-warning); }
-.cs-theme .cs-notice-success { background: var(--cs-success-soft); color: var(--cs-text); border-color: var(--cs-success); }
-.cs-theme .cs-notice-error { background: var(--cs-danger-soft); color: var(--cs-text); border-color: var(--cs-danger); }
+.cs-theme .cs-chip-done { background: var(--ad-success-soft); color: var(--ad-success); }
+.cs-theme .cs-chip-missing { background: var(--ad-danger-soft); color: var(--ad-danger); }
+.cs-theme .cs-chip-optional { background: var(--ad-surface-2); color: var(--ad-muted); border-color: var(--ad-border); }
+.cs-theme .cs-chip-info { background: var(--ad-primary-soft); color: var(--ad-link); }
+.cs-theme .cs-chip-warn { background: var(--ad-warning-soft); color: var(--ad-warning); }
+.cs-theme .cs-notice { border-radius: 12px; padding: 0.875rem 1rem; font-size: 0.875rem; border: 1px solid var(--ad-border); }
+.cs-theme .cs-notice-info { background: var(--ad-primary-soft); color: var(--ad-text); border-color: var(--ad-primary); }
+.cs-theme .cs-notice-warn { background: var(--ad-warning-soft); color: var(--ad-text); border-color: var(--ad-warning); }
+.cs-theme .cs-notice-success { background: var(--ad-success-soft); color: var(--ad-text); border-color: var(--ad-success); }
+.cs-theme .cs-notice-error { background: var(--ad-danger-soft); color: var(--ad-text); border-color: var(--ad-danger); }
 
 /* File field */
-.cs-theme .cs-file { border: 1px dashed var(--cs-border-strong); border-radius: 12px; padding: 0.75rem; background: var(--cs-surface); }
-.cs-theme .cs-file.cs-file-error { border-color: var(--cs-danger); }
-.cs-theme .cs-file.has-file { border-style: solid; border-color: var(--cs-success); background: var(--cs-success-soft); }
+.cs-theme .cs-file { border: 1px dashed var(--ad-border-strong); border-radius: 12px; padding: 0.75rem; background: var(--ad-surface); }
+.cs-theme .cs-file.cs-file-error { border-color: var(--ad-danger); }
+.cs-theme .cs-file.has-file { border-style: solid; border-color: var(--ad-success); background: var(--ad-success-soft); }
 
 /* Stepper */
-.cs-theme .cs-step { display: flex; align-items: center; gap: 0.625rem; width: 100%; border-radius: 10px; padding: 0.5rem 0.625rem; text-align: left;
-  font: inherit; font-size: 0.875rem; color: var(--cs-muted); background: transparent; border: 0; cursor: pointer; }
-.cs-theme .cs-step:hover { background: var(--cs-surface-2); color: var(--cs-text); }
-.cs-theme .cs-step[aria-current="step"] { background: var(--cs-primary-soft); color: var(--cs-text); font-weight: 600; }
+.cs-theme .cs-step { display: flex; align-items: center; gap: 0.625rem; width: 100%; border-radius: 8px; padding: 0.5rem 0.625rem; text-align: left;
+  font: inherit; font-size: 0.875rem; color: var(--ad-muted); background: transparent; border: 0; cursor: pointer; }
+.cs-theme .cs-step:hover { background: var(--ad-surface-2); color: var(--ad-text); }
+.cs-theme .cs-step[aria-current="step"] { background: var(--ad-primary-soft); color: var(--ad-text); font-weight: 600; }
 .cs-theme .cs-step-num { display: inline-flex; width: 1.5rem; height: 1.5rem; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 999px;
-  font-size: 0.75rem; font-weight: 700; border: 1px solid var(--cs-border-strong); color: var(--cs-muted); background: var(--cs-surface); }
-.cs-theme .cs-step[aria-current="step"] .cs-step-num { background: var(--cs-primary); border-color: var(--cs-primary); color: var(--cs-on-primary); }
-.cs-theme .cs-step.is-done .cs-step-num { background: var(--cs-success-soft); border-color: var(--cs-success); color: var(--cs-success); }
-.cs-theme .cs-step.is-locked { color: var(--cs-muted); opacity: 0.7; cursor: not-allowed; }
-.cs-theme .cs-step.is-locked:hover { background: transparent; color: var(--cs-muted); }
-.cs-theme .cs-progress { height: 6px; border-radius: 999px; background: var(--cs-border); overflow: hidden; }
-.cs-theme .cs-progress > span { display: block; height: 100%; background: var(--cs-primary); }
+  font-size: 0.75rem; font-weight: 700; border: 1px solid var(--ad-border-strong); color: var(--ad-muted); background: var(--ad-surface); }
+.cs-theme .cs-step[aria-current="step"] .cs-step-num { background: var(--ad-primary); border-color: var(--ad-primary); color: var(--ad-on-primary); }
+.cs-theme .cs-step.is-done .cs-step-num { background: var(--ad-success-soft); border-color: var(--ad-success); color: var(--ad-success); }
+.cs-theme .cs-step.is-locked { color: var(--ad-muted); opacity: 0.7; cursor: not-allowed; }
+.cs-theme .cs-step.is-locked:hover { background: transparent; color: var(--ad-muted); }
+.cs-theme .cs-progress { height: 6px; border-radius: 999px; background: var(--ad-border); overflow: hidden; }
+.cs-theme .cs-progress > span { display: block; height: 100%; background: var(--ad-primary); }
 
 /* Timeline */
-.cs-theme .cs-timeline { border-left: 2px solid var(--cs-border); margin-left: 0.5rem; padding-left: 1rem; }
-.cs-theme .cs-timeline-dot { position: absolute; left: -1.4rem; top: 0.25rem; width: 0.75rem; height: 0.75rem; border-radius: 999px; background: var(--cs-primary); border: 2px solid var(--cs-surface); }
+.cs-theme .cs-timeline { border-left: 2px solid var(--ad-border); margin-left: 0.5rem; padding-left: 1rem; }
+.cs-theme .cs-timeline-dot { position: absolute; left: -1.4rem; top: 0.25rem; width: 0.75rem; height: 0.75rem; border-radius: 999px; background: var(--ad-primary); border: 2px solid var(--ad-surface); }
 
 /* Printing the submission slip: only the slip is printed, no sidebar or header. */
 .cs-print-slip { display: none; }
@@ -139,6 +119,6 @@
 
 /* 4-phase tracker */
 .cs-theme .cs-phase { display: inline-flex; width: 2rem; height: 2rem; align-items: center; justify-content: center; border-radius: 999px;
-  font-size: 0.8125rem; font-weight: 700; border: 2px solid var(--cs-border-strong); color: var(--cs-muted); background: var(--cs-surface); }
-.cs-theme .cs-phase.is-current { border-color: var(--cs-primary); color: var(--cs-primary); }
-.cs-theme .cs-phase.is-done { background: var(--cs-success); border-color: var(--cs-success); color: var(--cs-on-primary); }
+  font-size: 0.8125rem; font-weight: 700; border: 2px solid var(--ad-border-strong); color: var(--ad-muted); background: var(--ad-surface); }
+.cs-theme .cs-phase.is-current { border-color: var(--ad-primary); color: var(--ad-link); }
+.cs-theme .cs-phase.is-done { background: var(--ad-success-solid); border-color: var(--ad-success-solid); color: #ffffff; }

@@ -8,7 +8,8 @@ const { newPublicRef } = require('../utils/publicRef');
 
 const { STATUSES, ACTIVE, FINAL } = WF;
 /** How a status is shown in the UI (all statuses are already plain language). */
-const LABELS = {};
+/** Display labels. The stored status stays 'Declined' (migration 009); it is shown as "Rejected". */
+const LABELS = { Declined: 'Rejected' };
 /** Sensitive applicant fields stored encrypted (RA 10173). Legal name and email stay readable for search. */
 const ENCRYPTED = new Set(['date_of_birth', 'contact_number', 'house_unit', 'street', 'subdivision', 'barangay', 'province',
   'postal_code', 'id_type', 'id_type_other', 'living_conditions', 'caregiving_experience', 'adoptee_dob', 'adoptee_relationship',
@@ -62,8 +63,12 @@ module.exports = {
     if (status) { where.push('a.status = ?'); params.push(status); }
     if (statuses?.length) { where.push('a.status IN (?)'); params.push(statuses); }
     // Unassigned also covers records assigned to a deactivated account.
-    if (assigned === 'none') where.push('(a.assigned_staff_id IS NULL OR asu.is_active = FALSE)');
-    else if (assigned) { where.push('a.assigned_staff_id = ? AND asu.is_active = TRUE'); params.push(Number(assigned)); }
+    // Assignment filters use the one assignment service (own, backup and temporary rows, and the child's case worker).
+    if (assigned) {
+      const ids = [...await require('../services/assignment').recordIdsFor(pool, 'adoption_application', assigned === 'none' ? null : Number(assigned))].map(Number);
+      if (assigned === 'none') { if (ids.length) { where.push('a.application_id NOT IN (?)'); params.push(ids); } }
+      else if (ids.length) { where.push('a.application_id IN (?)'); params.push(ids); } else where.push('1 = 0');
+    }
     if (search && referenceSearchOnly) {
       // Staff: by reference only, so a name search can't reveal who applied.
       where.push('a.reference_no LIKE ?');

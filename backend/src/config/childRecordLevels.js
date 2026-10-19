@@ -43,7 +43,6 @@ const ROW_FIELDS = {
     'cdclaa_verified_at', 'cdclaa_number', 'cdclaa_date', 'public_ref', 'has_health_record', 'discharge_history'],
 };
 
-const EMERGENCY_REASONS = ['Medical emergency', 'Missing or injured child', 'Covering the shift', 'Other'];
 const ASSIGNMENT_TYPES = { primary: 'Primary case worker', backup: 'Backup', temporary: 'Temporary cover' };
 const MONITORING_ORGS = ['NACC', 'DSWD', 'Other'];
 const PRIVACY_TOPICS = ['Someone saw a record they should not have', 'A record was shared or printed', 'Wrong access or a missing lock', 'Other'];
@@ -52,12 +51,12 @@ const DENIED = 'ACCESS DENIED – You are not authorized to view this informatio
 /** Settings (tbl_settings), with defaults and limits. Changed only by Admin; every change logged with old and new values. */
 const SETTINGS = {
   child_access_mode: { def: 'log_only', options: ['log_only', 'enforce'], label: 'Rollout mode' },
-  child_initial_access_days: { def: 7, min: 1, max: 30, label: 'Initial access (days)' },
-  child_emergency_minutes: { def: 30, min: 5, max: 120, label: 'Emergency access (minutes)' },
-  child_emergency_uses_per_day: { def: 3, min: 1, max: 20, label: 'Emergency uses per day' },
   child_care_card_visibility: { def: 'children_duty', options: ['children_duty', 'on_shift'], label: 'Care card visible to' },
   child_care_card_review_days: { def: 90, min: 7, max: 365, label: 'Care card review reminder (days)' },
   child_default_case_worker_id: { def: '', label: 'Default case worker' },
+  // Admission (migration 036)
+  admission_required_documents: { def: 'referral_letter,birth_certificate', label: 'Required admission documents', list: true },
+  admission_stale_draft_days: { def: 30, min: 3, max: 365, label: 'Unfinished admission flagged after (days)' },
 };
 
-module.exports = { LEVELS, RANK, FIELDS, SECTIONS, ROW_FIELDS, EMERGENCY_REASONS, ASSIGNMENT_TYPES, MONITORING_ORGS, PRIVACY_TOPICS, DENIED, SETTINGS };
+module.exports = { LEVELS, RANK, FIELDS, SECTIONS, ROW_FIELDS, ASSIGNMENT_TYPES, MONITORING_ORGS, PRIVACY_TOPICS, DENIED, SETTINGS };

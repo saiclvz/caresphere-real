@@ -364,7 +364,7 @@ function CopyModal({ mode, from, weekStart, days, onClose, onDone }) {
             <div className="flex flex-wrap gap-1.5">
               {[...days, ...days.map((d) => addDays(d, 7))].map((d) => { const iso = isoDate(d); if (iso === from) return null; return (
                 <button key={iso} type="button" aria-pressed={toDates.includes(iso)} onClick={() => { setToDates((x) => (x.includes(iso) ? x.filter((y) => y !== iso) : [...x, iso])); r.setPreview(null); }}
-                  className={`rounded-full px-3 py-1 text-xs font-medium ${toDates.includes(iso) ? 'bg-navy-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{dayLabel(d)}</button>); })}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${toDates.includes(iso) ? 'bg-brand text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{dayLabel(d)}</button>); })}
             </div>
           </fieldset>
         )}
@@ -406,7 +406,7 @@ function WeekView() {
   };
   const remove = async () => {
     setBusy(true);
-    try { await api(`/schedules/${deleting.schedule_id}`, { method: 'DELETE' }); setDeleting(null); toast('Shift deleted.'); reload(); }
+    try { await api(`/schedules/${deleting.schedule_id}`, { method: 'DELETE' }); setDeleting(null); toast('Shift removed. It is kept in the archive.'); reload(); }
     catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   };
 
@@ -458,8 +458,8 @@ function WeekView() {
                             {s.staff_inactive ? 'Account deactivated' : s.not_staff ? 'Not a Staff account' : 'Area not in the list'}</p>
                         )}
                         <div className="mt-1 flex gap-1 opacity-60 group-hover:opacity-100 focus-within:opacity-100">
-                          <button type="button" className="rounded p-0.5 hover:bg-white" aria-label={`Edit ${s.full_name}'s shift`} onClick={() => setSingle(toRow(s))}><Pencil className="h-3 w-3" /></button>
-                          <button type="button" className="rounded p-0.5 text-red-600 hover:bg-white" aria-label={`Delete ${s.full_name}'s shift`} onClick={() => setDeleting(s)}><Trash2 className="h-3 w-3" /></button>
+                          <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand hover:bg-white" aria-label={`Edit ${s.full_name}'s shift`} onClick={() => setSingle(toRow(s))}><Pencil className="h-3 w-3" /></button>
+                          <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand text-red-600 hover:bg-white" aria-label={`Delete ${s.full_name}'s shift`} onClick={() => setDeleting(s)}><Trash2 className="h-3 w-3" /></button>
                         </div>
                       </li>
                     ))}
@@ -478,7 +478,7 @@ function WeekView() {
         onClose={() => setDayEdit(null)} onSaved={saved} onCopy={(dt) => { setDayEdit(null); setCopy({ mode: 'day', from: dt }); }} />}
       {bulk && <BulkAddModal days={days} staff={staff} areas={areas} initialDate={bulk.date} onClose={() => setBulk(null)} onDone={batchDone} />}
       {copy && <CopyModal mode={copy.mode} from={copy.from} weekStart={from} days={days} onClose={() => setCopy(null)} onDone={batchDone} />}
-      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={busy} title="Delete shift?" message={`${deleting?.full_name}'s shift will be removed.`} />
+      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={busy} title="Remove shift?" confirmLabel="Remove" message={`${deleting?.full_name}'s shift will be removed from the schedule. It is kept in the archive.`} />
     </>
   );
 }

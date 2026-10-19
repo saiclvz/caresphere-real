@@ -209,7 +209,7 @@ export default function Meals() {
 
   const remove = async () => {
     setSaving(true);
-    try { await api(`/meals/${deleting.meal_id}`, { method: 'DELETE' }); setDeleting(null); toast('Meal deleted.'); reload(); }
+    try { await api(`/meals/${deleting.meal_id}`, { method: 'DELETE' }); setDeleting(null); toast('Meal removed. It is kept in the archive.'); reload(); }
     catch (err) { toast(err.message, 'error'); } finally { setSaving(false); }
   };
 
@@ -234,7 +234,7 @@ export default function Meals() {
           <table className="w-full min-w-[900px] table-fixed border-collapse">
             <thead>
               <tr>
-                <th className="w-24 border-b border-slate-100 p-3" />
+                <th scope="col" className="w-24 border-b border-slate-100 p-3"><span className="sr-only">Meal</span></th>
                 {days.map((d) => {
                   const key = isoDate(d);
                   return (
@@ -275,8 +275,8 @@ export default function Meals() {
       )}
 
       {form && <MealModal initial={form} days={days} knownTags={knownTags} onClose={() => setForm(null)} onSaved={saved} />}
-      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={saving} title="Delete this meal?" confirmLabel="Yes, delete"
-        message={deleting ? `${deleting.meal_type} on ${longDay(new Date(`${deleting.scheduled_date}T00:00:00`))}: ${deleting.menu_description}. This can't be undone.` : ''} />
+      <ConfirmModal open={Boolean(deleting)} onClose={() => setDeleting(null)} onConfirm={remove} loading={saving} title="Remove this meal?" confirmLabel="Yes, remove"
+        message={deleting ? `${deleting.meal_type} on ${longDay(new Date(`${deleting.scheduled_date}T00:00:00`))}: ${deleting.menu_description}. It leaves the meal plan and is kept in the archive.` : ''} />
     </>
   );
 }

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, GraduationCap, ImagePlus, KeyRound, Lock, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, GraduationCap, ImagePlus, KeyRound, Lock, Pencil, Trash2 } from 'lucide-react';
 import useApi from '../hooks/useApi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -8,8 +8,8 @@ import { useApp } from '../context/AppContext';
 import AuthImage from '../components/AuthImage';
 import ProtectedRecord from '../components/ProtectedRecord';
 import ChildForm from './ChildForm';
-import { STATUS_TONE } from './Children';
-import { Badge, Button, Card, ConfirmModal, ErrorNote, Field, Notice, Skeleton, Spinner } from '../components/ui';
+import { STATUS_TONE, CHILD_STATUS_LABEL } from './Children';
+import { Badge, Button, Card, ConfirmModal, ErrorNote, Field, Notice, Skeleton, Spinner, TAB_ROW, tabClass } from '../components/ui';
 import { formatDate, formatDateTime } from '../lib/format';
 import { MB, checkFile } from '../lib/files';
 import PhotoCropDialog from '../components/PhotoCropDialog';
@@ -102,7 +102,8 @@ export default function ChildDetail() {
   const [params, setParams] = useSearchParams();
   const { data, loading, error, reload } = useApi(`/children/${id}`);
   const [editing, setEditing] = useState(false);
-  const [confirm, setConfirm] = useState(null); // 'delete' | 'photo' | 'intake'
+  const [confirm, setConfirm] = useState(null); // 'delete' (archive) | 'photo'
+  const [archiveReason, setArchiveReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [cropFile, setCropFile] = useState(null);
   const [requesting, setRequesting] = useState(false);
@@ -165,20 +166,20 @@ export default function ChildDetail() {
     setBusy(true);
     try {
       if (confirm === 'delete') {
-        await api(`/children/${child.child_id}`, { method: 'DELETE' });
-        toast('Child record deleted.');
+        await api(`/children/${child.child_id}`, { method: 'DELETE', body: { reason: archiveReason.trim() } });
+        toast('Child record archived. Nothing was deleted.');
         navigate('/children');
         return;
       }
-      if (confirm === 'intake') {
-        const res = await api(`/children/${child.child_id}/intake-complete`, { method: 'POST' });
-        toast(res.message); await reload();
-      } else {
-        await api(`/children/${child.child_id}/photo`, { method: 'DELETE' });
-        await reload();
-        toast('Photo removed.');
-      }
+      await api(`/children/${child.child_id}/photo`, { method: 'DELETE' });
+      await reload();
+      toast('Photo removed.');
     } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); setConfirm(null); }
+  };
+  const restore = async () => {
+    setBusy(true);
+    try { await api(`/children/${child.child_id}/restore`, { method: 'POST', body: {} }); toast('Child record restored.'); await reload(); }
+    catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   };
   const lockedPanel = (k, title) => (
     <LockedPlaceholder title={title} message={reasonFor(k)} pending={access.pending_request}
@@ -196,7 +197,7 @@ export default function ChildDetail() {
             <h1 className="text-2xl font-semibold text-navy-900">{name}</h1>
             <p className="font-mono text-sm text-slate-500">{child.child_id}</p>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <Badge tone={STATUS_TONE[child.status]}>{child.status}</Badge>
+              <Badge tone={STATUS_TONE[child.status]}>{CHILD_STATUS_LABEL[child.status] || child.status}</Badge>
               {child.transition_flag && <Badge tone="amber"><GraduationCap className="h-3 w-3" aria-hidden /> Transition Review (18+){child.transition_status ? `: ${child.transition_status}` : ''}</Badge>}
               {child.is_public && <Badge tone="blue">Shown on donor portal</Badge>}
               {child.available_for_adoption && <Badge tone="green">Available for adoption</Badge>}
@@ -220,14 +221,14 @@ export default function ChildDetail() {
               )}
               {can.edit_photo && child.has_photo && <Button size="sm" variant="ghost" onClick={() => setConfirm('photo')}>Remove photo</Button>}
               {coreShown && <Button size="sm" variant="secondary" onClick={() => setEditing(true)}><Pencil className="h-3.5 w-3.5" aria-hidden /> Edit</Button>}
-              {isAdmin && <Button size="sm" variant="danger" onClick={() => setConfirm('delete')}><Trash2 className="h-3.5 w-3.5" aria-hidden /> Delete</Button>}
+              {isAdmin && <Button size="sm" variant="danger" onClick={() => { setArchiveReason(''); setConfirm('delete'); }}><Trash2 className="h-3.5 w-3.5" aria-hidden /> Archive</Button>}
             </div>
           )}
         </div>
-        {access.initial && (
-          <Notice tone="info" className="mt-4" title="Temporary access">
-            You registered this child. You can open the core record until {formatDateTime(access.initial.ends_at)} or until a case worker is assigned. Health, adoption and transition records are not included.
-            <div className="mt-2"><Button size="sm" variant="secondary" onClick={() => setConfirm('intake')}><CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Mark intake complete</Button></div>
+        {child.archived_at && (
+          <Notice tone="warning" className="mt-4" title="Archived record (read-only)">
+            Archived {formatDateTime(child.archived_at)}{child.archive_reason ? `: ${child.archive_reason}` : ''}. It is kept with all its history and hidden from the Children list.
+            {isAdmin && <div className="mt-2"><Button size="sm" variant="secondary" loading={busy} onClick={restore}>Restore record</Button></div>}
           </Notice>
         )}
         {!isAdmin && access.chip === 'directory' && (
@@ -240,11 +241,11 @@ export default function ChildDetail() {
         )}
       </Card>
 
-      <div role="tablist" aria-label="Child record sections" className="relative mb-4 flex gap-1 overflow-x-auto border-b border-slate-200" onKeyDown={onTabKey}>
+      <div role="tablist" aria-label="Child record sections" className={TAB_ROW} onKeyDown={onTabKey}>
         {tabs.map(([k, l]) => (
           <button key={k} ref={(el) => { tabRefs.current[k] = el; }} type="button" role="tab" id={`tab-${k}`} aria-selected={tab === k} aria-controls={`panel-${k}`} tabIndex={tab === k ? 0 : -1}
             onClick={() => pickTab(k)}
-            className={`-mb-px inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${tab === k ? 'border-brand text-navy-900' : 'border-transparent text-slate-500 hover:text-navy-900'}`}>
+            className={tabClass(tab === k)}>
             {locked[k] && <Lock className="h-3.5 w-3.5" aria-hidden />}{l}{locked[k] && <span className="sr-only"> (locked)</span>}
           </button>
         ))}
@@ -258,7 +259,7 @@ export default function ChildDetail() {
               <dl className="grid grid-cols-2 gap-4">
                 <Info label="Case number"><span className="font-mono">{child.child_id}</span></Info>
                 <Info label="Name">{child.display_name}</Info>
-                <Info label="Status">{child.status}</Info>
+                <Info label="Status">{CHILD_STATUS_LABEL[child.status] || child.status}</Info>
                 {isAdmin ? <Info label="Case worker">{child.case_worker?.name || 'Not assigned'}</Info> : child.case_worker?.you ? <Info label="Case worker">You</Info> : null}
                 <Info label="Date added">{child.created_at ? formatDate(child.created_at) : '-'}</Info>
                 <Info label="Last activity">{child.updated_at ? formatDateTime(child.updated_at) : '-'}</Info>
@@ -306,11 +307,18 @@ export default function ChildDetail() {
       {cropFile && <PhotoCropDialog file={cropFile} onCancel={() => setCropFile(null)} onConfirm={saveCropped} />}
       {requesting && <RequestAccessModal childId={child.child_id} onClose={() => setRequesting(false)} onDone={(m) => { setRequesting(false); toast(m); reload(); }} />}
       <ConfirmModal open={!!confirm} onClose={() => setConfirm(null)} loading={busy} onConfirm={doConfirm}
-        title={confirm === 'delete' ? 'Delete child record?' : confirm === 'intake' ? 'Mark intake complete?' : 'Remove photo?'}
-        confirmLabel={confirm === 'delete' ? 'Delete' : confirm === 'intake' ? 'Mark complete' : 'Remove'}
+        title={confirm === 'delete' ? 'Archive child record?' : 'Remove photo?'}
+        confirmLabel={confirm === 'delete' ? 'Archive' : 'Remove'}
+        confirmDisabled={confirm === 'delete' && archiveReason.trim().length < 5}
         message={confirm === 'delete'
-          ? `Are you sure you want to delete ${name}'s record? This cannot be undone. Records with discharge, adoption or access history cannot be deleted.`
-          : confirm === 'intake' ? 'Your temporary access ends now and you will see the directory only.' : 'Are you sure you want to remove this profile photo?'} />
+          ? `${name}'s record will be archived: nothing is deleted, it leaves the Children list, and an Admin can restore it. Use this for a duplicate or a record created by mistake. Records with discharge, adoption or access history can't be archived; change the status instead.`
+          : 'The photo is removed from the profile. The file is kept in the archive.'}>
+        {confirm === 'delete' && (
+          <label className="mt-3 block text-sm font-medium text-navy-900">Reason (required)
+            <textarea className="input mt-1" rows={2} maxLength={500} value={archiveReason} onChange={(e) => setArchiveReason(e.target.value)} placeholder="For example: Duplicate of CS-2026-0003" />
+          </label>
+        )}
+      </ConfirmModal>
     </>
   );
 }

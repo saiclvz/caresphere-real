@@ -45,7 +45,8 @@ exports.update = async (req, res) => {
 
 exports.remove = async (req, res) => {
   if (!(await Meal.findById(req.params.id))) throw new HttpError(404, 'Meal not found.');
-  await Meal.remove(req.params.id);
-  await logActivity(req, 'DELETE_MEAL', `Meal #${req.params.id}`);
-  res.json({ success: true, message: 'Meal deleted.' });
+  const reason = String(req.body?.reason || req.query.reason || '').trim().slice(0, 500) || 'Removed from the meal plan';
+  await Meal.archive(req.params.id, req.user.user_id, reason);
+  await logActivity(req, 'DELETE_MEAL (archived)', `Meal #${req.params.id}`);
+  res.json({ success: true, message: 'Meal removed. It is kept in the archive.' });
 };

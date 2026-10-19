@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { CheckCircle2, Download, Plus, Printer, X } from 'lucide-react';
 import useApi from '../hooks/useApi';
-import { api, download } from '../api/client';
+import { api, downloadSigned, signedUrl } from '../api/client';
 import { Button, ErrorNote, Field, Modal, Spinner } from './ui';
 import { formatDateTime } from '../lib/format';
 import { useAuth } from '../context/AuthContext';
@@ -129,13 +129,13 @@ function ItemsPicker({ items, setItems, errors, inventory }) {
  */
 export async function printReceipt(donationId, number) {
   const name = `CareSphere-Acknowledgment-${number || donationId}.pdf`;
-  const res = await api(`/donations/${donationId}/receipt`, { raw: true });
+  const res = await api(await signedUrl(`/donations/${donationId}/receipt/link`), { raw: true });
   const url = URL.createObjectURL(await res.blob());
   const frame = document.createElement('iframe');
   frame.style.position = 'fixed'; frame.style.width = '0'; frame.style.height = '0'; frame.style.border = '0';
   frame.src = url;
   frame.onload = () => {
-    try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch { download(`/donations/${donationId}/receipt`, name); }
+    try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch { downloadSigned(`/donations/${donationId}/receipt/link`, name); }
     setTimeout(() => { frame.remove(); URL.revokeObjectURL(url); }, 60000);
   };
   document.body.appendChild(frame);
@@ -161,7 +161,7 @@ function Saved({ donation: d0, onClose }) {
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-xs text-slate-500">Receipt code</p><p className="break-all font-mono text-sm text-navy-900">{d.qr_receipt_code}</p></div>
           <div className="flex flex-wrap gap-2">
             <Button loading={busy === 'print'} onClick={run('print', () => printReceipt(d.donation_id, d.donation_no))}><Printer className="h-4 w-4" aria-hidden /> Print acknowledgment</Button>
-            <Button variant="secondary" loading={busy === 'pdf'} onClick={run('pdf', () => download(`/donations/${d.donation_id}/receipt`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`))}><Download className="h-4 w-4" aria-hidden /> Download PDF</Button>
+            <Button variant="secondary" loading={busy === 'pdf'} onClick={run('pdf', () => downloadSigned(`/donations/${d.donation_id}/receipt/link`, `CareSphere-Acknowledgment-${d.donation_no}.pdf`))}><Download className="h-4 w-4" aria-hidden /> Download PDF</Button>
             <Button variant="ghost" className="ml-auto" onClick={() => onClose(d)}>Done</Button>
           </div>
         </>

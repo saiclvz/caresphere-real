@@ -14,7 +14,7 @@ export function LockedPlaceholder({ title, message = CORE_LOCKED, onRequest, pen
   return (
     <Card className="p-6">
       <div className="flex flex-col items-center text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-navy-900"><Lock className="h-5 w-5 text-white" aria-hidden /></div>
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand"><Lock className="h-5 w-5 text-white" aria-hidden /></div>
         <p className="mt-3 font-semibold text-navy-900">{title}</p>
         <p className="mt-1 max-w-md text-sm text-slate-600">{message}</p>
         {pending && <p className="mt-2 text-xs text-slate-500">Your access request from {formatDateTime(pending.created_at)} is waiting for an Admin.</p>}
@@ -128,43 +128,14 @@ function DecideRequest({ request, onClose, onDone }) {
   );
 }
 
-export function ReviewEmergency({ item, onClose, onDone }) {
-  const [f, setF] = useState({ result: '', note: '' });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const save = async () => {
-    setBusy(true); setError(null);
-    try { await api(`/emergency-access/${item.emergency_id}/review`, { method: 'POST', body: f }); onDone(); }
-    catch (err) { setError(err); } finally { setBusy(false); }
-  };
-  const errs = error?.details?.errors || {};
-  return (
-    <Modal open onClose={onClose} title="Review emergency access" footer={<><Button variant="secondary" onClick={onClose}>Cancel</Button><Button loading={busy} onClick={save}>Save review</Button></>}>
-      <div className="space-y-3 text-sm">
-        <p><span className="font-mono">{item.child_id}</span> · {item.user_name} · {item.reason} · {formatDateTime(item.started_at)}</p>
-        {item.note && <p className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3">{item.note}</p>}
-        <ErrorNote error={error && !Object.keys(errs).length ? error : null} />
-        <fieldset aria-label="Result" className="space-y-1">
-          {['Justified', 'Not justified'].map((k) => <label key={k} className="flex items-center gap-2"><input type="radio" name="result" className="accent-brand" checked={f.result === k} onChange={() => setF({ ...f, result: k })} /> {k}</label>)}
-          {errs.result && <p className="text-xs text-red-600">{errs.result}</p>}
-        </fieldset>
-        <Field label="Note" required error={errs.note} hint={f.result === 'Not justified' ? 'Not justified is flagged in the Audit log.' : undefined}>
-          <textarea className="input" rows={2} maxLength={500} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
-        </Field>
-      </div>
-    </Modal>
-  );
-}
-
 const END_REASON = { reassigned: 'Replaced', unassigned: 'Ended by Admin', cover_ended: 'Cover ended', account_deactivated: 'Account deactivated', duty_removed: 'Duty removed', ended: 'Ended' };
 
-/** Access tab (Admin and the case worker): assignments with dates, requests, emergency access, access history. */
+/** Access tab (Admin only): assignments with dates, requests, emergency access, access history. */
 export function AccessTab({ childId, onChanged }) {
   const { toast } = useApp();
   const { data, loading, error, reload } = useApi(`/children/${enc(childId)}/access`);
   const [adding, setAdding] = useState(false);
   const [deciding, setDeciding] = useState(null);
-  const [reviewing, setReviewing] = useState(null);
   const [changing, setChanging] = useState(null);
   if (loading && !data) return <Card className="p-5"><Skeleton rows={5} /></Card>;
   if (error) return <ErrorNote error={error} onRetry={reload} />;
@@ -237,18 +208,17 @@ export function AccessTab({ childId, onChanged }) {
         )}
       </Card>
 
-      {/* Emergency access was removed; earlier uses (if any) stay listed as history and can still be reviewed. */}
+      {/* Emergency access was removed; earlier uses (if any) stay listed as read-only history. */}
       {d.emergency.length > 0 && <Card>
         <h2 className="flex items-center gap-2 px-4 pt-4 font-semibold text-navy-900"><AlertTriangle className="h-4 w-4 text-red-600" aria-hidden /> Emergency access (earlier uses)</h2>
         {(
           <Table label="Emergency access">
-            <thead className="bg-slate-50"><tr><th className="th">When</th><th className="th">Staff</th><th className="th">Reason</th><th className="th">Review</th>{manage && <th className="th"><span className="sr-only">Actions</span></th>}</tr></thead>
+            <thead className="bg-slate-50"><tr><th className="th">When</th><th className="th">Staff</th><th className="th">Reason</th><th className="th">Review</th></tr></thead>
             <tbody className="divide-y divide-slate-100">{d.emergency.map((e) => (
               <tr key={e.emergency_id}>
-                <td className="td whitespace-nowrap text-xs">{formatDateTime(e.started_at)}{e.active && <Badge tone="red" className="ml-1">Open</Badge>}</td><td className="td">{e.user_name}</td>
+                <td className="td whitespace-nowrap text-xs">{formatDateTime(e.started_at)}</td><td className="td">{e.user_name}</td>
                 <td className="td text-sm">{e.reason}{e.note ? `: ${e.note}` : ''}</td>
-                <td className="td text-sm">{e.result ? <><Badge tone={e.result === 'Justified' ? 'green' : 'red'}>{e.result}</Badge> {e.review_note}</> : <Badge tone="amber">To review</Badge>}</td>
-                {manage && <td className="td text-right">{!e.result && <Button size="sm" onClick={() => setReviewing(e)}>Review<span className="sr-only"> emergency access by {e.user_name}</span></Button>}</td>}
+                <td className="td text-sm">{e.result ? <><Badge tone={e.result === 'Justified' ? 'green' : 'red'}>{e.result}</Badge> {e.review_note}</> : <span className="text-slate-500">Not reviewed</span>}</td>
               </tr>))}</tbody>
           </Table>
         )}
@@ -274,7 +244,6 @@ export function AccessTab({ childId, onChanged }) {
         setAdding(false); toast('Assignment saved.'); reload(); onChanged?.();
       }} />}
       {deciding && <DecideRequest request={deciding} onClose={() => setDeciding(null)} onDone={() => { setDeciding(null); toast('Decision saved.'); reload(); onChanged?.(); }} />}
-      {reviewing && <ReviewEmergency item={reviewing} onClose={() => setReviewing(null)} onDone={() => { setReviewing(null); toast('Review saved.'); reload(); }} />}
     </div>
   );
 }

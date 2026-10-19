@@ -3,7 +3,7 @@ const env = require('../config/env');
 const User = require('../models/userModel');
 const HttpError = require('../utils/HttpError');
 const { requireFields, isEmail, oneOf, toBool } = require('../utils/validate');
-const { logActivity, logActivityWith } = require('../utils/audit');
+const { logActivity, logActivityWith, logChange, diff } = require('../utils/audit');
 const { withTransaction } = require('../config/db');
 const Notify = require('../services/notifications');
 const { DUTIES, DUTY_KEYS, DEFAULT_DUTIES } = require('../config/staffDuties');
@@ -24,6 +24,8 @@ function cleanDuties(raw) {
 async function changeActive(req, user, active) {
   await withTransaction(async (conn) => {
     await User.setActive(user.user_id, active, conn);
+    // Deactivation ends every session, unlock session and protected-record grant of the account at once.
+    if (!active) await conn.query('UPDATE tbl_users SET tokens_valid_after = NOW() WHERE user_id = ?', [user.user_id]);
     await logActivityWith(conn, req, active ? 'REACTIVATE_USER' : 'DEACTIVATE_USER', `User #${user.user_id} (${user.email})`);
     await Notify.toAdmins(conn, 'admin_account_changed', { params: { role: user.role, change: active ? 'reactivated' : 'deactivated', id: user.user_id }, exceptUserId: req.user.user_id });
     if (user.role === 'Donor') await Notify.emit(conn, active ? 'account_reactivated' : 'account_deactivated', { userId: user.user_id });
@@ -36,6 +38,7 @@ const { problem: passwordProblem } = require('../utils/passwordPolicy');
 const mfa = require('../services/mfaService');
 
 const ROLES = ['Admin', 'Staff', 'Donor'];
+const TEMP_PASSWORD_HOURS = 72;
 
 /** Validates a role. "Applicant" was merged into Donor and is rejected with a clear message. */
 function cleanRole(value) {
@@ -70,7 +73,9 @@ exports.create = async (req, res) => {
   const roleId = await User.roleId(role);
   const id = await withTransaction(async (conn) => {
     const newId = await User.create({ full_name: fullName, email, password_hash: hash, role_id: roleId }, conn);
-    await logActivityWith(conn, req, `CREATE_USER (${role})`, `User #${newId}`);
+    // The password an Admin types is temporary: one sign-in, then the user must choose their own (within 72 hours).
+    await conn.query('UPDATE tbl_users SET must_change_password = TRUE, temp_password_expires_at = NOW() + INTERVAL ? HOUR WHERE user_id = ?', [TEMP_PASSWORD_HOURS, newId]);
+    await logActivityWith(conn, req, `CREATE_USER (${role}, temporary password)`, `User #${newId}`);
     // A new Staff account gets the duties chosen in the form (every duty if none were sent).
     if (role === 'Staff') {
       const duties = req.body.duties === undefined ? DEFAULT_DUTIES : cleanDuties(req.body.duties);
@@ -129,6 +134,14 @@ exports.update = async (req, res) => {
 
   if (Object.keys(fields).length) {
     await User.update(id, fields);
+    // A password set by an Admin is temporary; a role change or a new password ends every session of that account
+    // (the user signs in again with the new rights).
+    if (fields.password_hash) await require('../config/db').pool.query('UPDATE tbl_users SET must_change_password = TRUE, temp_password_expires_at = NOW() + INTERVAL ? HOUR WHERE user_id = ?', [TEMP_PASSWORD_HOURS, id]);
+    if (fields.password_hash || fields.role_id !== undefined) {
+      await require('../config/db').pool.query('UPDATE tbl_users SET tokens_valid_after = NOW() WHERE user_id = ?', [id]);
+      await require('../services/unlockService').endForUser(id).catch(() => {});
+      await require('../services/protectedRecords').revokeGrantsForUser(id).catch(() => {});
+    }
     // Becoming Staff starts with every duty (Admin can narrow them); leaving Staff clears them.
     if (fields.role_id !== undefined) {
       const newRole = cleanRole(req.body.role);
@@ -144,7 +157,11 @@ exports.update = async (req, res) => {
       await mfa.reset(id);
       await logActivity(req, 'MFA_CLEARED (no longer an administrator)', `User #${id}`);
     }
-    await logActivity(req, `UPDATE_USER (${Object.keys(fields).filter((k) => k !== 'password_hash').join(', ') || 'password'})`, `User #${id}`);
+    // Changed fields with previous and new values; the password is only "changed".
+    const after = { ...fields };
+    if (after.role_id !== undefined) { after.role = cleanRole(req.body.role); delete after.role_id; }
+    const changes = diff({ ...user, password_hash: 'x' }, after, { sensitive: ['password_hash'], labels: { full_name: 'Name', email: 'Email', role: 'Role', password_hash: 'Password' } });
+    await logChange(null, req, `UPDATE_USER (${Object.keys(fields).filter((k) => k !== 'password_hash').join(', ') || 'password'})`, `User #${id}`, { changes });
   }
   if (activeChanged) await changeActive(req, user, nextActive);
   res.json({ success: true, data: await User.findById(id) });
@@ -209,7 +226,10 @@ exports.setDuties = async (req, res) => {
   const before = user.duties || [];
   await withTransaction(async (conn) => {
     await User.setDuties(conn, id, duties, req.user.user_id);
-    await logActivityWith(conn, req, `UPDATE_DUTIES (${before.join(', ') || 'none'} -> ${duties.join(', ') || 'none'})`, `User #${id}`);
+    // Duties are read fresh on every request; any removed duty also ends open unlock sessions at once.
+    if (before.some((d) => !duties.includes(d))) await require('../services/unlockService').endForUser(id).catch(() => {});
+    await logChange(conn, req, `UPDATE_DUTIES (${before.join(', ') || 'none'} -> ${duties.join(', ') || 'none'})`, `User #${id}`,
+      { changes: [{ field: 'Duties', old: before.join(', ') || 'none', new: duties.join(', ') || 'none', sensitive: false }] });
     await Notify.emit(conn, 'duties_changed', { userId: id, params: { duties: duties.map((d) => DUTIES[d].label).join(', ') || 'none' } });
     // Losing a records duty: open unlock sessions end and the affected records are marked "needs reassignment".
     const lost = before.filter((d) => !duties.includes(d) && ['children', 'health', 'adoption', 'transition'].includes(d));

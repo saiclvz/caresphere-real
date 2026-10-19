@@ -1,7 +1,7 @@
 const { pool, withTransaction } = require('../config/db');
 const Adoption = require('../models/adoptionModel');
 const HttpError = require('../utils/HttpError');
-const { saveUpload, readUpload, deleteUpload, verifyUpload, MB } = require('../utils/files');
+const { saveUpload, readUpload, discardUnsavedUpload, verifyUpload, MB } = require('../utils/files');
 const { toInt, localToday } = require('../utils/validate');
 const { logActivity, logActivityWith, logSecurityEvent } = require('../utils/audit');
 const {
@@ -98,7 +98,7 @@ const assignmentOf = (app) => ({
  */
 function lockedView(req, app, access) {
   return {
-    application_id: app.application_id, reference_no: app.reference_no, status: app.status, status_label: app.status,
+    application_id: app.application_id, reference_no: app.reference_no, status: app.status, status_label: Adoption.LABELS[app.status] || app.status,
     submitted_at: app.submitted_at, applicant_masked: S.maskName(app.legal_name),
     ...assignmentOf(app), assignment_flag: undefined,
     locked: true,
@@ -128,7 +128,7 @@ async function fullApplication(req, app) {
   const base = {
     application_id: id, reference_no: app.reference_no, application_type: app.application_type,
     application_type_label: APPLICATION_TYPES[app.application_type]?.label || app.application_type,
-    status: app.status, status_label: forDonor ? WF.donorLabel(app.status) : app.status, stage: stageInfo(app.status), phases: WF.PHASES,
+    status: app.status, status_label: forDonor ? WF.donorLabel(app.status) : (Adoption.LABELS[app.status] || app.status), stage: stageInfo(app.status), phases: WF.PHASES,
     current_page: app.current_page, is_legacy: !!app.is_legacy, submitted_at: app.submitted_at, created_at: app.created_at,
     updated_at: app.updated_at, withdrawn_at: app.withdrawn_at, consented_at: app.consented_at,
     // Applicants see the child only once the home discloses it (trial custody); before that only a notice.
@@ -539,15 +539,14 @@ exports.uploadDocument = async (req, res) => {
     }
   }
   const saved = saveUpload(req.body?.file, { ...DOC_OPTS, label: def.label });
-  let replacedKeys = [];
   try {
-    replacedKeys = await withTransaction(async (conn) => {
-      let keys = [];
+    await withTransaction(async (conn) => {
       if (!def.multiple && existing.length) {
         if (app.status === 'Draft' && !IdScan.SIDE_OF[docType]) {
-          const [old] = await conn.query("SELECT storage_key FROM tbl_adoption_documents WHERE application_id = ? AND doc_type = ? AND status = 'Uploaded'", [app.application_id, docType]);
-          keys = old.map((o) => o.storage_key);
-          await conn.query("DELETE FROM tbl_adoption_documents WHERE application_id = ? AND doc_type = ? AND status = 'Uploaded'", [app.application_id, docType]);
+          // Draft: the old copy is kept (file and row), marked Replaced and hidden from the applicant's list.
+          await conn.query(
+            `UPDATE tbl_adoption_documents SET status = 'Replaced', archived_at = NOW(), archived_by = ?, archive_reason = 'Replaced while the application was a draft'
+              WHERE application_id = ? AND doc_type = ? AND status = 'Uploaded' AND archived_at IS NULL`, [req.user.user_id, app.application_id, docType]);
         } else {
           // After submitting (and for ID photos, which have scan history), the old file stays on record, marked Replaced.
           await conn.query("UPDATE tbl_adoption_documents SET status = 'Replaced' WHERE application_id = ? AND doc_type = ? AND status = 'Uploaded'", [app.application_id, docType]);
@@ -571,13 +570,11 @@ exports.uploadDocument = async (req, res) => {
         await Notify.toAdmins(conn, 'admin_documents_uploaded', common);
         if (app.assigned_staff_id && app.assigned_staff_active) await Notify.emit(conn, 'staff_documents_uploaded', { ...common, userId: app.assigned_staff_id });
       }
-      return keys;
     });
   } catch (err) {
-    deleteUpload(saved.storage_key);
+    discardUnsavedUpload(saved.storage_key);
     throw err;
   }
-  replacedKeys.forEach(deleteUpload);
   await logActivity(req, `UPLOAD_ADOPTION_DOCUMENT (${docType}${requests.length ? ', requested' : ''})`, `Application #${app.application_id}`);
   // A new photo of the front or back of the ID is scanned in the background; the page polls for the result.
   if (IdScan.SIDE_OF[docType]) {
@@ -597,8 +594,10 @@ exports.deleteDocument = async (req, res) => {
     // ID photos keep their scan history (retakes, duplicate checks), so the file is kept and marked Replaced.
     await pool.query("UPDATE tbl_adoption_documents SET status = 'Replaced' WHERE document_id = ?", [doc.document_id]);
   } else {
-    await pool.query('DELETE FROM tbl_adoption_documents WHERE document_id = ?', [doc.document_id]);
-    deleteUpload(doc.storage_key);
+    // The file and the row are kept, marked Removed and hidden (uploaded files are never deleted).
+    await pool.query(
+      `UPDATE tbl_adoption_documents SET status = 'Removed', archived_at = NOW(), archived_by = ?, archive_reason = 'Removed by the applicant while the application was a draft'
+        WHERE document_id = ?`, [req.user.user_id, doc.document_id]);
   }
   await logActivity(req, `REMOVE_ADOPTION_DOCUMENT (${doc.doc_type})`, `Application #${app.application_id}`);
   res.json({ success: true, data: await fullApplication(req, app) });
@@ -624,6 +623,7 @@ exports.list = async (req, res) => {
   // Assigned staff filter: Admin "none" or a staff id; anyone "me".
   const assigned = req.query.assigned === 'me' ? req.user.user_id : isAdmin && req.query.assigned ? String(req.query.assigned) : undefined;
   const rows = await Adoption.list({ status, statuses, search: req.query.q, includeArchived: req.query.archived === '1' && isAdmin, referenceSearchOnly: !isAdmin, assigned });
+  const mine = await require('../services/assignment').recordIdsFor(pool, 'adoption_application', req.user.user_id);
   // Summary cards (all applications, whatever the filter) and each row's stage and days in it.
   const counts = await Adoption.statusCounts({ includeArchived: req.query.archived === '1' && isAdmin });
   const summary = [{ key: 'total', label: 'Total applications', count: Object.values(counts).reduce((a, b) => a + b, 0) },
@@ -634,8 +634,8 @@ exports.list = async (req, res) => {
     success: true,
     meta: { summary },
     data: rows.map((r) => {
-      const row = { ...r, status_label: r.status, phase: WF.STAGES[r.status]?.phase || null, open_requests: Number(r.open_requests), is_legacy: !!r.is_legacy,
-        deadlines: workflow.deadlines(r), assigned_to_me: r.assigned_staff_id === req.user.user_id && !!r.assigned_staff_active,
+      const row = { ...r, status_label: Adoption.LABELS[r.status] || r.status, phase: WF.STAGES[r.status]?.phase || null, open_requests: Number(r.open_requests), is_legacy: !!r.is_legacy,
+        deadlines: workflow.deadlines(r), assigned_to_me: mine.has(String(r.application_id)),
         assigned_staff_name: r.assigned_staff_active ? r.assigned_staff_name : null,
         assignment_flag: r.assigned_staff_id && !r.assigned_staff_active ? 'Assigned staff account is deactivated' : null,
         current_stage: stageLabel(r.status), days_in_stage: days(r), last_updated: r.updated_at || r.submitted_at,

@@ -70,7 +70,7 @@ exports.getOne = async (req, res) => {
   const isAdmin = req.user.role === 'Admin';
   const filters = { donorRefId: id, canSeeNames: true };
   const all = (await Donation.list(filters)).filter((d) => !d.is_anonymous);
-  const counted = all.filter((d) => L.COUNTED.includes(d.status));
+  const counted = all.filter((d) => L.COUNTED.includes(d.status) && (!d.claim_status || d.claim_status === 'Verified') && (!d.dual_control || d.dual_control === 'Approved'));
   const ids = all.map((d) => d.donation_id);
   const q = async (sql, args) => (ids.length ? (await pool.query(sql, args))[0] : []);
   const [acks, docs, uses] = await Promise.all([

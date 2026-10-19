@@ -129,7 +129,8 @@ exports.remove = async (req, res) => {
   if (visitor.donation_id && !['keep', 'void'].includes(choice)) {
     throw new HttpError(409, 'This visit has a linked donation. Choose whether to keep or void the donation.', { needs_donation_choice: true });
   }
-  const voidBody = { reason: req.query.reason ? String(req.query.reason) : 'Entered by mistake', note: req.query.note ? String(req.query.note).slice(0, 500) : '' };
+  const voidBody = { reason: req.query.reason ? String(req.query.reason) : 'Entered by mistake', note: req.query.note ? String(req.query.note).slice(0, 500) : '',
+    archive_reason: req.query.archive_reason ? String(req.query.archive_reason).slice(0, 500) : undefined };
   const result = await deleteVisit(req, visitor.visitor_id, choice, voidBody);
   if (result.donationId) {
     await logActivity(req, `DELETE_VISITOR (donation ${choice === 'void' ? 'voided' : 'kept'})`, `Visitor #${visitor.visitor_id}`);
@@ -138,6 +139,6 @@ exports.remove = async (req, res) => {
     await logActivity(req, 'DELETE_VISITOR', `Visitor #${visitor.visitor_id}`);
   }
   res.json({ success: true, message: result.donationId
-    ? (choice === 'void' ? 'Visitor record deleted. The donation was voided and stays on the Donations page.' : 'Visitor record deleted. The donation was kept on the Donations page.')
-    : 'Visitor record deleted.' });
+    ? (choice === 'void' ? 'Visitor record removed (kept in the archive). The donation was voided and stays on the Donations page.' : 'Visitor record removed (kept in the archive). The donation was kept on the Donations page.')
+    : 'Visitor record removed. It is kept in the archive.' });
 };

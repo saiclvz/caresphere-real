@@ -5,7 +5,7 @@ import useApi from '../hooks/useApi';
 import { qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, NoMatches, PageHeader, Spinner, Table, FilterChips } from '../components/ui';
 import { formatDate } from '../lib/format';
 import AssignedFilter from '../components/AssignedFilter';
 
@@ -38,14 +38,8 @@ export default function Transitions() {
     <>
       <PageHeader title="Transition Review (18+)"
         description="Young people are added here automatically when they turn 18. Nothing is discharged or deleted by the review; each case moves through assessment, conference, decision, planning, transition and aftercare." />
-      <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Filter by status">
-        {['', ...STATUSES].map((s) => (
-          <button key={s || 'all'} type="button" role="tab" aria-selected={status === s} onClick={() => setStatus(s)}
-            className={`rounded-full px-3 py-1.5 text-sm font-medium ${status === s ? 'bg-navy-900 text-white' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}>
-            {s || 'All'}{counts && <span className={`ml-1.5 text-xs ${status === s ? 'text-slate-300' : 'text-slate-400'}`}>{counts[s || 'all']}</span>}
-          </button>
-        ))}
-      </div>
+      <FilterChips className="mb-4" label="Filter by status" value={status} onChange={setStatus}
+        options={['', ...STATUSES].map((s) => ({ key: s, label: s || 'All', count: counts ? counts[s || 'all'] : undefined }))} />
       <div className="mb-3 flex flex-wrap items-end gap-3">
         <AssignedFilter value={assigned} onChange={setAssigned} />
         <label className="text-xs text-slate-500">Flagged from<input type="date" className="input mt-1 h-10 w-40" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /></label>

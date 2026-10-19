@@ -1,41 +1,54 @@
-import { Link } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
-import Logo, { TAGLINE } from '../components/Logo';
-import DisplaySettings from '../components/DisplaySettings';
-import { HeroArt, HeroStatement } from '../components/brand/Hero';
+import { TAGLINE } from '../components/Logo';
+import { FEATURES, HopeIllustration, PublicFooter, PublicNav } from './PublicChrome';
 
-/** Split-screen frame shared by sign-in and donor registration: brand panel + the form. */
+/**
+ * Frame shared by Sign in and Create an account (and the two-step verification steps): the home page's look, with
+ * the white top bar, the light-blue band with the brand message and illustration, the form in a white card, and the
+ * light-blue footer. Only the frame; the forms inside are unchanged.
+ */
 export default function AuthShell({ title, subtitle, children }) {
   return (
-    <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
-      <section className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-navy-900 via-navy-900 to-navy-950 p-12 text-white lg:flex">
-        <HeroArt tone="dark" />
-        <Link to="/" className="relative w-fit rounded-lg" aria-label="CareSphere home"><Logo variant="compact" theme="dark" /></Link>
-        <div className="relative max-w-lg">
-          <HeroStatement tone="dark" as="p" className="text-5xl xl:text-6xl" />
-          <p className="mt-6 max-w-md text-base leading-relaxed text-slate-200">
-            CareSphere helps the home's social workers and caregivers keep each child's records safe, private and in one place,
-            so more time goes to the children.
-          </p>
-        </div>
-        <p className="relative flex items-center gap-2 text-xs text-slate-300">
-          <ShieldCheck className="h-4 w-4 text-brand-400" aria-hidden />
-          Runs on your local network. Child records stay in this facility.
-        </p>
-      </section>
-      <section className="relative flex items-center justify-center bg-page px-6 py-12">
-        <div className="absolute right-4 top-4"><DisplaySettings /></div>
-        <div className="w-full max-w-sm animate-pop">
-          {/* Small screens: the brand panel is hidden, so the logo and tagline sit above the form. */}
-          <div className="mb-8 lg:hidden">
-            <Link to="/" className="inline-block rounded-lg" aria-label="CareSphere home"><Logo variant="compact" /></Link>
-            <p className="mt-3 font-display text-xl font-semibold text-navy-900">{TAGLINE}</p>
+    <div className="cs-home public-page">
+      <a href="#auth-main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:shadow-modal">Skip to main content</a>
+      <PublicNav />
+      <main id="auth-main" className="bg-[var(--home-panel)]">
+        <div className="public-container auth-grid">
+          {/* Brand message (wide screens; on phones the card comes first and this follows it). */}
+          <section className="order-2 lg:order-1" aria-label="About CareSphere">
+            <p className="flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--home-link)]"><span aria-hidden className="h-px w-8 bg-[var(--home-primary)]" />Together for a brighter future</p>
+            <p className="mt-4 text-3xl font-extrabold leading-[1.15] tracking-tight text-[var(--home-heading)] sm:text-4xl">{TAGLINE}</p>
+            <p className="mt-4 max-w-lg leading-relaxed text-[var(--home-muted)]">
+              CareSphere helps the home's social workers and caregivers keep each child's records safe, private and in one place,
+              so more time goes to the children.
+            </p>
+            <ul className="mt-7 grid max-w-xl grid-cols-1 gap-5 min-[400px]:grid-cols-3 min-[400px]:gap-4">
+              {FEATURES.map((f) => (
+                <li key={f.title} className="flex flex-row items-start gap-3 text-left min-[400px]:flex-col min-[400px]:items-center min-[400px]:text-center">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-[var(--home-link)] shadow-[var(--home-shadow)] ring-1 ring-[var(--home-border)]"><f.Icon className="h-5 w-5" aria-hidden /></span>
+                  <span>
+                    <span className="block text-sm font-bold text-[var(--home-heading)] min-[400px]:mt-2">{f.title}</span>
+                    <span className="mt-0.5 block text-xs leading-snug text-[var(--home-muted)] sm:text-[0.8125rem]">{f.text}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <HopeIllustration className="mt-6 hidden w-full max-w-sm lg:block" />
+            <p className="mt-4 flex items-center gap-2 text-sm text-[var(--home-muted)]">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--home-link)]" aria-hidden />
+              Runs on your local network. Child records stay in this facility.
+            </p>
+          </section>
+
+          {/* The form card (same white card as the home page's Donor Login). */}
+          <div className="home-login order-1 w-full animate-pop rounded-[var(--home-card-radius)] border border-[var(--home-border)] bg-[var(--home-card)] p-6 shadow-[var(--home-shadow-raised)] sm:p-8 lg:order-2">
+            <h1 className="text-2xl font-bold text-[var(--home-heading)]">{title}</h1>
+            {subtitle && <p className="mt-1 text-sm leading-relaxed text-[var(--home-muted)]">{subtitle}</p>}
+            <div className="mt-6">{children}</div>
           </div>
-          <h1 className="text-2xl font-semibold text-navy-900">{title}</h1>
-          <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
-          <div className="mt-8 rounded-2xl border border-slate-200/70 bg-white p-6 shadow-card">{children}</div>
         </div>
-      </section>
+      </main>
+      <PublicFooter />
     </div>
   );
 }

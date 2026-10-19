@@ -52,7 +52,7 @@ export default function Pagination({ pagination, onPageChange, onLimitChange, la
             {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
-        <nav className="flex items-center gap-1" aria-label="Pagination">
+        <nav className="flex flex-wrap items-center gap-1" aria-label="Pagination">
           <button type="button" className={`${btn} text-slate-600 hover:bg-slate-100`} onClick={() => go(page - 1)} disabled={page <= 1} aria-label="Previous page">
             <ChevronLeft className="h-4 w-4" aria-hidden /> <span className="hidden sm:inline">Previous</span>
           </button>

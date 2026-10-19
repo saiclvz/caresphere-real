@@ -44,7 +44,7 @@ function row(doc, label, value, y) {
 
 /** Streams a donation receipt PDF with an embedded verification QR. */
 async function donationReceipt(res, donation, settings) {
-  const doc = new PDFDocument({ size: 'A4', margin: 50, info: { Title: `Receipt ${donation.qr_receipt_code}` } });
+  const doc = new PDFDocument({ size: 'A4', margin: 50, info: { Title: `CareSphere acknowledgment ${donation.donation_no || donation.donation_id}` } });
   doc.pipe(res);
   header(doc, settings, 'Official Donation Receipt');
 
@@ -57,7 +57,8 @@ async function donationReceipt(res, donation, settings) {
 
   let y = 160;
   const gap = 26;
-  row(doc, 'Receipt no.', `#${String(donation.donation_id).padStart(6, '0')}`, y); y += gap;
+  row(doc, 'Acknowledgment no.', donation.ack_no || `#${String(donation.donation_id).padStart(6, '0')}`, y); y += gap;
+  if (donation.donation_no) { row(doc, 'Donation no.', donation.donation_no, y); y += gap; }
   row(doc, 'Date', donation.created_at, y); y += gap;
   row(doc, 'Donor', donation.donor_type === 'walk_in' ? `${donation.donor_name} (walk-in)` : donation.donor_name, y); y += gap;
   row(doc, 'Payment method', donation.payment_method, y); y += gap;

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, CalendarPlus, Pencil, Plus, Save, X } from 'lucide-react';
-import { Badge, Button, Card, ConfirmModal, ErrorNote, Modal } from '../../components/ui';
+import { Badge, Button, Card, ConfirmModal, ErrorNote, Modal, Table } from '../../components/ui';
 import { formatDate, formatDateTime } from '../../lib/format';
 import { Check, F, PRIORITY_TONE, Progress, SavedBy, Select, StageDocuments, TASK_TONE, today, useStageSave } from './common';
 
@@ -365,8 +365,8 @@ export function PlanStage({ review, onSaved }) {
     <div className="space-y-4">
       <Progress value={pct} label={`${done} of ${counted.length} tasks completed${tasks.length !== counted.length ? ` (${tasks.length - counted.length} not applicable)` : ''}`} />
       {review.target_transition_date && <p className="text-sm text-slate-600">Target transition date: <strong className="text-navy-900">{formatDate(review.target_transition_date)}</strong></p>}
-      <div className="relative overflow-x-auto rounded-lg border border-slate-200">
-        <table className="cs-table min-w-full divide-y divide-slate-100 text-sm">
+      <div className="overflow-hidden rounded-lg border border-slate-200">
+        <Table label="Transition tasks">
           <thead className="bg-slate-50"><tr><th className="th">Task</th><th className="th">Assigned</th><th className="th">Due</th><th className="th">Priority</th><th className="th">Status</th><th className="th"><span className="sr-only">Action</span></th></tr></thead>
           <tbody className="divide-y divide-slate-100">
             {tasks.map((t) => {
@@ -383,7 +383,7 @@ export function PlanStage({ review, onSaved }) {
               );
             })}
           </tbody>
-        </table>
+        </Table>
       </div>
       {can && <Button variant="secondary" onClick={() => setEditing('new')}><Plus className="h-4 w-4" aria-hidden /> Add custom task</Button>}
       {editing && <TaskModal review={review} task={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={onSaved} />}

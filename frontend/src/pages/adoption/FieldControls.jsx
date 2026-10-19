@@ -230,10 +230,10 @@ export function DocumentField({ docType, def, files, required, rules, onUpload, 
       {has ? (
         <ul className="mt-2 space-y-1">
           {files.map((f) => (
-            <li key={f.document_id} className="flex items-center gap-2 text-sm" style={{ color: 'var(--cs-success)' }}>
+            <li key={f.document_id} className="flex items-center gap-2 text-sm" style={{ color: 'var(--ad-success)' }}>
               <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden />
               <FileText className="h-4 w-4 shrink-0" aria-hidden />
-              <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--cs-text)' }}>{f.original_name}</span>
+              <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--ad-text)' }}>{f.original_name}</span>
               <span className="cs-muted shrink-0 text-xs">{formatBytes(f.size_bytes)}</span>
               {f.verification_status && <span className="cs-chip shrink-0 text-xs" title={f.review_note || undefined}>{f.verification_status}</span>}
               {canRemove && (

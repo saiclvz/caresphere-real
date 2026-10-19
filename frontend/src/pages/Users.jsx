@@ -7,7 +7,7 @@ import useApi from '../hooks/useApi';
 import { api, qs } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
-import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Modal, FilterChips, NoMatches, PageHeader, Spinner, Table } from '../components/ui';
 import { formatDate, matches } from '../lib/format';
 import { DUTY_LABELS } from '../lib/duties';
 
@@ -114,12 +114,7 @@ export default function Users() {
       <PageHeader title="User accounts" description="Create staff and admin accounts, change roles, and deactivate people who have left."
         actions={<Button onClick={() => { setForm({ full_name: '', email: '', password: '', confirm: '', role: 'Staff', duties: DEFAULT_DUTIES }); setFormError(null); setPwErrors({}); }}><Plus className="h-4 w-4" /> Create account</Button>} />
 
-      <div className="mb-4 inline-flex rounded-lg bg-white p-1 shadow-card">
-        {['', ...ROLES].map((r) => (
-          <button key={r || 'all'} type="button" onClick={() => setRole(r)} aria-pressed={role === r}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium ${role === r ? 'bg-brand text-white' : 'text-slate-600 hover:text-navy-900'}`}>{r || 'All'}</button>
-        ))}
-      </div>
+      <FilterChips className="mb-4" label="Filter by role" value={role} onChange={setRole} options={['', ...ROLES].map((r) => ({ key: r, label: r || 'All' }))} />
 
       <Card>
         {loading && !data ? <Spinner /> : error ? <div className="p-5"><ErrorNote error={error} onRetry={reload} /></div> : rows.length === 0 ? (
@@ -154,7 +149,7 @@ export default function Users() {
                     <div className="flex justify-end gap-1">
                       <Button size="sm" variant="ghost" aria-label="Edit" onClick={() => { setForm({ ...u, role: safeRole(u.role), is_active: Boolean(u.is_active), password: '', confirm: '', originalRole: u.role, originalDuties: u.duties || [], duties: u.role === 'Staff' ? (u.duties || []) : ALL_DUTIES }); setFormError(null); setPwErrors({}); }}><Pencil className="h-4 w-4" /></Button>
                       {/* Two-step verification exists only for Admin accounts. */}
-                      {u.role === 'Admin' && u.mfa_enabled && u.user_id !== me.user_id && <Button size="sm" variant="ghost" aria-label="Reset two-step verification" title="Reset two-step verification" onClick={() => openReset(u)}><KeyRound className="h-4 w-4" /></Button>}
+                      {u.role === 'Admin' && Boolean(u.mfa_enabled) && u.user_id !== me.user_id && <Button size="sm" variant="ghost" aria-label="Reset two-step verification" title="Reset two-step verification" onClick={() => openReset(u)}><KeyRound className="h-4 w-4" /></Button>}
                       {u.user_id !== me.user_id && (u.is_active
                         ? <Button size="sm" variant="ghost" aria-label={`Deactivate ${u.full_name}`} title="Deactivate" className="text-red-600" onClick={() => setToggling(u)}><UserX className="h-4 w-4" /></Button>
                         : <Button size="sm" variant="ghost" aria-label={`Reactivate ${u.full_name}`} title="Reactivate" className="text-emerald-700" onClick={() => setToggling(u)}><UserCheck className="h-4 w-4" /></Button>)}
